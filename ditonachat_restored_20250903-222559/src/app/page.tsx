@@ -29,7 +29,7 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 mt-8">
+      <main className="container mx-auto px-4 py-8 mt-8 bg-[url('/hero.webp.webp')] bg-cover bg-center bg-no-repeat">
         {/* Hero Section للدخول السريع */}
         <div className="text-center mb-12">
           <h1 className="text-6xl font-bold text-white mb-6 leading-tight">

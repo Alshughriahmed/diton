@@ -10,6 +10,7 @@ import LowerRightQuick from "@/components/chat/LowerRightQuick";
 import UpsellModal from "@/components/UpsellModal";
 import { useVip } from "@/hooks/useVip";
 import { busEmit } from "@/utils/bus";
+import PeerMeta from "@/components/chat/PeerMeta";
 
 // المكونات الجديدة
 import SystemMonitor from "@/components/common/SystemMonitor";
@@ -76,6 +77,15 @@ export default function ChatPage() {
         <div className="absolute top-4 right-4">
           <HealthIndicator />
         </div>
+        {/* DitonaChat: BEGIN peer-meta mount */}
+        <div className="absolute inset-0 pointer-events-none">
+          <PeerMeta 
+            country={peerInfo?.country || ""} 
+            city={peerInfo?.city || ""} 
+            gender={peerInfo?.gender || "unknown"} 
+          />
+        </div>
+        {/* DitonaChat: END peer-meta mount */}
       </div>
 
       <div className="flex-1 overflow-hidden">
