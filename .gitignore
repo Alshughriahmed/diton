@@ -1,0 +1,7 @@
+dist/
+.env
+.env.local
+.next/
+_ops/artifacts/
+_ops/backups/
+node_modules/
