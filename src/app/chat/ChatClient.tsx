@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from "react";
 import nextDynamic from 'next/dynamic';
-import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import PeerHeader from "@/components/chat/PeerHeader";
 import LowerRightQuick from "@/components/chat/LowerRightQuick";
@@ -26,7 +25,7 @@ const ChatComposer = nextDynamic(() => import('@/components/chat/ChatComposer'),
 const Toolbar = nextDynamic(() => import('@/components/chat/Toolbar'), { ssr: false });
 
 export default function ChatPage() {
-  const { data: session } = useSession();
+  const session = { user: { name: "Guest" } }; // Mock session for demo
   const router = useRouter();
   const { isVip } = useVip();
   const [messages, setMessages] = useState<any[]>([]);
@@ -35,11 +34,8 @@ export default function ChatPage() {
   const [showUpsell, setShowUpsell] = useState(false);
 
   useEffect(() => {
-    if (!session) {
-      router.push("/auth/signin");
-      return;
-    }
-  }, [session, router]);
+    // Authentication skipped for demo mode
+  }, [router]);
 
   const handleSendMessage = (message: string) => {
     if (!isVip && messages.length >= 10) {

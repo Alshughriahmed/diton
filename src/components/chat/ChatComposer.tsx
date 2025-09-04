@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-
+import { useVip } from "@/hooks/useVip";
 
 interface ChatComposerProps {
   onSend: (message: string) => void;
@@ -10,7 +10,7 @@ interface ChatComposerProps {
 
 export default function ChatComposer({ onSend }: ChatComposerProps) {
   const [message, setMessage] = useState("");
-  const isVip = true; // Demo mode
+  const { isVip } = useVip();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
