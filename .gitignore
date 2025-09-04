@@ -5,3 +5,9 @@ dist/
 _ops/artifacts/
 _ops/backups/
 node_modules/
+*.log
+.DS_Store
+ditonachat_restored_*
+ditonachat-clean/
+ditona-sync/
+ARCHIVE_OLD/

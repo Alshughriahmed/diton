@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import nextDynamic from 'next/dynamic';
-import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import PeerMeta from "@/components/chat/PeerMeta";
 import { busEmit } from "@/utils/bus";
@@ -10,7 +9,6 @@ import { busEmit } from "@/utils/bus";
 const ChatMessages = nextDynamic(() => import('@/components/chat/ChatMessages'), { ssr: false });
 
 export default function ChatPage() {
-  const { data: session } = useSession();
   const router = useRouter();
   const [messages, setMessages] = useState<any[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -18,11 +16,8 @@ export default function ChatPage() {
   const [showUpsell, setShowUpsell] = useState(false);
 
   useEffect(() => {
-    if (!session) {
-      router.push("/api/auth/signin");
-      return;
-    }
-  }, [session, router]);
+    // Authentication check removed for demo
+  }, [router]);
 
   const handleSendMessage = (message: string) => {
     setMessages(prev => [...prev, { text: message, sender: 'me' }]);
