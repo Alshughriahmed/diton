@@ -11,3 +11,10 @@ ditonachat_restored_*
 ditonachat-clean/
 ditona-sync/
 ARCHIVE_OLD/
+.env
+.env.local
+.next/
+dist/
+node_modules/
+_ops/artifacts/
+_ops/backups/
