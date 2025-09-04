@@ -1,5 +1,7 @@
 export const viewport = { width: "device-width", initialScale: 1, viewportFit: "cover" };
 import type { Viewport } from 'next';
+import { redirect } from "next/navigation";
+import HeaderLite from "@/components/HeaderLite";
 import Link from "next/link";
 
 export default function HomePage() {
@@ -27,7 +29,7 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 mt-8 bg-[url('/hero.webp.webp')] bg-cover bg-center bg-no-repeat">
+      <main className="container mx-auto px-4 py-8 mt-8">
         {/* Hero Section للدخول السريع */}
         <div className="text-center mb-12">
           <h1 className="text-6xl font-bold text-white mb-6 leading-tight">

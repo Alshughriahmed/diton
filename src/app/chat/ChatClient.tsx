@@ -1,25 +1,53 @@
 "use client";
 
+
 import { useEffect, useState } from "react";
 import nextDynamic from 'next/dynamic';
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import PeerMeta from "@/components/chat/PeerMeta";
+import PeerHeader from "@/components/chat/PeerHeader";
+import LowerRightQuick from "@/components/chat/LowerRightQuick";
+import UpsellModal from "@/components/UpsellModal";
+import { useVip } from "@/hooks/useVip";
 import { busEmit } from "@/utils/bus";
 
+// المكونات الجديدة
+import SystemMonitor from "@/components/common/SystemMonitor";
+import ErrorTracker from "@/components/common/ErrorTracker";
+import HealthIndicator from "@/components/common/HealthIndicator";
+import FriendsList from "@/components/chat/FriendsList";
+import ScreenEffects from "@/components/chat/ScreenEffects";
+import TranslationToggle from "@/components/chat/TranslationToggle";
+import ARMasks from "@/components/chat/ARMasks";
+import RoleBadge from "@/components/debug/RoleBadge";
+
 const ChatMessages = nextDynamic(() => import('@/components/chat/ChatMessages'), { ssr: false });
+const ChatComposer = nextDynamic(() => import('@/components/chat/ChatComposer'), { ssr: false });
+const Toolbar = nextDynamic(() => import('@/components/chat/Toolbar'), { ssr: false });
 
 export default function ChatPage() {
+  const { data: session } = useSession();
   const router = useRouter();
+  const { isVip } = useVip();
   const [messages, setMessages] = useState<any[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [peerInfo, setPeerInfo] = useState<any>(null);
   const [showUpsell, setShowUpsell] = useState(false);
 
   useEffect(() => {
-    // Authentication check removed for demo
-  }, [router]);
+    if (!session) {
+      router.push("/auth/signin");
+      return;
+    }
+  }, [session, router]);
 
   const handleSendMessage = (message: string) => {
+    if (!isVip && messages.length >= 10) {
+      setShowUpsell(true);
+      busEmit('upsell:triggered', { reason: 'guest_cap' });
+      return;
+    }
+
     setMessages(prev => [...prev, { text: message, sender: 'me' }]);
   };
 
@@ -33,68 +61,51 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-900">
-      {/* Header */}
+      {/* Role Badge for testing */}
+      <RoleBadge />
+      
+      {/* المكونات الجديدة */}
+      <SystemMonitor />
+      <ErrorTracker />
+      <ScreenEffects />
+      <FriendsList />
+      
+      {/* Header مع مؤشر الصحة */}
       <div className="relative">
-        <div className="p-4 bg-gray-800 text-white">
-          <h1 className="text-xl font-bold">DitonaChat</h1>
+        <PeerHeader peer={peerInfo} />
+        <div className="absolute top-4 right-4">
+          <HealthIndicator />
         </div>
-        {/* DitonaChat: BEGIN peer-meta mount */}
-        <div className="absolute inset-0 pointer-events-none">
-          <PeerMeta 
-            country={peerInfo?.country || ""} 
-            city={peerInfo?.city || ""} 
-            gender={peerInfo?.gender || "unknown"} 
-          />
-        </div>
-        {/* DitonaChat: END peer-meta mount */}
       </div>
 
       <div className="flex-1 overflow-hidden">
         <ChatMessages messages={messages} />
       </div>
 
-      {/* Toolbar */}
-      <div className="relative p-4 bg-gray-800">
-        <div className="flex gap-4 justify-center">
-          <button 
-            onClick={handleNext}
-            className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-white"
-          >
-            Next
-          </button>
-          <button 
-            onClick={handleLike}
-            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-white"
-          >
-            Like
-          </button>
+      {/* Toolbar مع المزايا الجديدة */}
+      <div className="relative">
+        <Toolbar
+          onNext={handleNext}
+          onLike={handleLike}
+          peerId={peerInfo?.id}
+        />
+        
+        {/* أدوات إضافية - VIP gated */}
+        <div className="absolute bottom-4 left-4 flex gap-2">
+          <TranslationToggle />
+          {isVip && <ARMasks />}
         </div>
       </div>
 
-      {/* Quick Dock anchor */}
+      <ChatComposer onSend={handleSendMessage} />
+
       <div className="absolute right-3 -top-24 z-[40]">
-        <div className="text-white text-sm">Quick Actions</div>
-      </div>
+  <LowerRightQuick />
+</div>
 
-      {/* Chat Input */}
-      <div className="p-4 bg-gray-700">
-        <div className="flex gap-2">
-          <input 
-            type="text" 
-            placeholder="Type a message..."
-            className="flex-1 px-3 py-2 rounded bg-gray-600 text-white"
-            onKeyPress={(e) => {
-              if (e.key === 'Enter') {
-                handleSendMessage(e.currentTarget.value);
-                e.currentTarget.value = '';
-              }
-            }}
-          />
-          <button className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-white">
-            Send
-          </button>
-        </div>
-      </div>
+      {showUpsell && (
+        <UpsellModal onClose={() => setShowUpsell(false)} />
+      )}
     </div>
   );
 }

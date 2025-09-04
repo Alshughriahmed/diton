@@ -23,3 +23,13 @@ _ops/backups/
 attached_assets/
 ditonachat-clean/
 ditonachat_restored_20250903-222559/
+# Backup directories
+_ops/backups/
+_ops/exports/
+attached_assets/
+ditonachat_restored_*
+ditonachat-clean/
+dist/
+.next/
+node_modules/
+*.log
