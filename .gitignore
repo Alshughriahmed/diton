@@ -18,3 +18,8 @@ dist/
 node_modules/
 _ops/artifacts/
 _ops/backups/
+
+# hygiene
+attached_assets/
+ditonachat-clean/
+ditonachat_restored_20250903-222559/

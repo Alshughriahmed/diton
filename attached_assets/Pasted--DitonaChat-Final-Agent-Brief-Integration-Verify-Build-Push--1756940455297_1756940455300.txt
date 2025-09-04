@@ -1,250 +1,0 @@
-🚀 DitonaChat — Final Agent Brief (Integration → Verify → Build → Push)
-🔒 قواعد الأمان (صارمة)
-
-العمل فقط داخل أحدث مجلد مطابق للنمط ./ditonachat_restored_* (مثل: ditonachat_restored_20250903-222559). ممنوع لمس المصدر داخل _ops/backups/....
-
-قبل أي تعديل: انسخ الملفات المستهدفة إلى _ops/backups/agent_fix_<UTC>/....
-
-أي ملف موجود ولا يحوي تعليقات // DitonaChat: وتحتاج تعديله:
-
-اعمل diff داخلي، وأدرج التعديل كحدّ أدنى داخل أقرب overlay/حاوية مناسبة.
-
-لو وجدتَ غموضًا قد يؤثّر على منطق المستخدم → توقّف واطبع Acceptance فيه سبب التوقّف.
-
-لا أسرار في Git. .gitignore يجب أن يحجب: .env, .env.local, .next/, dist/, _ops/artifacts/, _ops/backups/, node_modules/.
-
-السكربت Idempotent: إن كانت الميزة موجودة، تخطَّها بدون تعديل.
-
-المرحلة 0 — الاكتشاف والتحقّق (قراءة فقط)
-
-حدّد أحدث مجلد ditonachat_restored_*، واعتبره ROOT.
-
-اطبع Acceptance أولي (READ-ONLY):
-
--- Acceptance --
-STAGE=0_DISCOVERY
-RESTORED_DIR=<ROOT>
-FILES=page.tsx:<0/1>,ChatClient.tsx:<0/1>,ChatMessages.tsx:<0/1>,media-bridge.ts:<0/1>,webrtc.ts:<0/1>,PeerMeta.tsx:<0/1>,gender.ts:<0/1>,countries.ts:<0/1>
-CHAT_MESSAGES_SLICE_MINUS_3_LINE=<number or UNKNOWN>
-MEDIA_THRESHOLDS=H80:<0/1>/V50:<0/1>
-WEBRTC_AUTONEXT_LINES=<csv or UNKNOWN>
-HOME_BG_HERO_WEBP_USAGE=<hits 0+>
-LEGAL_PAGES=terms:<0/1> privacy:<0/1> dmca:<0/1> content:<0/1> abuse:<0/1> 2257:<0/1>
-QUICK_DOCK_ANCHOR_LINE=<number or 0>
-ENDPOINTS=/_health:<0/1>,/api/monitoring/metrics:<0/1>,/api/turn:<0/1>,/api/stripe/prices:<0/1>,/api/stripe/subscribe:<0/1>,/api/stripe/portal:<0/1>,/api/age/allow:<0/1>,/api/stripe/webhook:<0/1>
-NOTES=Discovery done; proceeding to patch missing items
--- End Acceptance --
-
-
-نتوقّع: PeerMeta/gender/countries والصفحات القانونية غير موجودة، الخلفية قد تكون غير مفعلة.
-
-المرحلة 1 — استكمال النواقص (إنشاء/دمج)
-
-نسخ احتياطي قبل كل ملف. إن وُجد الملف وبدون علامات // DitonaChat:: أدخِل أقل تعديل ممكن؛ لو خطر تعارض منطقي → توقّف بـAcceptance.
-
-gender.ts (src/utils/gender.ts)
-
-إن لم يوجد: أنشئه بتعليقات واضحة:
-
-type Gender = 'male'|'female'|'couple'|'lgbt'|'unknown'
-
-خرائط: GENDER_ICON, GENDER_LABEL, GENDER_CLASSES (Tailwind-ready)
-
-الأيقونات: ♂, ♀, 💞, 🌈, •
-
-DitonaChat markers: // DitonaChat: BEGIN gender-utils … END
-
-countries.ts (src/data/countries.ts)
-
-إن لم يوجد: أنشئه بقائمة 247 دولة (استبعد GS, KP, MV، واسمح بـXK Kosovo).
-
-صدّر COUNTRIES ودوال: codeToName(code), allCodes().
-
-ضع DitonaChat markers.
-
-PeerMeta.tsx (src/components/chat/PeerMeta.tsx)
-
-إن لم يوجد: أنشئه مكوّن React يعرض أسفل يسار القسم العلوي: Country · City + Badge الجنس (أيقونة/لون من gender.ts)، كلاس: absolute left-3 bottom-3 z-[40] pointer-events-none مع خلفية شبه شفافة.
-
-DitonaChat markers.
-
-دمج PeerMeta في ChatClient.tsx
-
-هدف الدمج: إدراج <PeerMeta country={...} city={...} gender={...} /> داخل طبقة overlay أعلى الفيديو/لوحة النظير بدون تغيير منطق المستخدم.
-
-الخوارزمية (غير مدمّرة):
-
-استورد: import { PeerMeta } from '@/components/chat/PeerMeta' (أو المسار النسبي الصحيح).
-
-ابحث عن الحاوية العليا (video/grid/overlay).
-
-إن كانت هناك طبقة overlay مطابقة، أدرِج <PeerMeta …/> بداخلها.
-
-إن لم توجد طبقة overlay، أنشئ غلاف <div className="absolute inset-0 pointer-events-none"> وأدرِج داخله العنصر مع left-3 bottom-3 z-[40].
-
-مصدر البيانات: استخدم ما يتوفّر من state/props (peer/candidate). عند عدم وجودها، مرّر قيمًا فارغة (لن تكسر البناء) واكتب تعليق // TODO: wire peer meta @runtime.
-
-لا تغيّر أي منطق آخر أو ترتيب أدوات المستخدم.
-
-أضف تعليق // DitonaChat: BEGIN peer-meta mount … END.
-
-الخلفية في الصفحة الرئيسية (src/app/page.tsx)
-
-اربط /hero.webp.webp على <main> بكلاسات Tailwind:
-bg-[url('/hero.webp.webp')] bg-cover bg-center bg-no-repeat
-
-إن كان هناك className موجود: ألحِقه. وإلا أضِف واحدًا.
-
-DitonaChat markers.
-
-thresholds (src/utils/media-bridge.ts)
-
-تأكيد H=80 وV=50. إن اختلفت: حدّث القيم وأضِف تعليق // DitonaChat: gesture thresholds.
-
-auto-next (src/utils/webrtc.ts)
-
-تأكيد وجود busEmit('next') (أو "next") عند حالات: failed, disconnected, closed (وأيضًا hangup إن وُجد).
-
-إن لم تُوجد:
-
-أضِف import { busEmit } from './bus' إن لزم.
-
-أضِف استدعاءات busEmit('next') مع debounce داخلي (مثلاً 1000ms) لمنع التكرار.
-
-DitonaChat markers حول الكتل المضافة.
-
-Quick Dock anchor
-
-تأكيد وجود عنصر بكلاسات: className="absolute right-3 -top-24 z-[40]".
-
-إن لم يوجد: أضِفه في الموضع الصحيح فوق المؤلف، بدون تغيير المسارات أو ترتيب الأدوات.
-
-الصفحات القانونية الستة
-
-أنشئ (إن لم توجد):
-
-src/app/terms/page.tsx
-
-src/app/privacy/page.tsx
-
-src/app/dmca/page.tsx
-
-src/app/content/page.tsx
-
-src/app/abuse/page.tsx
-
-src/app/2257/page.tsx
-
-محتوى إنجليزي بسيط عنوانه واضح وروابط تنقّل خفيفة.
-
-أزل أي تكرار route groups لهذه الصفحات (لا نسخ تحت (legal) إلخ). نسخة واحدة مباشرة لكل مسار.
-
-بعد إكمال المرحلة 1 اطبع:
-
--- Acceptance --
-STAGE=1_PATCH
-RESTORED_DIR=<ROOT>
-ADDED_OR_UPDATED=[gender.ts:<0/1>,countries.ts:<0/1>,PeerMeta.tsx:<0/1>,ChatClient.mount:<0/1>,home_bg:<0/1>,thresholds:<0/1>,autonext:<0/1>,quick_dock:<0/1>,legal_pages:<0..6>]
-NOTES=Patched missing items with DitonaChat markers where applicable
--- End Acceptance --
-
-المرحلة 2 — تحقّق شامل (قراءة فقط)
-
-تحقق من كل البنود، واطبع:
-
--- Acceptance --
-STAGE=2_VERIFY
-RESTORED_DIR=<ROOT>
-FILES=page.tsx:1,ChatClient.tsx:1,ChatMessages.tsx:1,media-bridge.ts:1,webrtc.ts:1,PeerMeta.tsx:1,gender.ts:1,countries.ts:1
-HOME_BG_HERO_WEBP_USAGE=1
-CHAT_MESSAGES_SLICE_MINUS_3_LINE=<number>
-MEDIA_THRESHOLDS=H80:1/V50:1
-WEBRTC_AUTONEXT_LINES=<csv numbers>
-PEER_META=EXISTS:1 MOUNTED:1 STYLE_BOTTOM_LEFT:1
-GENDER_ICONS=male:1 female:1 couple:1 lgbt:1 unknown:1
-COUNTRIES_FILE=src/data/countries.ts
-COUNTRIES_COUNT=247
-LEGAL_PAGES=terms:1 privacy:1 dmca:1 content:1 abuse:1 2257:1
-ENDPOINTS=/_health:1,/api/monitoring/metrics:1,/api/turn:1,/api/stripe/prices:1,/api/stripe/subscribe:1,/api/stripe/portal:1,/api/age/allow:1,/api/stripe/webhook:1
-QUICK_DOCK_ANCHOR_LINE=<number or fixed>
-NOTES=All required features present and verified
--- End Acceptance --
-
-
-إذا أي رقم/قيمة ليست كما هو متوقع، أصلِحها ثم أعِد طباعة Acceptance.
-
-المرحلة 3 — Build محلي (Node 20)
-
-استخدم Node 20.
-
-نفّذ: npm ci && npm run build
-
-أصلِح أي تحذير route duplication للصفحات القانونية بإزالة النسخ الزائدة (ابقِ المسار المباشر).
-
-اطبع:
-
--- Acceptance --
-STAGE=3_BUILD
-RESTORED_DIR=<ROOT>
-BUILD_RC=0
-NEXT_VERSION=<detected or UNKNOWN>
-ROUTES_OK=1
-NOTES=standalone output ready
--- End Acceptance --
-
-
-إن فشل البناء، أصلِح ثم أعد المحاولة حتى BUILD_RC=0.
-
-المرحلة 4 — Git إعداد ودفع إلى GitHub
-
-الجذر: نفس <ROOT>.
-
-.gitignore يجب أن يحتوي:
-.env, .env.local, .next/, dist/, _ops/artifacts/, _ops/backups/, node_modules/
-
-اربط الريموت: https://github.com/Alshughriahmed/projeckt.git
-
-ادفع إلى main (المستودع موجود ويقبل FF).
-
-اطبع:
-
--- Acceptance --
-STAGE=4_PUSH
-ROOT=<ROOT>
-GIT_REMOTE=https://github.com/Alshughriahmed/projeckt.git
-PUSHED_BRANCH=main
-LAST_COMMIT_SHA=<7>
-TREE_TOP_LEVEL=[src, package.json, tsconfig.json, next.config.mjs, .replit, _ops, public]
-PUSH_RESULT=OK
--- End Acceptance --
-
-المرحلة 5 — تقرير نهائي
-
-أنشِئ: _ops/reports/AGENT_FINAL_<UTC>.md يتضمّن:
-
-قائمة الملفات المُضافة/المعدّلة، مع سطور DitonaChat markers.
-
-COUNTRIES_COUNT وعيّنة رموز (مثلاً: US, DE, FR, XK…).
-
-أرقام سطور busEmit('next').
-
-نتيجة BUILD ونسخة Next إن أمكن.
-
-رابط الريموت والكومِت النهائي.
-واطبع:
-
--- Acceptance --
-STAGE=5_REPORT
-REPORT=_ops/reports/AGENT_FINAL_<UTC>.md
-NOTES=Done
--- End Acceptance --
-
-ملاحظات مهمة
-
-لا تغيّر أي منطق خارج لقطات الإدراج المطلوبة (PeerMeta/الخلفية/thresholds/auto-next/anchor/الصفحات).
-
-لا تحذف أو تعدّل شيئًا في _ops/backups/ المصدر.
-
-عند الشكّ في موضع إدراج <PeerMeta /> داخل ChatClient.tsx، اختر overlay ملاصق لمنطقة الفيديو بحيث لا يحجب عناصر التحكم (واستخدم pointer-events-none).
-
-أي تعارض أو غموض: توقّف واطبع Acceptance يشرح السبب.
