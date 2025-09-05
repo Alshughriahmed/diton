@@ -1,0 +1,83 @@
+Task: Phase 2 — Filters → Matching with dedupe
+
+Rules:
+- Root-only: /home/runner/workspace
+- Backup: _ops/backups/phase2_<UTC>/ (exclude node_modules/.next)
+- No secrets in logs. Keep output concise.
+- If something fails, self-fix then rerun the step once before proceeding.
+
+Steps:
+1) cd /home/runner/workspace
+   Create backup tar (exclude node_modules/.next) at _ops/backups/phase2_<UTC>/src_backup.tgz
+
+2) Create a tiny matching API that echoes applied filters (server-side truth):
+   File: src/app/api/match/next/route.ts
+   Content:
+   ---
+   import { NextRequest, NextResponse } from 'next/server';
+   export async function GET(req: NextRequest) {
+     const { searchParams } = new URL(req.url);
+     const gender = searchParams.get('gender') ?? 'all';
+     const countries = (searchParams.get('countries') ?? 'ALL').split(',').filter(Boolean);
+     console.log('[MATCH_NEXT]', { gender, countries, ts: Date.now() });
+     return NextResponse.json({ ok: true, gender, countries, ts: Date.now() }, { status: 200 });
+   }
+   export const dynamic = 'force-dynamic';
+   ---
+
+3) Add a very small dedupe guard util:
+   File: src/utils/next-dedupe.ts
+   Content:
+   ---
+   let lastHash = ''; let lastTs = 0;
+   export function shouldEmitNext(hash: string, minMs = 600) {
+     const now = Date.now();
+     if (hash === lastHash && now - lastTs < minMs) return false;
+     lastHash = hash; lastTs = now; return true;
+   }
+   ---
+
+4) Wire ChatClient “next/prev” to pass filters and use dedupe.
+   - Find the Next/Prev trigger(s). Search patterns to locate handlers:
+     a) "busEmit('next')" or "emit('next'"
+     b) onClick for a next button in Chat UI
+   - Wherever Next triggers:
+     • Read filters from the Zustand store in src/state/filters.ts (gender, countries list).
+     • Build a querystring: gender=<store.gender or 'all'>, countries=<comma-joined or 'ALL'>
+     • Create a helper function in ChatClient.tsx (or a nearby util) named triggerNext():
+       - Compute const payload = `${gender}|${countries.join(',')}`;
+       - if (!shouldEmitNext(payload)) return;
+       - fire-and-forget: fetch(`/api/match/next?gender=${encodeURIComponent(gender)}&countries=${encodeURIComponent(countries.join(','))}`, { cache:'no-store' }).catch(()=>{});
+       - Keep existing bus behavior (do NOT remove any current bus emit if present), just ensure it does not fire twice for the same payload within ~600ms by guarding the call site with shouldEmitNext(payload).
+     • Apply same logic for Prev if it also triggers matching (optional; only if present).
+
+   Notes:
+   - Do not change the store; just read from it. If gender is locked by VIP gating, it will still be "all" and that’s correct.
+   - Do not break existing WebRTC; this step only adds a fetch side-effect + dedupe.
+
+5) Integrate a tiny dev log in ChatClient.tsx:
+   - console.debug('[CLIENT_NEXT]', { gender, countries, t: Date.now() }) right before fetch.
+   - Ensure no uncaught errors: wrap fetch in try/catch and ignore failures.
+
+6) Build & Run:
+   - Stop any running server (kill /tmp/app.pid and pkill "next start").
+   - pnpm run build → if a file/path missing, fix it (create dirs, correct imports '@/state/filters' vs relative) then rebuild.
+   - Start with PORT=3000 and save PID in /tmp/app.pid.
+
+7) Verify:
+   - From server logs (/tmp/app.log), ensure lines like "[MATCH_NEXT]" appear when Next is triggered from UI.
+   - Also curl test: curl -s "http://127.0.0.1:3000/api/match/next?gender=female&countries=US,FR" → JSON with those values.
+   - Ensure no duplicate "[MATCH_NEXT]" lines for single click (dedupe ok).
+
+8) Deliver report:
+   - Append to FINAL_REPORT.md a new section "Phase 2 — Filters → Matching":
+     * Summary of edited files
+     * Sample server log line with filters (redact IP if any)
+     * Confirmation: dedupe active (BUS_DUP=0)
+   - Print this Acceptance block to stdout exactly:
+
+   -- Acceptance --
+   MATCHING_FILTERS=gender:applied countries:applied
+   BUS_DUP=0 WARNINGS=0
+   NOTES=Next/Prev honor filters and /api/match/next echoes applied filters
+   -- End Acceptance --

@@ -1,0 +1,93 @@
+bash -lc '
+set -Eeuo pipefail
+REPO_URL="https://github.com/Alshughriahmed/diton"
+
+# 0) cd to project root
+cd /home/runner/workspace 2>/dev/null || cd ~/workspace
+echo "PWD=$(pwd)"
+
+# 1) lightweight backup
+ts=$(date -u +%Y%m%d-%H%M%S)
+mkdir -p _ops/backups/gitpush_$ts
+tar --exclude=node_modules --exclude=.next -czf _ops/backups/gitpush_$ts/src_backup.tgz . || true
+echo "Backup: _ops/backups/gitpush_$ts/src_backup.tgz"
+
+# 2) ensure .gitignore (safe, idempotent)
+ensure_ignore() {
+  local p="$1"
+  grep -qxF "$p" .gitignore 2>/dev/null || echo "$p" >> .gitignore
+}
+touch .gitignore
+ensure_ignore "node_modules/"
+ensure_ignore ".next/"
+ensure_ignore ".vercel/"
+ensure_ignore ".turbo/"
+ensure_ignore ".pnpm-store/"
+ensure_ignore ".DS_Store"
+ensure_ignore "*.log"
+ensure_ignore ".env"
+ensure_ignore "*.env"
+ensure_ignore "*.db"
+ensure_ignore "_ops/backups/"
+ensure_ignore "_ops/runtime/"
+ensure_ignore "playwright-report/"
+ensure_ignore "test-results/"
+ensure_ignore "coverage/"
+
+# 3) init git and commit
+git init >/dev/null 2>&1 || true
+git checkout -B main
+# Untrack any already-tracked sensitive files
+git rm -r --cached --ignore-unmatch .env *.env *.db _ops/backups/* _ops/runtime/* playwright-report/* test-results/* coverage/* .vercel 2>/dev/null || true
+git add -A
+if git diff --cached --quiet; then
+  echo "No changes to commit."
+else
+  git commit -m "chore: prepare for Vercel deploy (pre-release) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+
+# 4) set remote origin
+if git remote | grep -qx origin; then
+  git remote set-url origin "$REPO_URL"
+else
+  git remote add origin "$REPO_URL"
+fi
+
+# 5) verify connectivity (will be non-fatal if private and needs auth)
+git ls-remote origin >/dev/null 2>&1 || echo "Note: ls-remote may require auth; continuing to push..."
+
+# 6) push main
+set +e
+git push -u origin main
+push_status=$?
+set -e
+
+if [ $push_status -ne 0 ]; then
+  echo "Push failed (likely auth or non-fast-forward)."
+  echo "If auth: use a GitHub token when prompted, or configure credential helper."
+  exit 1
+fi
+
+# 7) report
+mkdir -p _ops/reports
+commit_short=$(git rev-parse --short HEAD || echo "unknown")
+report="_ops/reports/GIT_PUSH_${ts}.md"
+{
+  echo "# Git Push Report ($ts)"
+  echo "- Repo: $REPO_URL"
+  echo "- Branch: main"
+  echo "- Commit: $commit_short"
+  echo "- Top-level tree:"
+  ls -1a | sed "s/^/- /"
+} > "$report"
+echo "Report: $report"
+
+# 8) acceptance
+echo
+echo "-- Acceptance --"
+echo "GIT=push:ok BRANCH=main"
+echo "REMOTE=$REPO_URL"
+echo "COMMIT=$commit_short"
+echo "TREE_OK=1"
+echo "-- End Acceptance --"
+'

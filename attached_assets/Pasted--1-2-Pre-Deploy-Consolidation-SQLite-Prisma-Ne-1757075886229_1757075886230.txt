@@ -1,0 +1,104 @@
+✅ الدفعة 1/2 — “Pre-Deploy Consolidation”
+
+الهدف: تثبيت الأساس الإنتاجي محليًا (SQLite + Prisma + NextAuth اختياري + VIP حقيقي من الـDB مع fallback كوكي dev + Age Gate عبر middleware + Rate-limit خفيف + Security Headers + TURN/STUN fallback)، وبقاء كل ما هو قائم (50/50 UI، الفلاتر، dev VIP).
+
+أرسل للوكيل النص التالي كما هو:
+
+Task: Batch 1/2 — Pre-Deploy Consolidation (DB+Auth+VIP+Age+Security+RLIMIT+TURN)
+
+Rules:
+- Work ONLY in /home/runner/workspace
+- Make backup at _ops/backups/predeploy_<UTC>/ (exclude node_modules/.next)
+- Idempotent; do not print secrets; if GOOGLE_* / NEXTAUTH_* absent, NextAuth stays optional (no crash)
+- Keep existing dev VIP cookie toggle working
+
+Steps:
+1) Backup project to _ops/backups/predeploy_<UTC>/src_backup.tgz (exclude node_modules/.next).
+
+2) Prisma (SQLite dev):
+   - Add deps if missing: pnpm add -D prisma && pnpm add @prisma/client
+   - Create prisma/schema.prisma with models: User, Subscription, ProcessedWebhook (as standard)
+   - Create src/lib/prisma.ts (singleton client)
+   - Run: pnpm dlx prisma generate
+
+3) NextAuth (optional providers):
+   - Ensure src/app/api/auth/[...nextauth]/route.ts exists; providers=[] if GOOGLE_* are absent; session: { strategy: "jwt" }.
+   - runtime=nodejs, dynamic='force-dynamic'.
+
+4) VIP status (DB-first with dev fallback):
+   - Update src/app/api/user/vip-status/route.ts to:
+     * if cookie vip=1 => {isVip:true, via:'cookie'}
+     * else try auth(); lookup user by email; subscriptions[0]; isVip if status in ['active','trialing','past_due']; via:'db'
+     * else {isVip:false, via:'anon'}
+     * runtime=nodejs, dynamic='force-dynamic'
+
+5) Age Gate:
+   - Ensure POST /api/age/allow sets cookie ageok=1 (create if missing).
+   - Create src/middleware.ts to redirect /chat → "/?age=required" unless cookie ageok=1 (matcher ['/chat']).
+
+6) TURN/STUN fallback:
+   - Ensure /api/turn returns STUN-only when TURN_* env not set; keep existing route but default to 'stun:stun.l.google.com:19302'.
+
+7) Security Headers (middleware):
+   - In src/middleware.ts (same file), add headers on every response:
+     * Content-Security-Policy: default-src 'self' blob: data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' https: wss:; frame-ancestors 'none'; upgrade-insecure-requests
+     * X-Frame-Options: DENY
+     * X-Content-Type-Options: nosniff
+     * Referrer-Policy: strict-origin-when-cross-origin
+     * Permissions-Policy: camera=(), microphone=(), geolocation=()
+   - Note: HSTS enabled later on Vercel (production TLS).
+
+8) Rate limit (light):
+   - Add src/utils/ratelimit.ts: simple in-memory token-bucket per ip+route (e.g., 30 req/min for stripe/auth/turn).
+   - Wrap /api/stripe/webhook, /api/auth/[...nextauth], /api/turn handlers with a check; if exceed -> 429 JSON {error:'rate_limited'}.
+
+9) Stripe webhook (dev now, DB aware):
+   - Keep current dev handler; if STRIPE_WEBHOOK_SECRET exists later, verify signature and insert event id into ProcessedWebhook; upsert Subscription for user email with status 'active'.
+
+10) Create ENV template:
+   - .env.example with names ONLY:
+     GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+     STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+     STRIPE_PRICE_ID_EUR_149, STRIPE_PRICE_ID_EUR_599, STRIPE_PRICE_ID_EUR_1699, STRIPE_PRICE_ID_EUR_9999,
+     TURN_URL, TURN_USERNAME, TURN_PASSWORD,
+     NEXTAUTH_URL, NEXTAUTH_SECRET, DATABASE_URL
+
+11) Build & run (PORT=3000). Verify:
+   - / :200, /plans:200
+   - /chat:302 to "/?age=required" (before allow)
+   - /api/health:200
+   - /api/user/vip-status:200 => {"isVip":false,"via":"anon"} (no session)
+   - POST /api/age/allow then /chat:200
+   - Dev VIP cookie toggle still flips vip-status to true/false
+
+12) Report:
+   - Append _ops/reports/PREDEPLOY_<UTC>.md with:
+     * Prisma generate output, created files list
+     * NextAuth optional providers note
+     * vip-status paths (via: cookie/db/anon)
+     * Age Gate redirect then allow
+     * Security headers sample (print response headers from /)
+     * Rate-limit demonstration: burst on /api/turn -> expect 429 after threshold
+     * HTTP codes table
+
+13) Print EXACT block:
+
+-- Acceptance --
+AUTH_GOOGLE=route:ready optional-providers:ok
+AGE_GATE=cookie:ageok enforced via middleware
+VIP_STATUS=db-first with dev-cookie fallback
+SEC_HEADERS=CSP,HSTS(plan),XFO,NOSNIFF,REFPOL,PERMPOL applied
+RLIMIT=enabled (sensitive routes)
+HTTP=/:200 /plans:200 /api/health:200 /chat:302->200(after age allow) /api/user/vip-status:200
+-- End Acceptance --
+
+فحص سريع بالشِّل بعد الدفعة 1/2
+
+انسخ هذا فقط بعد انتهاء الوكيل:
+
+bash -lc '
+set -e; cd /home/runner/workspace 2>/dev/null || cd ~/workspace; PORT=${PORT:-3000}
+echo "Pre-redirect:"; curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:$PORT/chat"
+curl -s -X POST -o /dev/null -D /tmp/h -c /tmp/c "http://127.0.0.1:$PORT/api/age/allow"; grep -i "^set-cookie" /tmp/h || true
+echo "After age allow:"; curl -s -b /tmp/c -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:$PORT/chat"
+echo "vip-status anon:"; curl -s "http://127.0.0.1:$PORT/api/user/vip-status"

@@ -1,0 +1,59 @@
+Task: Batch A — Finalize 50/50 UI + harden gestures; also detect & report presence of Data/Auth/Stripe changes from prior batch; run checks; produce Acceptance.
+
+Rules:
+- Work ONLY in /home/runner/workspace.
+- Make backup at _ops/backups/batchA_<UTC>/ (exclude node_modules/.next).
+- No secrets printed. Keep output concise and final.
+- If a step fails, fix once and retry within this task.
+
+Steps:
+1) Verify presence (just report, do NOT fail if missing):
+   - Files: 
+     src/components/chat/PeerBadgeTopLeft.tsx, PeerMetaBottomLeft.tsx, UserTopRightControls.tsx,
+     src/hooks/useNextPrev.ts, src/hooks/useGestures.ts,
+     src/state/filters.ts, src/utils/media-bridge.ts,
+     src/app/chat/ChatClient.tsx, src/components/chat/ChatToolbar.tsx
+   - Data/Auth/Stripe footprint from earlier batch:
+     prisma/schema.prisma, src/lib/prisma.ts,
+     src/app/api/auth/[...nextauth]/route.ts (if exists),
+     src/app/api/stripe/webhook/route.ts, src/app/api/stripe/prices/route.ts
+
+2) UI finalize (50/50):
+   - Enforce a grid container in ChatClient.tsx: top section (peer video) row-1, bottom section (self) row-2; min-h-screen; mobile-first spacing.
+   - Ensure these are placed:
+     * Top-left (upper/peer): PeerBadgeTopLeft
+     * Bottom-left (upper/peer): PeerMetaBottomLeft
+     * Top-right (upper/peer): FilterBar (countries+gender as dropdowns)
+     * Top-right (lower/self): UserTopRightControls
+     * Bottom (lower/self): ChatToolbar
+   - Do NOT break existing DOM; small wrapper divs only if needed.
+   - Fix any “Failed to fetch” toast by wrapping test fetches in try/catch and console.debug only.
+
+3) Gestures/Next-Prev hardening:
+   - Ensure ChatToolbar buttons use useNextPrev() and respect anti-dup guard (~700ms).
+   - Ensure useGestures() is called once at the Chat root; no duplicate event bindings.
+   - If a bus or WebRTC bridge exists, re-emit ui:next/ui:prev safely; otherwise no-ops.
+
+4) Build and run on PORT=3000. 
+   - Print codes for /, /plans, /chat, /api/health, /api/user/vip-status.
+
+5) Visual smoke:
+   - Ensure page loads with no console errors.
+   - Confirm elements positions match spec (top-left badge, bottom-left meta, top-right controls, toolbar bottom).
+   - Take note (in report) if any of Data/Auth/Stripe files from step 1 are present or missing.
+
+6) Report:
+   - Append _ops/reports/BATCH_A_<UTC>.md with:
+     * What changed in UI (list of files)
+     * Screenshot notes (if agent can’t attach, describe what was seen)
+     * Presence table for Data/Auth/Stripe files (present/missing)
+     * HTTP codes
+   - Print EXACT Acceptance block:
+
+-- Acceptance --
+LAYOUT=50/50 locked mobile-first
+UI=top/bottom badges+meta+toolbar aligned
+GESTURES=next/prev stable (no dup)
+CONSOLE_ERRORS=0
+NOTE=Data/Auth/Stripe presence audited and reported
+-- End Acceptance --
