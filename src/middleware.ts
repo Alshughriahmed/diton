@@ -2,41 +2,42 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 export function middleware(req: NextRequest) {
-  let response: NextResponse;
-  
-  // Age Gate: Protect /chat route
+  // Age gate: protect /chat
   if (req.nextUrl.pathname.startsWith("/chat")) {
-    const ok = req.cookies.get("ageok")?.value === "1";
-    if (!ok) {
+    const ageok = req.cookies.get("ageok")?.value === "1";
+    if (!ageok) {
       const url = req.nextUrl.clone();
       url.pathname = "/";
       url.searchParams.set("age", "required");
-      response = NextResponse.redirect(url);
-    } else {
-      response = NextResponse.next();
+      const r = NextResponse.redirect(url);
+      applySecurityHeaders(r);
+      return r;
     }
-  } else {
-    response = NextResponse.next();
   }
-  
-  // Security Headers: Apply to all responses
-  response.headers.set(
-    "Content-Security-Policy",
-    "default-src 'self' blob: data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' https: wss:; frame-ancestors 'none'; upgrade-insecure-requests"
-  );
-  response.headers.set("X-Frame-Options", "DENY");
-  response.headers.set("X-Content-Type-Options", "nosniff");
-  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  
-  return response;
+
+  const res = NextResponse.next();
+  applySecurityHeaders(res);
+  return res;
 }
 
-export const config = {
-  matcher: [
-    // Age gate matcher
-    "/chat",
-    // Security headers matcher (all routes except static assets)
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"
-  ]
-};
+function applySecurityHeaders(res: NextResponse) {
+  const csp = [
+    "default-src self",
+    "script-src self unsafe-inline unsafe-eval blob:",
+    "style-src self unsafe-inline",
+    "img-src self data: blob: https:",
+    "font-src self data:",
+    "media-src self blob:",
+    "connect-src self https: wss:",
+    "frame-ancestors none",
+    "upgrade-insecure-requests"
+  ].join("; ");
+
+  res.headers.set("Content-Security-Policy", csp);
+  res.headers.set("X-Frame-Options", "DENY");
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+}
+
+export const config = { matcher: ["/(.*)"] };
