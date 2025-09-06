@@ -2,5 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* you can put any global overrides below */
-html,body { min-height: 100%; }
+:root { --bg:#0f172a; --fg:#e5e7eb; }
+html,body { height:100%; }
+body { background:var(--bg); color:var(--fg); }

@@ -1,0 +1,101 @@
+Task: Fix CSS/Tailwind not loading + Age Gate flow, and deliver proof
+
+Root (MANDATORY): /home/runner/workspace
+Do not touch outside root.
+Make a lightweight backup before any change.
+
+المشكلة (سياق سريع)
+
+الصفحة الرئيسية تُعرض كنص خام لأن CSS لا يُحمَّل (لا يظهر /_next/static/css/... في HTML).
+
+سبب ذلك: عدم استيراد globals.css داخل src/app/layout.tsx + التباس بين صيغ إعدادات PostCSS/Tailwind (CJS مقابل ESM) مع package.json فيه "type":"module".
+
+بوابة العمر تمنع /chat بدون الكوكي ageok=1، ومع غياب التنسيق يبدو الموقع “غير موجود”.
+
+المطلوب (خطوات مُلزمة)
+
+Backup
+
+أنشئ أرشيف خفيف: _ops/backups/cssfix_<UTC>/src_backup.tgz (استبعد .next, node_modules, dist, …).
+
+اعتماد إعدادات ESM (JS) موحّدة لتوافق "type":"module"
+
+اكتب/ثبّت:
+
+postcss.config.js (ESM) بمحتوى export default { plugins: { tailwindcss:{}, autoprefixer:{} } }.
+
+tailwind.config.js (ESM) بمحتوى:
+export default { content: ["./src/**/*.{js,ts,jsx,tsx,mdx}"], theme:{ extend:{} }, darkMode:"class", plugins:[] }
+
+احذف أي ملفات متضاربة: postcss.config.cjs, tailwind.config.cjs (إن وُجدت).
+
+لا تُدخل ملفات إعداد مكررة بأي امتداد آخر.
+
+ضبط globals.css + الاستيراد
+
+تأكد أن src/app/globals.css يحتوي على:
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+(أبقِ أي أنماط موجودة مفيدة، لا تحذف المحتوى القائم إن كان صحيحًا).
+
+في src/app/layout.tsx أضف أعلى الملف (بعد أي "use client" إن وُجد):
+import "./globals.css";
+(أضف فقط إذا غير موجودة. لا تضاعف السطر).
+
+تشغيل dev وفحص تحميل CSS
+
+شغّل على PORT=3000.
+
+اجلب HTML للصفحة / واستخرج مسار CSS: يجب أن يظهر واحد على الأقل مثل /_next/static/css/....
+
+اعمل HEAD لملف الـCSS وتحقق Content-Type: text/css وطول معقول (> 5KB).
+
+افحص وجود Utilities داخل CSS (أي تطابق لأحد: min-h-screen, bg-gradient-to-b, text-white, rounded-xl).
+
+بوابة العمر + /chat
+
+بدون كوكي: /chat يجب أن يُرجع 307 إلى /?age=required.
+
+نفّذ POST /api/age/allow (يحط الكوكي).
+
+بعدها /chat يجب أن يُرجع 200 وتظهر الواجهة (لا نحتاج فيديو الآن، فقط التحميل دون أخطاء).
+
+تقرير مُفصّل + Acceptance
+
+اكتب تقريرًا: _ops/reports/CSSFIX_<UTC>.md يوضّح:
+
+ما الذي تم تغييره (ملفات الإعداد، إضافة الاستيراد).
+
+مخرجات فحوص CSS (المسار، الـcontent-type، أحجام، 3–5 أسطر grep utilities).
+
+نتيجة تدفق العمر (307 قبل، 200 بعد).
+
+لقطة مختصرة من الـdev log تؤكد عدم وجود أخطاء.
+
+أخيرًا اطبع بلوك القبول حرفيًا:
+
+-- Acceptance --
+ROOT=/home/runner/workspace
+CONFIG=postcss.config.js:OK tailwind.config.js:OK (no *.cjs)
+LAYOUT_IMPORT=import "./globals.css":1
+CSS_LINK=1 CSS_UTILS_FOUND=min-h-screen|bg-gradient-to-b|text-white
+AGE_FLOW=/chat:307 -> /api/age/allow -> /chat:200
+VISUAL=/ styled (not plain text); /chat renders without console errors
+BACKUP=_ops/backups/cssfix_<UTC>/src_backup.tgz
+REPORT=_ops/reports/CSSFIX_<UTC>.md
+NOTES=No edits outside ROOT; minimal diff
+-- End Acceptance --
+
+قواعد تنفيذ
+
+لا تُنشئ أو تعدّل خارج /home/runner/workspace.
+
+لا تغيّر منطق الصفحات أو النصوص؛ نريد فقط تمكين الـCSS وتأكيد تدفق العمر.
+
+إن فشل أي تحقق، أصلح السبب وأعد الفحص قبل كتابة التقرير والقبول.
+
+هدفنا: عند فتح Preview على :3000/ نرى صفحة مُنسّقة (Tailwind فعّال)، و/chat يعمل بعد ageok، ثم ندفع لاحقًا إلى فيرسل بثقة.
