@@ -55,13 +55,13 @@ outputType = "webview"
 name = "DitonaChat Dev"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/workspace && PORT=3000 pnpm run dev"
 waitForPort = 3000
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [nix]
 packages = ["jq"]

@@ -1,0 +1,123 @@
+قال ChatGPT:
+
+نعم. يعمل داخل الجذر الصحيح. المطلوب الوحيد: إصلاح ترويسة الأذونات والتحقق تلقائيًا عبر الوكيل.
+
+نص المهمة للوكيل
+
+اعمل حصريًا داخل /home/runner/workspace (تحقق بـ git rev-parse --show-toplevel ثم cd إليه).
+
+لا تدفع إلى GitHub.
+
+ثبّت ترويسة Permissions-Policy إلى camera=(self), microphone=(self) عبر next.config.mjs، مع نسخ احتياطي قبل التعديل.
+
+أعد تشغيل dev على :3000.
+
+تحقق: /api/health=200، / و/plans=200، تدفق العمر /chat:307 -> /api/age/allow -> /chat:200، ترويسة Permissions-Policy على /chat، ربط CSS وutilities موجودة، VIP قبل/بعد vip=1.
+
+إن فشل Health، نفّذ pnpm i ثم أعد التشغيل والتحقق.
+
+اطبع Acceptance Block.
+
+دفعة أوامر للوكيل
+
+انسخ-ألصق كما هي:
+
+bash -lc '
+set -Eeuo pipefail
+
+# 0) الجذر
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo /home/runner/workspace)"
+cd "$GIT_ROOT"
+
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/permfix_${STAMP}"
+mkdir -p "$BK"
+[ -f next.config.mjs ] && install -D next.config.mjs "$BK/next.config.mjs" || true
+
+# 1) إصلاح Permissions-Policy في next.config.mjs
+if [ -f next.config.mjs ]; then
+  perl -0777 -i -pe "s/camera=\(\)/camera=(self)/g; s/microphone=\(\)/microphone=(self)/g" next.config.mjs || true
+  if ! grep -q "Permissions-Policy" next.config.mjs; then
+    cat >> next.config.mjs << "JS"
+export default {
+  async headers() {
+    return [{
+      source: "/:path*",
+      headers: [
+        { key: "Permissions-Policy", value: "camera=(self), microphone=(self)" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+        { key: "Referrer-Policy", value: "no-referrer" }
+      ],
+    }];
+  },
+};
+JS
+  fi
+else
+  cat > next.config.mjs << "JS"
+export default {
+  async headers() {
+    return [{
+      source: "/:path*",
+      headers: [
+        { key: "Permissions-Policy", value: "camera=(self), microphone=(self)" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+        { key: "Referrer-Policy", value: "no-referrer" }
+      ],
+    }];
+  },
+};
+JS
+fi
+
+# 2) إعادة تشغيل dev على :3000
+( command -v fuser >/dev/null && fuser -k 3000/tcp ) || true
+pkill -f "next.*dev" 2>/dev/null || true
+LOG=/tmp/app.log; : > "$LOG"
+nohup bash -lc "PORT=3000 pnpm run dev -- -p 3000 -H 0.0.0.0" >>"$LOG" 2>&1 & echo $! > /tmp/app.pid
+
+# 3) انتظار Health
+ORIGIN="http://127.0.0.1:3000"
+H=""; for i in $(seq 1 120); do H="$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/api/health" || true)"; [ "$H" = "200" ] && break; sleep 1; done
+if [ "$H" != "200" ]; then
+  pnpm i >>"$LOG" 2>&1 || true
+  nohup bash -lc "PORT=3000 pnpm run dev -- -p 3000 -H 0.0.0.0" >>"$LOG" 2>&1 &
+  for i in $(seq 1 120); do H="$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/api/health" || true)"; [ "$H" = "200" ] && break; sleep 1; done
+fi
+
+# 4) تحقق شامل
+HOME_HTML=/tmp/home.html
+curl -sS "$ORIGIN/" -o "$HOME_HTML" || true
+CSS_PATH="$(grep -oE "/_next/static/css/[^\"'"'"']+\\.css" "$HOME_HTML" | head -n1 || true)"
+CSS_CT="na"; CSS_CL="na"
+if [ -n "${CSS_PATH:-}" ]; then
+  HDRS="$(curl -sI "$ORIGIN$CSS_PATH" || true)"
+  CSS_CT="$(printf "%s" "$HDRS" | awk -F': ' "tolower(\$1)==\"content-type\"{print \$2}" | tr -d '\r' | sed "s/[; ].*//")"
+  CSS_CL="$(printf "%s" "$HDRS" | awk -F': ' "tolower(\$1)==\"content-length\"{print \$2}" | tr -d '\r')"
+fi
+UTIL_FOUND="missing"; grep -qE "min-h-screen|bg-gradient-to-b" "$HOME_HTML" && UTIL_FOUND="found"
+
+COOKIEJ=/tmp/c.txt; : > "$COOKIEJ"
+CHAT1_CODE="$(curl -s -D - -o /dev/null "$ORIGIN/chat" -c "$COOKIEJ" | awk "NR==1{print \$2}")"
+curl -s -X POST -D - -o /dev/null "$ORIGIN/api/age/allow" -b "$COOKIEJ" -c "$COOKIEJ" >/dev/null 2>&1 || true
+CHAT2_CODE="$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/chat" -b "$COOKIEJ" || true)"
+
+VIP_PRE_CODE="$(curl -sS -o /tmp/vip_pre.json -w "%{http_code}" "$ORIGIN/api/user/vip-status" -b "$COOKIEJ" || true)"
+printf "vip=1" > /tmp/vip_cookie.txt
+VIP_POST_CODE="$(curl -sS -o /tmp/vip_post.json -w "%{http_code}" "$ORIGIN/api/user/vip-status" -b /tmp/vip_cookie.txt || true)"
+
+PP="$(curl -s -I "$ORIGIN/chat" -b "$COOKIEJ" | tr -d "\r" | awk -F': ' "/^Permissions-Policy:/ {print \$2}")"
+
+ROOT_NOW="$(pwd)"
+GIT_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
+# 5) تقرير
+echo "-- Acceptance --"
+echo "ROOT=$ROOT_NOW GIT_ROOT=$GIT_TOP ROOT_MATCH=$( [ "$ROOT_NOW" = "$GIT_TOP" ] && echo yes || echo no )"
+echo "HTTP=/:$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/") /plans:$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/plans") /api/health:$H /chat:307->$CHAT2_CODE"
+echo "CSS_LINK=$( [ -n "${CSS_PATH:-}" ] && echo 1 || echo 0 ) CONTENT_TYPE=$CSS_CT LENGTH=$CSS_CL utilities:$UTIL_FOUND"
+echo "AGE_FLOW=$( [ "$CHAT1_CODE" = "307" ] && [ "$CHAT2_CODE" = "200" ] && echo ok || echo fail ) VIP=pre:$VIP_PRE_CODE post:$VIP_POST_CODE"
+echo "PERMISSIONS_POLICY=${PP:-na}"
+echo "BACKUP_DIR=$BK LOG=$LOG"
+echo "-- End Acceptance --"
+'
