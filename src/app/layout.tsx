@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import CookieBanner from "@/components/common/CookieBanner";
 
 export const metadata: Metadata = {
   title: "DitonaChat",
@@ -8,7 +9,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>
-      <body className="bg-gray-950 text-white antialiased">{children}</body>
+      <body className="bg-gray-950 text-white antialiased">
+        {children}
+        <CookieBanner />
+      </body>
     </html>
   );
 }
