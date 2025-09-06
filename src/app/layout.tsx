@@ -5,7 +5,6 @@ export const metadata: Metadata = {
   title: "DitonaChat",
   description: "18+ random video chat with smart gender & country filters.",
 };
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>

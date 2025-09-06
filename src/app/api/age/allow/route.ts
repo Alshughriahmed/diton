@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 
 export async function POST() {
-  const response = NextResponse.json({ success: true }, { status: 200 });
-  response.cookies.set("ageok", "1", {
+  const res = NextResponse.json({ ok: true, ts: Date.now() });
+  res.cookies.set({
+    name: "ageok",
+    value: "1",
     httpOnly: false,
-    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
-    maxAge: 365 * 24 * 60 * 60 // 1 year
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365, // سنة
   });
-  return response;
+  return res;
 }
-
-export const dynamic = "force-dynamic";

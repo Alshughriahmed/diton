@@ -1,11 +1,26 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
+export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const gender = searchParams.get('gender') ?? 'all';
-  const countries = (searchParams.get('countries') ?? 'ALL').split(',').filter(Boolean);
-  console.log('[MATCH_NEXT]', { gender, countries, ts: Date.now() });
-  return NextResponse.json({ ok: true, gender, countries, ts: Date.now() }, { status: 200 });
+function parse(input: any) {
+  const genderRaw = input?.gender ?? null;
+  const g = (typeof genderRaw === "string" && genderRaw.toLowerCase()) || null;
+  const countriesRaw = input?.countries;
+  let countries: string[] = [];
+  if (Array.isArray(countriesRaw)) countries = countriesRaw.map(String);
+  else if (typeof countriesRaw === "string") countries = countriesRaw.split(",").map(s => s.trim()).filter(Boolean);
+  return { gender: g, countries };
 }
 
-export const dynamic = 'force-dynamic';
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const gender = url.searchParams.get("gender");
+  const countries = url.searchParams.get("countries");
+  const p = parse({ gender, countries });
+  return NextResponse.json({ ts: Date.now(), ...p });
+}
+
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const p = parse(body);
+  return NextResponse.json({ ts: Date.now(), ...p });
+}

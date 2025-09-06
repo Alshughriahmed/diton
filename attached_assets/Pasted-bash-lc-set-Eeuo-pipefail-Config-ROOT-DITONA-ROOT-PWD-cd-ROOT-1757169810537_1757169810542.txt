@@ -1,0 +1,246 @@
+bash -lc '
+set -Eeuo pipefail
+
+# -------- Config --------
+ROOT="${DITONA_ROOT:-$PWD}"
+cd "$ROOT"
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/agent_${STAMP}"
+LOG="/tmp/app.log"; : > "$LOG"
+PIDF="/tmp/app.pid"
+
+mkdir -p "$BK" "src/app/api/health" "src/app/api/age/allow" "src/app/api/user/vip-status" "src/app/api/match/next" || true
+
+backup(){ [ -f "$1" ] && install -D "$1" "$BK/$1"; }
+
+# -------- Backup (idempotent) --------
+backup package.json || true
+backup next.config.mjs || true
+backup middleware.ts || true
+backup .gitignore || true
+backup postcss.config.js || true
+backup postcss.config.cjs || true
+backup postcss.config.mjs || true
+backup tailwind.config.js || true
+backup tailwind.config.cjs || true
+backup tailwind.config.mjs || true
+backup src/app/layout.tsx || true
+backup src/app/globals.css || true
+backup src/app/api/health/route.ts || true
+backup src/app/api/age/allow/route.ts || true
+backup src/app/api/user/vip-status/route.ts || true
+backup src/app/api/match/next/route.ts || true
+
+# -------- Apply: ESM-only Tailwind/PostCSS --------
+if [ ! -f postcss.config.js ]; then
+  cat > postcss.config.js << "JS"
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+JS
+fi
+# تخلّص من أي ازدواج cjs/mjs
+[ -f postcss.config.cjs ] && rm -f postcss.config.cjs
+[ -f postcss.config.mjs ] && rm -f postcss.config.mjs
+
+if [ ! -f tailwind.config.js ]; then
+  cat > tailwind.config.js << "JS"
+/** @type {import("tailwindcss").Config} */
+export default {
+  content: [
+    "./src/app/**/*.{ts,tsx,js,jsx}",
+    "./src/components/**/*.{ts,tsx,js,jsx}",
+  ],
+  theme: { extend: {} },
+  plugins: [],
+};
+JS
+fi
+[ -f tailwind.config.cjs ] && rm -f tailwind.config.cjs
+[ -f tailwind.config.mjs ] && rm -f tailwind.config.mjs
+
+# -------- Apply: Age middleware + allow route (+ Permissions-Policy) --------
+cat > middleware.ts << "TS"
+import { NextResponse, type NextRequest } from "next/server";
+
+export const config = { matcher: ["/chat"] };
+
+export function middleware(req: NextRequest) {
+  const ageok = req.cookies.get("ageok")?.value === "1";
+  if (!ageok) {
+    const url = new URL("/", req.url);
+    url.searchParams.set("age", "required");
+    return NextResponse.redirect(url, 307);
+  }
+  const res = NextResponse.next();
+  // السماح بالكاميرا/المايك داخل النطاق
+  res.headers.set("Permissions-Policy", "camera=(self), microphone=(self)");
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  res.headers.set("Referrer-Policy", "no-referrer");
+  return res;
+}
+TS
+
+cat > src/app/api/age/allow/route.ts << "TS"
+import { NextResponse } from "next/server";
+
+export async function POST() {
+  const res = NextResponse.json({ ok: true, ts: Date.now() });
+  res.cookies.set({
+    name: "ageok",
+    value: "1",
+    httpOnly: false,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365, // سنة
+  });
+  return res;
+}
+TS
+
+# -------- Apply: Health route --------
+cat > src/app/api/health/route.ts << "TS"
+import { NextResponse } from "next/server";
+export const dynamic = "force-dynamic";
+export async function GET() {
+  return NextResponse.json({ ok: true, ts: Date.now() });
+}
+TS
+
+# -------- Apply: VIP status route (anon|cookie, db اختياري لاحقاً) --------
+cat > src/app/api/user/vip-status/route.ts << "TS"
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export async function GET(req: NextRequest) {
+  const vipCookie = req.cookies.get("vip")?.value === "1";
+  if (vipCookie) {
+    return NextResponse.json({ isVip: true, via: "cookie" });
+  }
+  // نقطة تمديد مستقبلية لقراءة الجلسة/DB:
+  // if (await hasDbVip(req)) return NextResponse.json({ isVip: true, via: "db" });
+  return NextResponse.json({ isVip: false, via: "anon" });
+}
+TS
+
+# -------- Apply: Match/Next echo route --------
+cat > src/app/api/match/next/route.ts << "TS"
+import { NextResponse } from "next/server";
+export const dynamic = "force-dynamic";
+
+function parse(input: any) {
+  const genderRaw = input?.gender ?? null;
+  const g = (typeof genderRaw === "string" && genderRaw.toLowerCase()) || null;
+  const countriesRaw = input?.countries;
+  let countries: string[] = [];
+  if (Array.isArray(countriesRaw)) countries = countriesRaw.map(String);
+  else if (typeof countriesRaw === "string") countries = countriesRaw.split(",").map(s => s.trim()).filter(Boolean);
+  return { gender: g, countries };
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const gender = url.searchParams.get("gender");
+  const countries = url.searchParams.get("countries");
+  const p = parse({ gender, countries });
+  return NextResponse.json({ ts: Date.now(), ...p });
+}
+
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const p = parse(body);
+  return NextResponse.json({ ts: Date.now(), ...p });
+}
+TS
+
+# -------- Apply: layout globals import (dedupe, ensure present) --------
+if [ -f src/app/layout.tsx ]; then
+  # احذف التكرارات
+  tmpf="$(mktemp)"
+  awk "!seen[\$0]++" src/app/layout.tsx > "$tmpf" && mv "$tmpf" src/app/layout.tsx
+  # أضمن سطر الاستيراد موجود مرة واحدة
+  grep -q "import \"./globals.css\"" src/app/layout.tsx || \
+    sed -i '1s;^;import "./globals.css"\n;' src/app/layout.tsx
+fi
+
+# -------- Apply: .gitignore (تجاهل _ops الثقيلة) --------
+touch .gitignore
+grep -q "^_ops/" .gitignore || printf "\n_ops/\n" >> .gitignore
+
+# -------- Install deps (lightweight) --------
+TYPE_MODULE=$( (command -v jq >/dev/null && jq -r ".type // \"\"" package.json) 2>/dev/null || grep -q "\"type\" *: *\"module\"" package.json && echo "module" || echo "unset" )
+NODE_V="$(node -v 2>/dev/null || true)"
+corepack enable >/dev/null 2>&1 || true
+PNPM_V="$(pnpm -v 2>/dev/null || true)"
+if [ ! -d node_modules ]; then
+  (pnpm i --frozen-lockfile || pnpm i) >>"$LOG" 2>&1 || true
+fi
+
+# -------- Kill any previous dev and start :3000 --------
+( command -v fuser >/dev/null && fuser -k 3000/tcp ) || true
+for P in $(lsof -ti:3000 2>/dev/null || true); do kill -9 "$P" || true; done
+pkill -f "next.*dev.*3000" 2>/dev/null || true
+
+PM="pnpm"; [ -f package-lock.json ] && PM="npm"; [ -f yarn.lock ] && PM="yarn"
+case "$PM" in
+  pnpm) CMD="PORT=3000 pnpm run dev -- -p 3000 -H 0.0.0.0" ;;
+  npm)  CMD="PORT=3000 npm run dev -- -p 3000 -H 0.0.0.0" ;;
+  yarn) CMD="PORT=3000 yarn dev -p 3000 -H 0.0.0.0" ;;
+esac
+
+nohup bash -lc "$CMD" >>"$LOG" 2>&1 & echo $! > "$PIDF"
+
+# -------- Verify --------
+ORIGIN="http://127.0.0.1:3000"
+for i in $(seq 1 120); do
+  H="$(curl -m 2 -s -o /dev/null -w "%{http_code}" "$ORIGIN/api/health" || true)"
+  [ "$H" = "200" ] && break
+  sleep 1
+done
+
+HOME_HTML=/tmp/home.html
+curl -m 5 -sS "$ORIGIN/" -o "$HOME_HTML" || true
+CSS_PATH="$(grep -oE "/_next/static/css/[^\"'']+\\.css" "$HOME_HTML" | head -n1 || true)"
+CSS_CT="na"; CSS_CL="na"
+if [ -n "${CSS_PATH:-}" ]; then
+  HDRS="$(curl -m 5 -sI "$ORIGIN$CSS_PATH" || true)"
+  CSS_CT="$(printf "%s" "$HDRS" | awk -F": " "tolower(\$1)==\"content-type\"{print \$2}" | tr -d "\r" | sed "s/[; ].*//")"
+  CSS_CL="$(printf "%s" "$HDRS" | awk -F\": \" \"tolower(\$1)==\\\"content-length\\\"{print \$2}\" | tr -d \"\\r\")"
+fi
+UTIL_FOUND="missing"; grep -qE "min-h-screen|bg-gradient-to-b" "$HOME_HTML" && UTIL_FOUND="found"
+
+COOKIEJ=/tmp/cookies.txt; : > "$COOKIEJ"
+CHAT1_CODE="$(curl -m 5 -s -D - -o /dev/null "$ORIGIN/chat" -c "$COOKIEJ" | awk "NR==1{print \$2}")"
+curl -m 5 -s -X POST -D - -o /dev/null "$ORIGIN/api/age/allow" -b "$COOKIEJ" -c "$COOKIEJ" >/dev/null 2>&1 || true
+CHAT2_CODE="$(curl -m 5 -s -o /dev/null -w "%{http_code}" "$ORIGIN/chat" -b "$COOKIEJ" || true)"
+AGE_FLOW="fail"; [ "$CHAT1_CODE" = "307" ] && [ "$CHAT2_CODE" = "200" ] && AGE_FLOW="ok"
+
+VIP_LINE="skip"
+VIP_PRE_CODE="$(curl -m 5 -sS -o /tmp/vip_pre.json -w "%{http_code}" "$ORIGIN/api/user/vip-status" -b "$COOKIEJ" || true)"
+if [ "$VIP_PRE_CODE" = "200" ]; then
+  printf "vip=1" > /tmp/vip_cookie.txt
+  VIP_POST_CODE="$(curl -m 5 -sS -o /tmp/vip_post.json -w "%{http_code}" "$ORIGIN/api/user/vip-status" -b /tmp/vip_cookie.txt || true)"
+  VIP_LINE="pre:$VIP_PRE_CODE post:$VIP_POST_CODE"
+fi
+
+ROOT_CODE="$(curl -m 5 -s -o /dev/null -w "%{http_code}" "$ORIGIN/" || true)"
+PLANS_CODE="$(curl -m 5 -s -o /dev/null -w "%{http_code}" "$ORIGIN/plans" || true)"
+PERM_HDR="$(curl -m 5 -s -I "$ORIGIN/chat" -b "$COOKIEJ" | tr -d "\r" | grep -i "^Permissions-Policy:" | awk -F": " "{print \$2}" || true)"
+
+# -------- Report --------
+echo "-- Acceptance --"
+echo "TYPE=${TYPE_MODULE:-unset} NODE=${NODE_V:-na} PNPM=${PNPM_V:-na}"
+echo "FILES=health:present age_allow:present vip_status:present match_next:present tailwind_postcss:ESM_only"
+echo "LAYOUT_CSS_IMPORT=$(grep -q \"import \\\"./globals.css\\\"\" src/app/layout.tsx && echo present || echo missing)"
+echo "PERMISSIONS_POLICY=${PERM_HDR:-na}"
+echo "DEV=:3000 $( [ \"$H\" = \"200\" ] && echo alive || echo dead ) PID=$(cat \"$PIDF\" 2>/dev/null || echo na)"
+echo "HTTP=/:$ROOT_CODE /plans:$PLANS_CODE /api/health:$H /chat:307->$CHAT2_CODE"
+echo "CSS_LINK=$( [ -n \"${CSS_PATH:-}\" ] && echo 1 || echo 0 ) CONTENT_TYPE=${CSS_CT:-na} LENGTH=${CSS_CL:-na} utilities:$UTIL_FOUND"
+echo "AGE_FLOW=$AGE_FLOW VIP=$VIP_LINE"
+echo "BACKUP_DIR=$BK LOG=$LOG"
+echo "-- End Acceptance --"                               إن ظهر DEV=dead أو أكواد 000:
+
+اسمح بتشغيل pnpm i ثم أعد التحقق. .' 

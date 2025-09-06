@@ -57,7 +57,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/workspace && PORT=3000 pnpm dev"
+args = "cd /home/runner/workspace && PORT=3000 pnpm run dev"
 waitForPort = 3000
 
 [workflows.workflow.metadata]

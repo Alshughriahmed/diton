@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-
+export const dynamic = "force-dynamic";
 export async function GET() {
-  return NextResponse.json({ ok: true, via: "/api/health" }, { status: 200 });
+  return NextResponse.json({ ok: true, ts: Date.now() });
 }
