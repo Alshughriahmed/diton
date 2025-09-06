@@ -13,10 +13,6 @@ const nextConfig = {
             value: 'camera=(self), microphone=(self)'
           },
           {
-            key: 'X-PP-Source',
-            value: 'next.config'
-          },
-          {
             key: 'X-Content-Type-Options',
             value: 'nosniff'
           },
