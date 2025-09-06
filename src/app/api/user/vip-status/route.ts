@@ -1,4 +1,4 @@
-import { allow, ipFrom } from "../../../lib/ratelimit";
+import { allow, ipFrom } from "../../../../lib/ratelimit";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 

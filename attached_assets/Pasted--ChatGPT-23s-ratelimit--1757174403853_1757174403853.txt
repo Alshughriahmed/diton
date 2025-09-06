@@ -1,0 +1,99 @@
+قال ChatGPT:
+قام بالتفكير لمدة 23s
+
+الوضع الآن: الأخطاء كانت من مسارات ratelimit الخاطئة. أصلحناها. لكننا لم نثبت “بناء ناجح” بعد. الأفضل تفويض الوكيل بمهمة Predeploy QA شاملة تُغلق أي ثغرة قبل الدفع والنشر.
+
+انسخ هذا النص للوكيل كما هو:
+
+المهمة: Predeploy QA صارمة قبل الدفع والنشر
+
+اعمل حصريًا داخل /home/runner/workspace. تحقّق أولًا: git rev-parse --show-toplevel ثم cd إليه. لا تعمل خارج الجذر.
+
+لا تُثبّت حزم جديدة ولا تغيّر التبعيات. مسموح فقط: إصلاح مسارات/استيرادات، تسويات TypeScript طفيفة، وتنظيف ضبط.
+
+1) إصلاحات فورية مطلوبة
+
+ثبّت مسارات الاستيراد لـ ratelimit في:
+
+src/app/api/age/allow/route.ts
+
+src/app/api/match/next/route.ts
+
+src/app/api/user/vip-status/route.ts
+اجعلها ../../../../lib/ratelimit بالضبط. راجع كل سطر from '../../../lib/ratelimit' واستبدله.
+
+تأكّد من وجود الملف: src/lib/ratelimit.ts.
+
+تأكّد أن configs ESM فقط: postcss.config.js وtailwind.config.js موجودة، ولا توجد نسخ .cjs/.mjs.
+
+في src/app/layout.tsx يوجد سطر واحد فقط: import "./globals.css".
+
+2) رؤوس الأمان
+
+نعمل بالـ middleware.ts للرؤوس. تأكّد أن ترويسة:
+
+Permissions-Policy: camera=(self), microphone=(self)
+
+وX-Content-Type-Options:nosniff, Referrer-Policy:no-referrer, Strict-Transport-Security:max-age=15552000; includeSubDomains
+
+إن كان في next.config.mjs ترويسات تُعطّل الكاميرا/المايك (camera=(), microphone=())، صحّحها أو أزلها لتتطابق مع القيم أعلاه. الهدف: القراءة النهائية من /chat تُظهر القيم الصحيحة.
+
+3) بناء تحقّقي
+
+نفّذ pnpm -s build.
+
+إذا فشل البناء:
+
+أصلح الاستيرادات والمسارات فقط، ثم أعد البناء.
+
+إن استمر الفشل، أوقف وأدرج أعلى 50 سطرًا من سجل الخطأ في التقرير.
+
+4) تشغيل dev وفحص شامل
+
+شغّل dev على :3000.
+
+نفّذ فحوص HTTP وCSS والكوكي:
+
+GET /api/health يجب 200.
+
+/ و/plans يجب 200.
+
+تدفّق العمر: /chat يعيد 307 بدون كوكي → POST /api/age/allow → /chat يصبح 200.
+
+استخرج لينك CSS من / (/_next/static/css/...) وتحقق Content-Type=text/css ووجود Utilities (min-h-screen أو bg-gradient-to-b) في الـDOM.
+
+GET /api/user/vip-status قبل/بعد كوكي vip=1 → ترجع 200 في الحالتين وتتبدّل via من "anon" إلى "cookie".
+
+ترويسة Permissions-Policy على /chat بعد ضبط ageok=1 يجب أن تكون حرفيًا:
+camera=(self), microphone=(self).
+
+Rate limit: أرسل >12 طلبًا إلى POST /api/age/allow خلال دقيقة. يجب أن ترى ≥1 رد 429.
+
+5) قبول نهائي
+اطبع بلوك قبول واحد بهذه المفاتيح فقط:
+
+-- Acceptance --
+ROOT_MATCH=yes
+BUILD=ok
+HTTP=/:200 /plans:200 /api/health:200 /chat:307->200
+CSS_LINK=1 CONTENT_TYPE=text/css utilities:found
+AGE_FLOW=ok VIP=pre:200 post:200
+PERMISSIONS_POLICY=camera=(self), microphone=(self)
+RATELIMIT_AGE_ALLOW=ok
+-- End Acceptance --
+
+
+6) تقرير توثيقي
+
+اكتب تقريرًا إلى _ops/reports/predeploy_checklist.md يتضمن:
+
+ما الذي عُدِّل بدقة (ملفات + أسطر).
+
+مخرجات pnpm build المقتضبة (الأسطر الأولى والأخيرة، بلا إسهاب).
+
+نتيجة كل فحص أعلاه.
+
+تأكيد أن .gitignore يتجاهل _ops/.
+
+شروط النجاح
+لا تكمل إلى الدفع أو نشر Vercel إلا إذا كان BUILD=ok وكل البنود في الـAcceptance = القيم المطلوبة حرفيًا. إن فشل أي بند، أصلحه ثم أعد الفحوص حتى ينجح.

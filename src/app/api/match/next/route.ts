@@ -1,4 +1,4 @@
-import { allow, ipFrom } from "../../../lib/ratelimit";
+import { allow, ipFrom } from "../../../../lib/ratelimit";
 import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
