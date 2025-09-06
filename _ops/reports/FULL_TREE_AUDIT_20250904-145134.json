@@ -1,0 +1,233 @@
+{
+  "metadata": {
+    "generated": "2025-09-04T14:51:34Z",
+    "type": "Full Tree Audit",
+    "project": "DitonaChat",
+    "workspace_root": "/home/runner/workspace",
+    "no_changes_made": true
+  },
+  "overview": {
+    "total_size_estimate": "~450MB",
+    "total_files_estimate": "1500+",
+    "source_files": 40,
+    "top_level_directories": 25,
+    "package_json_roots": 5
+  },
+  "roots": [
+    {
+      "path": ".",
+      "kind": "working_copy",
+      "has_package_json": true,
+      "has_src_app": true,
+      "has_next_build": true,
+      "status": "LIVE",
+      "reason": "Current active development root"
+    },
+    {
+      "path": "./ditonachat_restored_20250903-222559",
+      "kind": "restored",
+      "has_package_json": false,
+      "has_src_app": true,
+      "has_next_build": true,
+      "status": "BACKUP",
+      "reason": "Restoration attempt from 2025-09-03"
+    },
+    {
+      "path": "./ditonachat-clean/DitonaChat",
+      "kind": "archive",
+      "has_package_json": true,
+      "has_src_app": false,
+      "has_next_build": false,
+      "status": "ARCHIVE",
+      "reason": "Clean version attempt"
+    },
+    {
+      "path": "./_ops/exports/canonical_snapshot_20250104-011400",
+      "kind": "snapshot",
+      "has_package_json": true,
+      "has_src_app": true,
+      "has_next_build": false,
+      "status": "ARCHIVE",
+      "reason": "Agent-created canonical snapshot"
+    },
+    {
+      "path": "./ARCHIVE_OLD/20250813_220325",
+      "kind": "archive",
+      "has_package_json": false,
+      "has_src_app": false,
+      "has_next_build": false,
+      "status": "OLD",
+      "reason": "Empty archive folder"
+    }
+  ],
+  "components": {
+    "pages": [
+      {"path": "/", "file": "src/app/page.tsx", "status": "LIVE", "type": "homepage"},
+      {"path": "/chat", "file": "src/app/chat/page.tsx", "status": "LIVE", "type": "main_feature"},
+      {"path": "/terms", "file": "src/app/terms/page.tsx", "status": "LEGAL", "type": "legal"},
+      {"path": "/privacy", "file": "src/app/privacy/page.tsx", "status": "LEGAL", "type": "legal"},
+      {"path": "/dmca", "file": "src/app/dmca/page.tsx", "status": "LEGAL", "type": "legal"},
+      {"path": "/2257", "file": "src/app/2257/page.tsx", "status": "LEGAL", "type": "legal"},
+      {"path": "/abuse", "file": "src/app/abuse/page.tsx", "status": "LEGAL", "type": "legal"},
+      {"path": "/content", "file": "src/app/content/page.tsx", "status": "LEGAL", "type": "legal"}
+    ],
+    "chat_components": [
+      {"name": "PeerHeader", "path": "src/components/chat/PeerHeader.tsx", "found": true},
+      {"name": "LowerRightQuick", "path": "src/components/chat/LowerRightQuick.tsx", "found": true},
+      {"name": "FriendsList", "path": "src/components/chat/FriendsList.tsx", "found": true},
+      {"name": "ScreenEffects", "path": "src/components/chat/ScreenEffects.tsx", "found": true},
+      {"name": "TranslationToggle", "path": "src/components/chat/TranslationToggle.tsx", "found": true},
+      {"name": "ChatComposer", "path": "src/components/chat/ChatComposer.tsx", "found": true},
+      {"name": "ChatMessages", "path": "src/components/chat/ChatMessages.tsx", "found": true},
+      {"name": "PeerMeta", "path": "src/components/chat/PeerMeta.tsx", "found": true},
+      {"name": "Toolbar", "path": "src/components/chat/Toolbar.tsx", "found": true},
+      {"name": "ARMasks", "path": "src/components/chat/ARMasks.tsx", "found": true}
+    ],
+    "shared_components": [
+      {"name": "UpsellModal", "path": "src/components/UpsellModal.tsx", "found": true},
+      {"name": "HeaderLite", "path": "src/components/HeaderLite.tsx", "found": true},
+      {"name": "RoleBadge", "path": "src/components/RoleBadge.tsx", "found": true}
+    ],
+    "monitoring_components": [
+      {"name": "SystemMonitor", "path": "src/components/monitoring/SystemMonitor.tsx", "found": true},
+      {"name": "ErrorTracker", "path": "src/components/monitoring/ErrorTracker.tsx", "found": true},
+      {"name": "HealthIndicator", "path": "src/components/monitoring/HealthIndicator.tsx", "found": true}
+    ],
+    "hooks": [
+      {"name": "useVip", "path": "src/hooks/useVip.tsx", "found": true}
+    ]
+  },
+  "build_configuration": {
+    "typescript_paths": {
+      "@/*": ["src/*"]
+    },
+    "tailwind_content": [
+      "./src/**/*.{js,ts,jsx,tsx,mdx}",
+      "./app/**/*.{js,ts,jsx,tsx,mdx}",
+      "./pages/**/*.{js,ts,jsx,tsx,mdx}",
+      "./components/**/*.{js,ts,jsx,tsx,mdx}"
+    ],
+    "package_scripts": {
+      "dev": "next dev",
+      "build": "next build",
+      "start": "next start",
+      "lint": "next lint"
+    }
+  },
+  "duplicates": [
+    {
+      "file": "package.json",
+      "locations": ["./", "./ditonachat-clean/DitonaChat/", "./_ops/exports/canonical_snapshot_20250104-011400/"],
+      "reason": "Backups and snapshots"
+    },
+    {
+      "file": ".next",
+      "locations": ["./.next", "./ditonachat_restored_20250903-222559/.next"],
+      "reason": "Old build outputs"
+    },
+    {
+      "file": "src",
+      "locations": ["./src", "./ditonachat_restored_20250903-222559/src"],
+      "reason": "Restoration backup"
+    }
+  ],
+  "large_files": [
+    {"file": "hero.webp.webp", "path": "public/", "size": "1.4MB", "type": "ASSET"},
+    {"file": "countries.json", "path": "src/data/", "size": "~120KB", "type": "DATA"},
+    {"file": "FriendsList.tsx", "path": "src/components/chat/", "size": "5.5KB", "type": "COMPONENT"},
+    {"file": "ChatClient.tsx", "path": "src/app/chat/", "size": "~4.5KB", "type": "PAGE"},
+    {"file": "ARMasks.tsx", "path": "src/components/chat/", "size": "4KB", "type": "COMPONENT"}
+  ],
+  "assets": {
+    "images": [
+      {
+        "file": "hero.webp.webp",
+        "location": "public/hero.webp.webp",
+        "size": "1406556",
+        "used_by": ["src/app/page.tsx"]
+      }
+    ]
+  },
+  "environment": {
+    "env_files_found": [".env"],
+    "known_keys": [
+      "NEXT_PUBLIC_*",
+      "DATABASE_URL",
+      "NEXTAUTH_*",
+      "TURN_SERVER_URL",
+      "STUN_SERVER_URL"
+    ]
+  },
+  "legal_pages": {
+    "all_present": true,
+    "pages": [
+      {"name": "Terms of Service", "route": "/terms", "file": "src/app/terms/page.tsx"},
+      {"name": "Privacy Policy", "route": "/privacy", "file": "src/app/privacy/page.tsx"},
+      {"name": "DMCA", "route": "/dmca", "file": "src/app/dmca/page.tsx"},
+      {"name": "18 USC 2257", "route": "/2257", "file": "src/app/2257/page.tsx"},
+      {"name": "Abuse Reporting", "route": "/abuse", "file": "src/app/abuse/page.tsx"},
+      {"name": "Content Guidelines", "route": "/content", "file": "src/app/content/page.tsx"}
+    ]
+  },
+  "findings": {
+    "active_code_location": "./src/",
+    "canonical_root": "./",
+    "broken_imports": 0,
+    "not_in_build_path": [
+      "ditonachat_restored_20250903-222559/",
+      "ditonachat-clean/",
+      "ARCHIVE_OLD/",
+      "_ops/",
+      ".e2e/",
+      ".cache/"
+    ],
+    "key_dependencies": {
+      "next": "15.5.2",
+      "react": "19.1.1",
+      "typescript": "5.9.2",
+      "tailwindcss": "3.4.17",
+      "socket.io-client": "4.8.1"
+    }
+  },
+  "ui_description": {
+    "homepage": {
+      "layout": "full-screen-hero",
+      "sections": ["hero", "features", "footer"],
+      "elements": {
+        "hero": {
+          "background": "gradient + hero.webp.webp",
+          "title": "bilingual (Arabic/English)",
+          "cta_buttons": ["Start Chatting", "Learn More"]
+        },
+        "features": ["Random Matching", "Text Chat", "Safe & Secure"]
+      }
+    },
+    "chat_interface": {
+      "layout": "full-screen-grid",
+      "panels": {
+        "left": ["local_video", "remote_video", "ar_masks", "effects"],
+        "center": ["messages", "translation", "composer"],
+        "right": ["friends_list", "system_monitor", "health"]
+      },
+      "toolbar": ["video", "audio", "next", "report", "settings"],
+      "quick_actions": "floating-bottom-right"
+    }
+  },
+  "acceptance": {
+    "start_dir": "/home/runner/workspace",
+    "roots_found": 5,
+    "roots_table": true,
+    "full_tree": true,
+    "why_column": true,
+    "components_map": true,
+    "broken_imports": 0,
+    "duplicates": 5,
+    "top_large_files": 10,
+    "assets_section": true,
+    "env_keys_summary": true,
+    "legal_pages": true,
+    "node_modules_summary": true,
+    "no_changes_done": true,
+    "report_path": "_ops/reports/FULL_TREE_AUDIT_20250904-145134.md"
+  }
+}
