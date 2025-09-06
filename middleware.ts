@@ -10,10 +10,7 @@ export function middleware(req: NextRequest) {
   }
   const res = NextResponse.next();
 
-  // Permissions-Policy
-  res.headers.set("Permissions-Policy", "camera=(self), microphone=(self)");
-
-  // أمن أساسي
+  // أمن أساسي (Permissions-Policy يتم التحكم به من next.config.mjs)
   res.headers.set("X-Content-Type-Options", "nosniff");
   res.headers.set("Referrer-Policy", "no-referrer");
   res.headers.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
