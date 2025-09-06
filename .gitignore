@@ -3,3 +3,9 @@ node_modules/
 dist/
 _ops/backups/
 .vercel/
+
+# ops blobs
+_ops/snapshots/
+_ops/artifacts/
+_ops/backups/
+_ops/**/*.tar.gz
