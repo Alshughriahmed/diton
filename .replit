@@ -5,10 +5,6 @@ localPort = 3000
 externalPort = 3000
 
 [[ports]]
-localPort = 3001
-externalPort = 80
-
-[[ports]]
 localPort = 5000
 externalPort = 5000
 
@@ -37,7 +33,7 @@ args = "DitonaChat Dev"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Dev Server Test"
+args = "DitonaChat Final UI"
 
 [[workflows.workflow]]
 name = "DitonaChat Server"
@@ -76,7 +72,7 @@ args = "cd /home/runner/workspace && PORT=3000 pnpm run dev"
 waitForPort = 3000
 
 [[workflows.workflow]]
-name = "Dev Server Test"
+name = "DitonaChat Final UI"
 author = "agent"
 
 [[workflows.workflow.tasks]]
