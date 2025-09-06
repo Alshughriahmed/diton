@@ -1,0 +1,177 @@
+bash -lc '
+set -Eeuo pipefail
+
+# ====== 0) الجذر والنسخ الاحتياطي ======
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo $PWD)"
+cd "$ROOT"
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/predeploy_${STAMP}"
+mkdir -p "$BK"
+for f in package.json next.config.mjs middleware.ts \
+         src/app/layout.tsx src/app/page.tsx src/app/globals.css \
+         src/app/api/health/route.ts src/app/api/age/allow/route.ts \
+         src/app/api/user/vip-status/route.ts src/app/api/match/next/route.ts; do
+  [ -f "$f" ] && install -D "$f" "$BK/$f" || true
+done
+
+# ====== 1) أمان الرؤوس عبر middleware (حافظ على بساطة النشر) ======
+# - Permissions-Policy للسماح بالكاميرا/المايك
+# - HSTS (يعمل على https فقط، غير مؤذٍ محليًا)
+# - CSP متسامحة للتطوير، مشدّدة نسبيًا للإنتاج لاحقًا
+cat > middleware.ts << "TS"
+import { NextResponse, type NextRequest } from "next/server";
+export const config = { matcher: ["/chat", "/api/:path*"] };
+
+export function middleware(req: NextRequest) {
+  const ageok = req.cookies.get("ageok")?.value === "1";
+  if (req.nextUrl.pathname.startsWith("/chat") && !ageok) {
+    const url = new URL("/", req.url);
+    url.searchParams.set("age", "required");
+    return NextResponse.redirect(url, 307);
+  }
+  const res = NextResponse.next();
+
+  // Permissions-Policy
+  res.headers.set("Permissions-Policy", "camera=(self), microphone=(self)");
+
+  // أمن أساسي
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  res.headers.set("Referrer-Policy", "no-referrer");
+  res.headers.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+
+  // CSP متساهلة للتطوير
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "connect-src 'self' https: wss:",
+    "media-src 'self' blob: data:",
+    "frame-ancestors 'none'"
+  ].join("; ");
+  res.headers.set("Content-Security-Policy", csp);
+
+  return res;
+}
+TS
+
+# ====== 2) Rate-limit خفيف داخل السيرفر (ذاكرة محلية) ======
+mkdir -p src/lib
+cat > src/lib/ratelimit.ts << "TS"
+const buckets = new Map<string, {count:number; reset:number}>();
+export function allow(id: string, limit = 20, windowMs = 60_000) {
+  const now = Date.now();
+  const b = buckets.get(id);
+  if (!b || now > b.reset) {
+    buckets.set(id, { count: 1, reset: now + windowMs });
+    return { ok: true, remaining: limit - 1, reset: now + windowMs };
+  }
+  if (b.count >= limit) return { ok: false, remaining: 0, reset: b.reset };
+  b.count++;
+  return { ok: true, remaining: limit - b.count, reset: b.reset };
+}
+export function ipFrom(req: Request) {
+  const ff = req.headers.get("x-forwarded-for") || "";
+  return ff.split(",")[0].trim() || "local";
+}
+TS
+
+apply_rl() {
+  local file="$1" key="$2" limit="${3:-30}"
+  [ -f "$file" ] || return 0
+  grep -q "from \"../../../lib/ratelimit\"" "$file" || \
+    sed -i '1i import { allow, ipFrom } from "../../../lib/ratelimit";' "$file"
+  # أعد كتابة تواقيع الدوال لتمرير req عند الحاجة ثم أضف فحص الـRL
+  perl -0777 -i -pe "s/export async function (GET|POST)\\(\\)/export async function \\1(req: Request)/g" "$file"
+  if ! grep -q "allow(ip" "$file"; then
+    perl -0777 -i -pe "s/(export async function (GET|POST)\\(req: Request\\) \\{)/\\1\n  const ip = ipFrom(req);\n  const rl = allow(\`\\${ip}:${key}\`, ${limit}, 60_000);\n  if (!rl.ok) return new Response(JSON.stringify({ ok:false, rate_limited:true, reset: rl.reset }), { status: 429, headers: { \"content-type\": \"application\/json\" }});\n/g" "$file"
+  fi
+}
+
+apply_rl "src/app/api/age/allow/route.ts" "age-allow" 12
+apply_rl "src/app/api/user/vip-status/route.ts" "vip-status" 60
+apply_rl "src/app/api/match/next/route.ts" "match-next" 60
+
+# ====== 3) CTA الصفحة الرئيسية: POST /api/age/allow ثم انتقال إلى /chat (تحسّن UX) ======
+# غير تدميري: يضيف سكربت خفيف إذا وجد عنصر #cta-chat
+if [ -f src/app/page.tsx ] && ! grep -q "cta-chat" src/app/page.tsx; then
+  echo -e "\n{/* Auto-age gate CTA */}\n<script suppressHydrationWarning dangerouslySetInnerHTML={{__html: \`\n  document.addEventListener('click', (e) => {\n    const t = e.target as HTMLElement;\n    if (!t) return;\n    const btn = t.closest('#cta-chat');\n    if (!btn) return;\n    e.preventDefault();\n    fetch('/api/age/allow', { method: 'POST' }).then(() => location.assign('/chat')).catch(() => location.assign('/chat'));\n  });\n\`}} />" >> src/app/page.tsx
+fi
+
+# ====== 4) .env.example محدث ======
+cat > .env.example << "ENV"
+# NextAuth / Auth
+NEXTAUTH_URL=
+NEXTAUTH_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Stripe (اختياري)
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PRICE_ID_EUR_149=
+STRIPE_PRICE_ID_EUR_599=
+STRIPE_PRICE_ID_EUR_1699=
+STRIPE_PRICE_ID_EUR_9999=
+
+# TURN / WebRTC (اختياري)
+TURN_URL=
+TURN_USERNAME=
+TURN_PASSWORD=
+
+# Database (اختياري للتطوير)
+DATABASE_URL=file:./dev.sqlite
+
+# Monitoring (اختياري)
+SENTRY_DSN=
+ENV
+
+# ====== 5) تشغيل dev والتحقق الشامل ======
+( command -v fuser >/dev/null && fuser -k 3000/tcp ) || true
+pkill -f "next.*dev" 2>/dev/null || true
+LOG=/tmp/app.log; : > "$LOG"
+nohup bash -lc "PORT=3000 pnpm run dev -- -p 3000 -H 0.0.0.0" >>"$LOG" 2>&1 & echo $! > /tmp/app.pid
+
+ORIGIN="http://127.0.0.1:3000"
+for i in $(seq 1 120); do H="$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/api/health" || true)"; [ "$H" = "200" ] && break; sleep 1; done
+
+# صفحات و CSS
+HOME_HTML=/tmp/home.html
+curl -sS "$ORIGIN/" -o "$HOME_HTML" || true
+CSS_PATH="$(grep -oE "/_next/static/css/[^\"'"'"']+\\.css" "$HOME_HTML" | head -n1 || true)"
+HDRS="$( [ -n "${CSS_PATH:-}" ] && curl -sI "$ORIGIN$CSS_PATH" || true )"
+CSS_CT="$(printf "%s" "$HDRS" | awk -F': ' "tolower(\$1)==\"content-type\"{print \$2}" | tr -d "\r" | sed "s/[; ].*//")"
+UTIL_FOUND="missing"; grep -qE "min-h-screen|bg-gradient-to-b" "$HOME_HTML" && UTIL_FOUND="found"
+
+# تدفّق العمر و Permissions-Policy
+COOKIEJ=/tmp/c.txt; : > "$COOKIEJ"
+CHAT1="$(curl -s -D - -o /dev/null "$ORIGIN/chat" -c "$COOKIEJ" | awk "NR==1{print \$2}")"
+curl -s -X POST -D - -o /dev/null "$ORIGIN/api/age/allow" -b "$COOKIEJ" -c "$COOKIEJ" >/dev/null 2>&1 || true
+CHAT2="$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/chat" -b "$COOKIEJ" || true)"
+PP="$(curl -s -I "$ORIGIN/chat" -b "$COOKIEJ" | tr -d "\r" | awk -F': ' "/^Permissions-Policy:/ {print \$2}")"
+
+# VIP
+VIP_PRE="$(curl -sS -o /tmp/vip_pre.json -w "%{http_code}" "$ORIGIN/api/user/vip-status" -b "$COOKIEJ" || true)"
+printf "vip=1" > /tmp/vip_cookie.txt
+VIP_POST="$(curl -sS -o /tmp/vip_post.json -w "%{http_code}" "$ORIGIN/api/user/vip-status" -b /tmp/vip_cookie.txt || true)"
+
+# Rate-limit: اختبر 14 طلبًا لـ /api/age/allow (الحد=12)
+RL_OK="skip"
+CNT429=0
+for i in $(seq 1 14); do
+  C="$(curl -s -o /dev/null -w "%{http_code}" -X POST "$ORIGIN/api/age/allow")"
+  [ "$C" = "429" ] && CNT429=$((CNT429+1))
+done
+[ "$CNT429" -ge 1 ] && RL_OK="ok" || RL_OK="weak"
+
+# ====== 6) قبول نهائي ======
+echo "-- Acceptance --"
+echo "ROOT=$(pwd) ROOT_MATCH=$( [ "$(pwd)" = "$ROOT" ] && echo yes || echo no )"
+echo "HTTP=/:$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/") /plans:$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/plans") /api/health:$H /chat:307->$CHAT2"
+echo "CSS_LINK=$( [ -n "${CSS_PATH:-}" ] && echo 1 || echo 0 ) CONTENT_TYPE=${CSS_CT:-na} utilities:$UTIL_FOUND"
+echo "AGE_FLOW=$( [ "$CHAT1" = "307" ] && [ "$CHAT2" = "200" ] && echo ok || echo fail ) VIP=pre:$VIP_PRE post:$VIP_POST"
+echo "PERMISSIONS_POLICY=${PP:-na}"
+echo "RATELIMIT_AGE_ALLOW=$RL_OK 429s=$CNT429"
+echo "BACKUP_DIR=$BK LOG=/tmp/app.log"
+echo "-- End Acceptance --"
+'

@@ -21,9 +21,9 @@ export default function Home() {
             18+ random video chat with smart gender & country filters. Fast, fun, and built for mobile.
           </p>
           <div className="flex gap-3">
-            <Link className="rounded-xl px-4 py-3 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-medium" href="/chat">
+            <button id="cta-chat" className="rounded-xl px-4 py-3 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-medium">
               Start chatting now
-            </Link>
+            </button>
             <Link className="rounded-xl px-4 py-3 bg-slate-800/60 hover:bg-slate-800 text-slate-100" href="/plans">
               View VIP plans
             </Link>
@@ -38,6 +38,18 @@ export default function Home() {
         <Link href="/content">Content Policy</Link>
         <Link href="/abuse">Abuse</Link>
       </footer>
+
+      {/* Auto-age gate CTA */}
+      <script suppressHydrationWarning dangerouslySetInnerHTML={{__html: `
+        document.addEventListener('click', (e) => {
+          const t = e.target;
+          if (!t) return;
+          const btn = t.closest('#cta-chat');
+          if (!btn) return;
+          e.preventDefault();
+          fetch('/api/age/allow', { method: 'POST' }).then(() => location.assign('/chat')).catch(() => location.assign('/chat'));
+        });
+      `}} />
     </main>
   );
 }

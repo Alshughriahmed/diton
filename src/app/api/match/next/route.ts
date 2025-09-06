@@ -1,3 +1,4 @@
+import { allow, ipFrom } from "../../../lib/ratelimit";
 import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,10 @@ function parse(input: any) {
 }
 
 export async function GET(req: Request) {
+  const ip = ipFrom(req);
+  const rl = allow(`${ip}:match-next`, 60, 60_000);
+  if (!rl.ok) return new Response(JSON.stringify({ ok:false, rate_limited:true, reset: rl.reset }), { status: 429, headers: { "content-type": "application/json" }});
+
   const url = new URL(req.url);
   const gender = url.searchParams.get("gender");
   const countries = url.searchParams.get("countries");
@@ -20,6 +25,10 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const ip = ipFrom(req);
+  const rl = allow(`${ip}:match-next`, 60, 60_000);
+  if (!rl.ok) return new Response(JSON.stringify({ ok:false, rate_limited:true, reset: rl.reset }), { status: 429, headers: { "content-type": "application/json" }});
+
   const body = await req.json().catch(() => ({}));
   const p = parse(body);
   return NextResponse.json({ ts: Date.now(), ...p });
