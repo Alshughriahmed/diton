@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-export const config = { matcher: ["/chat", "/api/:path*"] };
+export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)",] };
 
 export function middleware(req: NextRequest) {
   const ageok = req.cookies.get("ageok")?.value === "1";
@@ -10,7 +10,10 @@ export function middleware(req: NextRequest) {
   }
   const res = NextResponse.next();
 
-  // أمن أساسي (Permissions-Policy يتم التحكم به من next.config.mjs)
+  // Override Permissions-Policy بالقيمة الصحيحة
+  res.headers.set("Permissions-Policy", "camera=(self), microphone=(self)");
+  
+  // أمن أساسي
   res.headers.set("X-Content-Type-Options", "nosniff");
   res.headers.set("Referrer-Policy", "no-referrer");
   res.headers.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
