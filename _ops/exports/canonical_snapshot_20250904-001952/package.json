@@ -1,0 +1,27 @@
+{
+  "dependencies": {
+    "next": "^15.5.2",
+    "next-auth": "^4.24.11",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "scripts": {
+    "gbtmap": "node scripts/gbtmap.mjs",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start -p ${PORT:-3000}"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "eslint": "^9.34.0",
+    "eslint-config-next": "^15.5.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.15.1+sha512.34e538c329b5553014ca8e8f4535997f96180a1d0f614339357449935350d924e22f8614682191264ec33d1462ac21561aff97f6bb18065351c162c7e8f6de67"
+}
