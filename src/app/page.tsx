@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { OrganizationJsonLd, WebSiteJsonLd } from "@/components/seo/JsonLd";
 
 export default function Home() {
   return (
@@ -50,6 +51,9 @@ export default function Home() {
           fetch('/api/age/allow', { method: 'POST' }).then(() => location.assign('/chat')).catch(() => location.assign('/chat'));
         });
       `}} />
+      
+      <OrganizationJsonLd />
+      <WebSiteJsonLd />
     </main>
   );
 }

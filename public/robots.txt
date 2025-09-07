@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+Allow: /plans
+Allow: /privacy
+Allow: /terms
+
+# Block sensitive pages
+Disallow: /api/
+Disallow: /chat
+Disallow: /2257
+
+Sitemap: https://diton.vercel.app/sitemap.xml
