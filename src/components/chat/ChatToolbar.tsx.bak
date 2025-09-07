@@ -1,10 +1,7 @@
 "use client";
-import { emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
-import { useFilters } from "@/state/filters";
 
 export default function ChatToolbar(){
-  const { isVip } = useFilters();
   const { next, prev } = useNextPrev();
   return (
     <div className="absolute left-0 right-0 bottom-0 z-[35] px-4 pb-3 pt-2">
@@ -19,8 +16,8 @@ export default function ChatToolbar(){
             <button className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700" aria-label="Settings">Settings</button>
           </div>
           <div className="flex items-center gap-2">
-            <button className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700" aria-label="Prev" disabled={!isVip} onClick={(e)=>{e.preventDefault(); emit("ui:prev");}}>Prev</button>
-            <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm border border-emerald-500" aria-label="Next" onClick={(e)=>{e.preventDefault(); emit("ui:next");}}>Next</button>
+            <button className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700" aria-label="Prev" onClick={(e)=>{e.preventDefault(); prev();}}>Prev</button>
+            <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm border border-emerald-500" aria-label="Next" onClick={(e)=>{e.preventDefault(); next();}}>Next</button>
           </div>
         </div>
       </div>

@@ -1,0 +1,4 @@
+## emit/on (كل الملفات)
+## أحداث next/prev بالاسم
+## استخدام useNextPrev
+## استدعاءات match/next

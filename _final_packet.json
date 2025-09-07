@@ -1,0 +1,32 @@
+{
+  "repo": {
+    "git": "aab7cb2",
+    "filters_source": "useFilters",
+    "cooldown_700ms": true,
+    "gesture_layer_has_neg_z": true,
+    "api_routes": "[\n  \"/api/age/allow/route.ts\",\n  \"/api/age/start/route.ts\",\n  \"/api/age/webhook/route.ts\",\n  \"/api/auth/[...nextauth]/route.ts\",\n  \"/api/captcha/verify/route.ts\",\n  \"/api/health/route.ts\",\n  \"/api/ice/route.ts\",\n  \"/api/internal/reconcile/route.ts\",\n  \"/api/match/next/route.ts\",\n  \"/api/moderation/report/route.ts\",\n  \"/api/monitoring/metrics/route.ts\",\n  \"/api/stripe/portal/route.ts\",\n  \"/api/stripe/prices/route.ts\",\n  \"/api/stripe/subscribe/route.ts\",\n  \"/api/stripe/webhook/route.ts\",\n  \"/api/turn/route.ts\",\n  \"/api/user/vip/dev/grant/route.ts\",\n  \"/api/user/vip/dev/revoke/route.ts\",\n  \"/api/user/vip-status/route.ts\"\n]",
+    "pages": "[\n  \"/2257\",\n  \"/abuse\",\n  \"/api\",\n  \"/chat\",\n  \"/content\",\n  \"/dmca\",\n  \"/plans\",\n  \"/privacy\",\n  \"/terms\"\n]",
+    "toolbar_buttons": 21
+  },
+  "prod": {
+    "base": "https://www.ditonachat.com",
+    "health": 200,
+    "age_flow": {
+      "pre": "307",
+      "post": 200
+    },
+    "permissions_policy": "",
+    "css_utilities": true,
+    "vip": {
+      "pre": 200,
+      "post": 200
+    },
+    "ratelimit_burst": [
+      "200",
+      "200",
+      "200",
+      "429",
+      "429"
+    ]
+  }
+}

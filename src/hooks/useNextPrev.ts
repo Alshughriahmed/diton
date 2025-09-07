@@ -27,12 +27,7 @@ export function useNextPrev() {
       // Emit UI event immediately
       emit("ui:next");
       
-      // Make network request with retry logic
-      await fetch('/api/match/next', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'next' })
-      });
+      // DEDUPE: delegated to ChatClient.doMatch via bus
     } catch (error) {
       console.debug('[NEXT_ERROR]', error);
     } finally {
@@ -47,11 +42,7 @@ export function useNextPrev() {
     try {
       emit("ui:prev");
       
-      await fetch('/api/match/next', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'prev' })
-      });
+      // DEDUPE: delegated to ChatClient.doMatch via bus
     } catch (error) {
       console.debug('[PREV_ERROR]', error);
     } finally {

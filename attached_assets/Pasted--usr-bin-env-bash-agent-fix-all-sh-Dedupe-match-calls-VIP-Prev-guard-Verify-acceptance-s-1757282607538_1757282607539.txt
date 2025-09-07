@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# agent_fix_all.sh — Dedupe match calls + VIP Prev guard + Verify acceptance
+set -euo pipefail
+
+ROOT="${DITONA_ROOT:-/home/runner/workspace}"
+cd "$ROOT"
+
+ts="$(date -u +%Y%m%d-%H%M%S)"
+backup="_ops/backups/agent_fix_${ts}"
+report="_ops/reports/agent_fix_${ts}"
+mkdir -p "$backup" "$report"
+
+# --- 0) Meta + branch
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Not a git repo"; exit 1; }
+base_branch="$(git rev-parse --abbrev-ref HEAD)"
+feat_branch="fix/match-dedup-vip-prev-${ts}"
+git checkout -b "$feat_branch"
+
+# --- 1) Files of interest
+HOOK="src/hooks/useNextPrev.ts"
+TOOLBAR="src/components/chat/ChatToolbar.tsx"
+CHATCLIENT="src/app/chat/ChatClient.tsx"
+
+# Backups
+for f in "$HOOK" "$TOOLBAR" "$CHATCLIENT"; do
+  [ -f "$f" ] && install -D "$f" "$backup/$f"
+done
+
+# --- 2) Dedupe: neutralize direct fetch('/api/match/next') outside ChatClient
+# Strategy: comment out any fetch('/api/match/next') in hooks, keep Bus emits.
+if [ -f "$HOOK" ]; then
+  if grep -qE "fetch\(['\"]/api/match/next" "$HOOK"; then
+    awk '
+      /fetch\([\"\x27]\/api\/match\/next/ {
+        print "// DEDUPE: delegated to ChatClient.doMatch via bus";
+        print "// " $0; next
+      } { print }
+    ' "$HOOK" > "$HOOK.tmp"
+    mv "$HOOK.tmp" "$HOOK"
+  fi
+fi
+
+# --- 3) VIP guard on Prev button (UI)
+if [ -f "$TOOLBAR" ]; then
+  # ensure import
+  grep -q 'useFilters' "$TOOLBAR" || sed -i '1a import { useFilters } from "@/state/filters";' "$TOOLBAR"
+  # ensure isVip usage (first component)
+  if ! grep -q '{ isVip }' "$TOOLBAR"; then
+    # insert after first opening of a component/function line
+    awk '{
+      if (!inserted && $0 ~ /(function|const)[[:space:]].*\(/) { print; print "  const { isVip } = useFilters();"; inserted=1; next }
+      print
+    }' "$TOOLBAR" > "$TOOLBAR.tmp" && mv "$TOOLBAR.tmp" "$TOOLBAR"
+  fi
+  # add disabled={!isVip} on Prev button
+  if grep -q 'aria-label="Prev"' "$TOOLBAR" && ! grep -q 'disabled={!isVip}' "$TOOLBAR"; then
+    sed -i 's/aria-label="Prev"/aria-label="Prev" disabled={!isVip}/' "$TOOLBAR"
+  fi
+fi
+
+# --- 4) Safety: ensure ChatClient listener cleanup exists (idempotent)
+if [ -f "$CHATCLIENT" ]; then
+  # soft check only; no-op if already present
+  grep -q "on(\"ui:next\"" "$CHATCLIENT" || true
+  grep -q "on(\"ui:prev\"" "$CHATCLIENT" || true
+fi
+
+# --- 5) Type check / build (skip install for التكلفة)
+if [ -f "package.json" ]; then
+  if jq -e '.scripts.build' package.json >/dev/null 2>&1; then
+    PNPM="${PNPM:-pnpm}"
+    $PNPM -v >/dev/null 2>&1 || true
+    # محاولة build خفيفة؛ إن فشل لا نكسر المهمة، نكمل الفحص
+    ($PNPM build || echo "__BUILD_FAILED__") | tee "$report/build.log" || true
+  fi
+fi
+
+# --- 6) Acceptance probes (repo)
+emits_file="$report/emits.txt"
+on_file="$report/listeners.txt"
+match_file="$report/match_fetch.txt"
+
+grep -Rno --include='*.ts' --include='*.tsx' -E "emit\(['\"]ui:(next|prev)" src | sort > "$emits_file" || true
+grep -Rno --include='*.ts' --include='*.tsx' -E "on\(['\"]ui:(next|prev)"   src | sort > "$on_file"    || true
+grep -Rno --include='*.ts' --include='*.tsx' -E "fetch\(['\"]/api/match/next" src | sort > "$match_file" || true
+
+EMIT_next=$(grep -Ec "ui:next" "$emits_file" 2>/dev/null || echo 0)
+ON_next=$(grep -Ec "ui:next" "$on_file" 2>/dev/null || echo 0)
+EMIT_prev=$(grep -Ec "ui:prev" "$emits_file" 2>/dev/null || echo 0)
+ON_prev=$(grep -Ec "ui:prev" "$on_file" 2>/dev/null || echo 0)
+MATCH_FETCH_CALLS=$(wc -l < "$match_file" 2>/dev/null || echo 0)
+
+# VIP guard presence
+VIPPrevGuard=0
+if [ -f "$TOOLBAR" ]; then
+  ctx="$(grep -n 'aria-label="Prev"' "$TOOLBAR" | head -n1 | cut -d: -f1 || true)"
+  if [ -n "$ctx" ]; then
+    start=$((ctx>5?ctx-5:1)); end=$((ctx+5))
+    if sed -n "${start},${end}p" "$TOOLBAR" | grep -q 'disabled={!isVip}'; then
+      VIPPrevGuard=1
+    fi
+  fi
+fi
+
+# --- 7) Acceptance probes (prod headers + ratelimit)
+BASE="${BASE:-https://www.ditonachat.com}"
+HTTP_no_cookie=$(curl -sI "$BASE/chat" | awk '/^HTTP/{print $2;exit}')
+Location_no_cookie=$(curl -sI "$BASE/chat" | awk -F': ' 'tolower($1)=="location"{print $2;exit}')
+HTTP_with_cookie=$(curl -sI -H 'Cookie: ageok=1' "$BASE/chat" | awk '/^HTTP/{print $2;exit}')
+PermPol=$(curl -sI -H 'Cookie: ageok=1' "$BASE/chat" | awk -F': ' 'tolower($1)=="permissions-policy"{print $2;exit}')
+AGE_FLOW_OK=$([ "$HTTP_no_cookie" = "307" ] && echo 1 || echo 0)
+PERM_POLICY_OK=$([[ "$HTTP_with_cookie" = "200" && "$PermPol" =~ camera && "$PermPol" =~ microphone ]] && echo 1 || echo 0)
+
+# Ratelimit burst probe (cheap GET)
+probe_codes=""
+for i in 1 2 3 4 5; do
+  code=$(curl -s -o /dev/null -w "%{http_code}" -H 'Cookie: ageok=1' "$BASE/api/match/next?gender=all&countries=")
+  probe_codes="$probe_codes${code},"
+done
+echo "$probe_codes" > "$report/ratelimit_codes.txt"
+
+# --- 8) Commit if tree changed
+if ! git diff --quiet; then
+  git add -A
+  git commit -m "fix: dedupe /api/match/next calls to ChatClient.doMatch and guard Prev for VIP only"
+fi
+
+# --- 9) Final Acceptance
+echo "-- Acceptance --"
+echo "BRANCH_BASE=$base_branch"
+echo "BRANCH_NEW=$feat_branch"
+echo "EMIT_next=$EMIT_next"
+echo "ON_next=$ON_next"
+echo "EMIT_prev=$EMIT_prev"
+echo "ON_prev=$ON_prev"
+echo "MATCH_FETCH_CALLS=$MATCH_FETCH_CALLS"
+echo "ONE_SOURCE_MATCH_CALL_OK=$([ "$MATCH_FETCH_CALLS" -eq 1 ] && echo 1 || echo 0)"
+echo "VIPPrevGuard=$VIPPrevGuard"
+echo "HTTP_no_cookie=$HTTP_no_cookie"
+echo "Location_no_cookie=${Location_no_cookie:-none}"
+echo "HTTP_with_cookie=$HTTP_with_cookie"
+echo "Permissions-Policy=${PermPol:-none}"
+echo "AGE_FLOW_OK=$AGE_FLOW_OK"
+echo "PERM_POLICY_OK=$PERM_POLICY_OK"
+echo "RATELIMIT_5=$(cat "$report/ratelimit_codes.txt")"
+echo "BACKUP_DIR=$backup"
+echo "REPORT_DIR=$report"

@@ -1,0 +1,7 @@
+src/app/chat/ChatClient.tsx:29:on("ui:toggleMic
+src/app/chat/ChatClient.tsx:30:on("ui:toggleCam
+src/app/chat/ChatClient.tsx:31:on("ui:openSettings
+src/app/chat/ChatClient.tsx:32:on("ui:like
+src/app/chat/ChatClient.tsx:33:on("ui:report
+src/app/chat/ChatClient.tsx:34:on("ui:next
+src/app/chat/ChatClient.tsx:35:on("ui:prev

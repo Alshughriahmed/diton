@@ -1,0 +1,10 @@
+src/app/chat/ChatClient.tsx:155:emit("ui:prev
+src/app/chat/ChatClient.tsx:166:emit("ui:next
+src/app/chat/ChatClient.tsx:62:emit("ui:next
+src/app/chat/ChatClient.tsx:62:emit("ui:prev
+src/components/chat/ChatToolbar.tsx:22:emit("ui:prev
+src/components/chat/ChatToolbar.tsx:23:emit("ui:next
+src/hooks/useKeyboardShortcuts.ts:3:emit("ui:next
+src/hooks/useKeyboardShortcuts.ts:3:emit("ui:prev
+src/hooks/useNextPrev.ts:28:emit("ui:next
+src/hooks/useNextPrev.ts:48:emit("ui:prev
