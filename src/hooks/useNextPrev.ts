@@ -1,5 +1,63 @@
-"use client"; import { emit } from "@/utils/events";
-let last=0; const CD=700;
-export function useNextPrev(){ function can(){const n=Date.now(); if(n-last<CD) return false; last=n; return true;}
-  return { next(){ if(can()) emit("ui:next"); }, prev(){ if(can()) emit("ui:prev"); } };
+"use client";
+import { useRef, useCallback } from "react";
+import { emit } from "@/utils/events";
+
+export function useNextPrev() {
+  const lastTimestamp = useRef(0);
+  const isNetworkPending = useRef(false);
+  const COOLDOWN_MS = 700;
+
+  const canProceed = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTimestamp.current < COOLDOWN_MS) {
+      return false; // Still in cooldown
+    }
+    if (isNetworkPending.current) {
+      return false; // Network request in progress
+    }
+    lastTimestamp.current = now;
+    return true;
+  }, []);
+
+  const next = useCallback(async () => {
+    if (!canProceed()) return;
+
+    isNetworkPending.current = true;
+    try {
+      // Emit UI event immediately
+      emit("ui:next");
+      
+      // Make network request with retry logic
+      await fetch('/api/match/next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'next' })
+      });
+    } catch (error) {
+      console.debug('[NEXT_ERROR]', error);
+    } finally {
+      isNetworkPending.current = false;
+    }
+  }, [canProceed]);
+
+  const prev = useCallback(async () => {
+    if (!canProceed()) return;
+
+    isNetworkPending.current = true;
+    try {
+      emit("ui:prev");
+      
+      await fetch('/api/match/next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'prev' })
+      });
+    } catch (error) {
+      console.debug('[PREV_ERROR]', error);
+    } finally {
+      isNetworkPending.current = false;
+    }
+  }, [canProceed]);
+
+  return { next, prev };
 }

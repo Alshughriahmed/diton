@@ -11,9 +11,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "CSRF token required" }, { status: 403 });
     }
 
-    // Rate limiting - max 5 reports per 5 minutes per IP
+    // Rate limiting - 10 reports per minute per IP (as specified)
     const clientIP = ipFrom(req);
-    const rateLimitResult = allow(`report:${clientIP}`, 5, 5 * 60 * 1000);
+    const rateLimitResult = allow(`report:${clientIP}`, 10, 60 * 1000);
     
     if (!rateLimitResult.ok) {
       return NextResponse.json({ error: "Rate limited" }, { status: 429 });
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
 
     // Parse request body
     const body = await req.json();
-    const { reason, peerId, ts, extra } = body;
+    const { reason, peerId, ts } = body;
 
     if (!reason || !peerId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -33,30 +33,29 @@ export async function POST(req: NextRequest) {
       ip: clientIP,
       reason,
       peerId,
-      ts: ts || Date.now(),
-      extra: extra || {},
-      userAgent: req.headers.get("user-agent") || "unknown"
+      ts: ts || Date.now()
     };
 
-    // In development: write to local NDJSON file
-    if (isDev) {
-      const reportsDir = join(process.cwd(), "_ops", "reports");
-      const reportsFile = join(reportsDir, "reports.ndjson");
+    // Write to logs (local file or Vercel Blob if available)
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      // TODO: Use Vercel Blob when available
+      console.log("[REPORT_BLOB_TODO]", report);
+    } else {
+      // Write to local NDJSON file
+      const logDir = join(process.cwd(), "_ops", "logs", "reports");
+      const logFile = join(logDir, `${today}.jsonl`);
       
-      // Ensure directory exists
-      if (!existsSync(reportsDir)) {
-        mkdirSync(reportsDir, { recursive: true });
+      if (!existsSync(logDir)) {
+        mkdirSync(logDir, { recursive: true });
       }
       
-      // Append to NDJSON file
       const reportLine = JSON.stringify(report) + "\n";
-      writeFileSync(reportsFile, reportLine, { flag: "a" });
-      
-      // Console log for development
-      console.log("[MODERATION_REPORT]", report);
+      writeFileSync(logFile, reportLine, { flag: "a" });
     }
 
-    // TODO: In production, send to proper storage/email/moderation system
+    console.log("[MODERATION_REPORT]", report);
 
     return NextResponse.json({ 
       ok: true, 

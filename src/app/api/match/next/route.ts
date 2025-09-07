@@ -40,7 +40,17 @@ function parse(input: any) {
 export async function GET(req: Request) {
   const ip = ipFrom(req);
   const rl = allow(`${ip}:match-next`, 3, 2000);
-  if (!rl.ok) return new Response(JSON.stringify({ ok:false, rate_limited:true, reset: rl.reset }), { status: 429, headers: { "content-type": "application/json" }});
+  if (!rl.ok) {
+    return new Response(JSON.stringify({ 
+      ok: false, 
+      rate_limited: true, 
+      needCaptcha: true,
+      reset: rl.reset 
+    }), { 
+      status: 429, 
+      headers: { "content-type": "application/json" }
+    });
+  }
 
   const url = new URL(req.url);
   const gender = url.searchParams.get("gender");
@@ -62,7 +72,17 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const ip = ipFrom(req);
   const rl = allow(`${ip}:match-next`, 3, 2000);
-  if (!rl.ok) return new Response(JSON.stringify({ ok:false, rate_limited:true, reset: rl.reset }), { status: 429, headers: { "content-type": "application/json" }});
+  if (!rl.ok) {
+    return new Response(JSON.stringify({ 
+      ok: false, 
+      rate_limited: true, 
+      needCaptcha: true,
+      reset: rl.reset 
+    }), { 
+      status: 429, 
+      headers: { "content-type": "application/json" }
+    });
+  }
 
   const body = await req.json().catch(() => ({}));
   const { hcaptcha_token, ...params } = body;
