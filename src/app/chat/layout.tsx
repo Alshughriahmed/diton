@@ -7,9 +7,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: pageMetadata.chat.title,
     description: pageMetadata.chat.description,
-    siteName: seoConfig.siteName,
-    url: `${seoConfig.baseUrl}/chat`,
-    type: 'website'
+    siteName: seoConfig.siteName,    type: 'website'
   },
   alternates: {
     canonical: `${seoConfig.baseUrl}/chat`
