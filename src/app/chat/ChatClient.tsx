@@ -12,6 +12,8 @@ type MatchEcho={ ts:number; gender:string; countries:string[] };
 
 export default function ChatClient(){
   const { next, prev } = useNextPrev();
+  const lastTsRef = useRef(0);
+  const busyRef = useRef(false);
   const localRef = useRef<HTMLVideoElement>(null);
   const [ready,setReady]=useState(false);
   const [like,setLike]=useState(false);
@@ -41,9 +43,15 @@ export default function ChatClient(){
 
 
   async function doMatch(backward=false){
+    const now = Date.now();
+    if (busyRef.current) return;
+    if (now - lastTsRef.current < 700) return;
+    busyRef.current = true;
+    lastTsRef.current = now;
     const qp=new URLSearchParams(); qp.set("gender",gender); if(countries.length) qp.set("countries", countries.join(","));
     const j:MatchEcho=await fetch("/api/match/next?"+qp.toString(),{cache:"no-store"}).then(r=>r.json()).catch(()=>null as any);
     if(j) setMatch(j);
+    busyRef.current = false;
   }
 
   // Gesture swipe: يسار/يمين = Prev/Next
