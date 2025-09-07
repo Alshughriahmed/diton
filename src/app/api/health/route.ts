@@ -1,5 +1,10 @@
-import { NextResponse } from "next/server";
-
 export async function GET() {
-  return NextResponse.json({ status: "ok", timestamp: Date.now() });
+  return new Response(JSON.stringify({ 
+    status: "healthy", 
+    timestamp: Date.now(),
+    service: "DitonaChat" 
+  }), { 
+    status: 200, 
+    headers: { "content-type": "application/json" } 
+  });
 }
