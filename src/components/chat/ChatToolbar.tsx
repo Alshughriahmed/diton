@@ -1,4 +1,5 @@
 "use client";
+import { emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
 
 export default function ChatToolbar(){
@@ -16,8 +17,8 @@ export default function ChatToolbar(){
             <button className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700" aria-label="Settings">Settings</button>
           </div>
           <div className="flex items-center gap-2">
-            <button className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700" aria-label="Prev" onClick={(e)=>{e.preventDefault(); prev();}}>Prev</button>
-            <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm border border-emerald-500" aria-label="Next" onClick={(e)=>{e.preventDefault(); next();}}>Next</button>
+            <button className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700" aria-label="Prev" onClick={(e)=>{e.preventDefault(); emit("ui:prev");}}>Prev</button>
+            <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm border border-emerald-500" aria-label="Next" onClick={(e)=>{e.preventDefault(); emit("ui:next");}}>Next</button>
           </div>
         </div>
       </div>
