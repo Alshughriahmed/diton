@@ -1,0 +1,109 @@
+مهمة عاجلة: إصلاح بوابة +18 (307→200) نهائيًا + الحفاظ على Permissions-Policy + فحوص قبول
+
+قواعد التنفيذ
+
+اعمل فقط داخل جذر الريبو الحالي.
+
+خذ نسخة احتياطية قبل أي تعديل إلى _ops/backups/agegate_fix_YYYYMMDD-HHMMSS/.
+
+لا تغيّر أي شيء خارج ما هو مذكور.
+
+إن فشل حلّ ما، ابحث عن بديل يحقق القبول أدناه بدون كسر أي شيء.
+
+المطلوب
+
+توحيد الـmiddleware
+
+يجب أن يكون لدينا ملف واحد فقط: middleware.ts في الجذر. إن وُجد src/middleware.ts فاحذفه.
+
+أعِد كتابة middleware.ts ليقوم بالتالي:
+
+export const config = { matcher: ["/chat"] }
+
+يقرأ كوكي العمر: ageok === "1" أو وجود/صلاحية age_jwt (استعمل دالة التحقق إن لدينا src/lib/age-jwt.ts، وإلا اعتبر وجود age_jwt كافٍ مؤقتًا).
+
+إن لم تكن الجلسة مُوثّقة بالعمر: Redirect 307 إلى /api/age/start?return=/chat.
+
+وإلا NextResponse.next().
+
+أثناء التشخيص فقط، أضف هيدر x-age-mw: hit؛ وبعد نجاح القبول أزِل هذا الهيدر.
+
+لا تضبط Permissions-Policy في الـmiddleware.
+
+الهيدرز الأمنية
+
+اضمن أن next.config.mjs يحتوي على:
+Permissions-Policy: camera=(self), microphone=(self)
+
+تَأكَّد أنه لا يوجد مكان آخر يكتب هذا الهيدر (لا ازدواج).
+
+تنظيف وتشغيل
+
+امسح .next/ إن لزم.
+
+أعد تشغيل dev بشكل سليم (لا تمرير أعلام بالخطأ).
+
+لا تغيّر إعدادات أخرى.
+
+فحوص القبول (نفّذها واطبع بلوك القبول)
+
+بدون أي كوكي:
+
+GET /chat ⇒ يجب أن تكون 307.
+
+فعّل العمر:
+
+POST /api/age/allow ⇒ 200
+
+GET /chat مع الكوكي ⇒ 200
+
+HEAD /chat بعد التفعيل ⇒ يجب أن يظهر:
+
+Permissions-Policy: camera=(self), microphone=(self)
+
+CSS:
+
+وجود رابط CSS في الصفحة الرئيسية، وContent-Type: text/css عند طلبه.
+
+VIP:
+
+GET /api/user/vip-status ⇒ 200
+
+ومع Cookie: vip=1 ⇒ 200
+
+اطبع بالضبط:
+
+-- Acceptance --
+MW_FILES=<عدد ملفات middleware.ts غير الموجودة داخل node_modules/.next/_ops>
+AGE_FLOW=<قبل:307 وبعد التفعيل:200 بصيغة 307->200>
+PERMISSIONS_POLICY=<السطر كما ظهر>
+CSS_LINK=<0|1> CONTENT_TYPE=<قيمة نوع المحتوى للـCSS>
+VIP=pre:<code> post:<code>
+-- End Acceptance --
+
+
+خطة بديلة إن بقيت 200→200
+
+بدّل config.matcher إلى:
+["/((?!_next/static|_next/image|favicon.ico).*)"]
+ثم داخل الـmiddleware لا تعمل Redirect إلا عندما يكون pathname === "/chat".
+
+امسح .next/ وأعد التشغيل.
+
+أعِد الفحوص واطبع بلوك القبول.
+
+إن فشل ذلك، اطبع مواقع أي كتابة لكوكي العمر/الهيدر المتعارض (grep) وأصلح التعارض مع الحفاظ على المعايير أعلاه.
+
+شروط القبول النهائية (إلزامية)
+
+MW_FILES=1
+
+AGE_FLOW=307->200
+
+PERMISSIONS_POLICY=camera=(self), microphone=(self)
+
+CSS_LINK=1 وCONTENT_TYPE يبدأ بـ text/css
+
+VIP=pre:200 post:200
+
+نفّذ بكمال. إن لم تنجح الخطوة الأولى، انتقل تلقائيًا للخطة البديلة حتى تحقق القبول دون المساس بباقي المزايا.
