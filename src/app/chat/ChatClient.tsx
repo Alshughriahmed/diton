@@ -159,7 +159,7 @@ export default function ChatClient(){
           </div>
 
           {/* Gesture layer */}
-          <div id="gesture-layer" className="absolute inset-0" />
+          <div id="gesture-layer" className="absolute inset-0 -z-10" />
         </section>
       </div>
     </div>
