@@ -29,11 +29,7 @@ args = "DitonaChat Server"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "P0 Dev Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Chat Screenshot Server"
+args = "Production Server"
 
 [[workflows.workflow]]
 name = "DitonaChat Server"
@@ -48,19 +44,7 @@ waitForPort = 5000
 outputType = "webview"
 
 [[workflows.workflow]]
-name = "P0 Dev Server"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm start -p 3000 -H 0.0.0.0"
-waitForPort = 3000
-
-[[workflows.workflow]]
-name = "Chat Screenshot Server"
+name = "Production Server"
 author = "agent"
 
 [[workflows.workflow.tasks]]

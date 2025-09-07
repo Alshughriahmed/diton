@@ -1,22 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Static export for Replit compatibility  
-  output: 'export',
-  trailingSlash: true,
-  images: {
-    unoptimized: true
-  },
-  // Keep existing config
+  // Server mode for full Next.js features
   poweredByHeader: false,
   reactStrictMode: false,
-  swcMinify: true,
-  experimental: {
-    serverComponentsExternalPackages: ["jose"]
-  },
+  // Updated config for Next.js 15
+  serverExternalPackages: ["jose"],
   async headers() {
     return [
       {
-        source: "/(.*)",
+        source: "/chat/:path*",
         headers: [
           {
             key: "Cache-Control",

@@ -1,0 +1,107 @@
+الموضوع: فشل تشغيل Next.js في وضع الإنتاج بسبب تضارب الإعدادات وoutput: export
+
+مرحبًا فريق Replit 👋
+
+الخلاصة السريعة:
+
+المشروع: Next.js v15.5.2، Node 20، pnpm.
+
+وضع التطوير pnpm dev يعمل.
+
+واجهنا سابقًا خطأ Cannot find module './vendor-chunks/@opentelemetry.js' أثناء pnpm start، وتم حله بتنظيف .next/ وإعادة البناء.
+
+الآن فشل البناء بسبب تعارض output: export مع وجود API Routes/Middleware/Headers.
+
+أهم الرسائل:
+
+⚠ Specified "headers" will not automatically work with "output: export".
+Error: ... on route "/api/debug/echo-message" with "output: export".
+Invalid next.config.mjs: experimental.serverComponentsExternalPackages → moved to serverExternalPackages
+Unrecognized key: swcMinify
+
+
+المشكلة:
+
+تم ضبط output: export (مباشرة أو عبر بيئة Replit) وهذا لا يدعم API Routes ولا Middleware؛ بينما المشروع يحتوي على:
+
+/api/* كثيرة (match/next, health, stripe, …)
+
+middleware.ts (لحقن Permissions-Policy)
+
+headers() في next.config.mjs
+
+لذا يفشل build عند تجميع صفحات البيانات لـ API، وتتعطّل رؤوس الأمان.
+
+ما نحتاجه منكم (الطريق الموصى به):
+
+تعطيل/إزالة output: 'export' كليًا لكي يعمل المشروع في Server Mode (Node server):
+
+تأكدوا أن next.config.mjs لا يحتوي output: 'export'.
+
+لا تُحقنوا هذا الخيار من إعدادات Replit تلقائيًا.
+
+تصحيح التحذيرات في next.config.mjs:
+
+انقلوا experimental.serverComponentsExternalPackages إلى serverExternalPackages.
+
+احذفوا swcMinify (أزيل في الإصدارات الحديثة).
+
+الإبقاء على:
+
+middleware.ts في جذر المشروع.
+
+headers() مع source: '/chat/:path*' لحقن:
+
+Permissions-Policy: camera=(self), microphone=(self)
+
+
+تشغيل الإنتاج على النمط العادي:
+
+rm -rf .next node_modules/.cache
+pnpm install
+pnpm build
+PORT=3000 pnpm start -H 0.0.0.0
+
+
+التحقق:
+
+curl -I -H 'Cookie: ageok=1' http://localhost:3000/chat | grep -i 'Permissions-Policy'
+
+
+بدائل مقبولة إن تعذّر Server Mode:
+
+بديل A (غير مفضل): الإبقاء على output: export، لكن عندها يجب:
+
+إزالة كل API Routes و Middleware و headers() (غير مدعومة في Static Export).
+
+نقل الـ API لخدمة خارجية (Edge/Serverless) وتوجيه الواجهة إليها.
+
+بناء pnpm export واستخدام مجلد out/.
+
+هذا يغيّر منطق المشروع، لذا غير مرجّح بالنسبة لنا.
+
+بديل B (مؤقت): تشغيل دائم على pnpm dev حتى إصلاح البيئة، مع العلم أن رؤوس headers() قد لا تُطبق كما في الإنتاج.
+
+الرجاء:
+
+تطبيق الطريق الموصى به (إلغاء output: export، إصلاح next.config.mjs وفق أعلاه) وتشغيل المشروع في Server Mode.
+
+إن كان Replit يفرض output: export ضمنテンبليت Next.js، نرجو تعطيله لهذا repl.
+
+في حال استمرار مشكلة vendor-chunks/@opentelemetry.js:
+
+نفّذوا تنظيفًا عميقًا (rm -rf .next node_modules/.cache && pnpm install && pnpm build).
+
+أو جرّبوا تثبيت Node 20 LTS صريحًا في البيئة.
+
+معلومات تشخيصية مختصرة:
+
+Next.js: 15.5.2
+
+يعمل: pnpm dev
+
+يفشل (قبل الإصلاح): pnpm build مع output: export + API
+
+المطلوب: Server Mode + إزالة output: export + تصحيح next.config.mjs.
+
+شكرًا لكم 🙏 — نريد الحل بدون أي تغيير لمنطق المشروع (لا إزالة API ولا middleware)، فقط ضمان تشغيل إنتاجي طبيعي على Replit.
