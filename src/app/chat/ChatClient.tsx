@@ -5,6 +5,7 @@ import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
 import { getFilters, setFilters, type GenderOpt } from "@/utils/filters";
+import ChatComposer from "@/components/chat/ChatComposer";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
@@ -130,13 +131,12 @@ export default function ChatClient(){
             {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
           </div>
 
-          {/* Bottom message bar */}
-          <div className="absolute inset-x-2 bottom-16">
-            <div className="flex items-center gap-2 rounded-xl bg-slate-900/80 border border-slate-700 px-2 py-2">
-              <button aria-label="Emoji" className="px-2 py-1 rounded bg-slate-800 border border-slate-700">😀</button>
-              <input className="flex-1 bg-transparent outline-none text-sm placeholder-slate-400" placeholder="اكتب رسالة…" />
-              <button aria-label="Send" className="px-3 py-1.5 rounded-full bg-sky-600 hover:bg-sky-500 text-sm">Send</button>
-            </div>
+          {/* Chat Composer with Emoji */}
+          <div className="absolute inset-x-0 bottom-14">
+            <ChatComposer onSend={(message) => {
+              console.log('Message sent:', message);
+              // TODO: إرسال الرسالة عبر WebRTC أو Socket.io
+            }} />
           </div>
 
           {/* Bottom toolbar: Prev | middle controls | Next */}

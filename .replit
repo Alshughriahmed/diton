@@ -6,7 +6,7 @@ externalPort = 3000
 
 [[ports]]
 localPort = 5000
-externalPort = 5000
+externalPort = 80
 
 [agent]
 expertMode = true
@@ -43,13 +43,13 @@ outputType = "webview"
 name = "P0 Dev Server"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "pnpm run dev"
-waitForPort = 3000
-
-[workflows.workflow.metadata]
-outputType = "console"
+args = "pnpm run dev --hostname 0.0.0.0 --port 5000"
+waitForPort = 5000
 
 [nix]
 packages = ["jq"]
