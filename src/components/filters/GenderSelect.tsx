@@ -1,5 +1,5 @@
 "use client";
-import { useFilters } from "@/state/filters";
+import { useFilters, type GenderOpt } from "@/state/filters";
 import { GENDERS } from "@/data/genders";
 
 export default function GenderSelect(){
@@ -10,7 +10,7 @@ export default function GenderSelect(){
       <select
         className="px-2 py-1 rounded-md bg-neutral-800 text-white text-sm border border-neutral-700"
         value={gender}
-        onChange={(e)=>setGender(e.target.value)}
+        onChange={(e)=>setGender(e.target.value as GenderOpt)}
         disabled={!isVip}
         aria-label="Select gender"
       >

@@ -4,7 +4,8 @@ import { on, emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
-import { getFilters, setFilters, type GenderOpt } from "@/utils/filters";
+import { useFilters } from "@/state/filters";
+import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
@@ -16,10 +17,8 @@ export default function ChatClient(){
   const [like,setLike]=useState(false);
   const [myLikes,setMyLikes]=useState(0);
   const [peerLikes,setPeerLikes]=useState(123);
-  const [vip,setVip]=useState(false);
   const [match,setMatch]=useState<MatchEcho|null>(null);
-  const [gender,setGender]=useState<GenderOpt>(getFilters().gender);
-  const [countries,setCountries]=useState<string[]>(getFilters().countries);
+  const { gender, countries, setGender, setCountries, isVip: vip, setVip } = useFilters();
   const [beauty,setBeauty]=useState(false);
 
   useKeyboardShortcuts();
@@ -40,7 +39,6 @@ export default function ChatClient(){
     return ()=>{ off1();off2();off3();off4();off5();off6();off7(); };
   },[]);
 
-  useEffect(()=>{ setFilters({gender,countries}); },[gender,countries]);
 
   async function doMatch(backward=false){
     const qp=new URLSearchParams(); qp.set("gender",gender); if(countries.length) qp.set("countries", countries.join(","));
@@ -59,7 +57,10 @@ export default function ChatClient(){
     return ()=>{ el.removeEventListener("touchstart",start); el.removeEventListener("touchmove",move); el.removeEventListener("touchend",end); };
   },[]);
 
-  function toggleCountry(code:string){ setCountries(prev => prev.includes(code)? prev.filter(c=>c!==code) : [...prev,code]); }
+  function toggleCountry(code:string){ 
+    const newCountries = countries.includes(code) ? countries.filter(c=>c!==code) : [...countries,code];
+    setCountries(newCountries);
+  }
   const allCountries=[ "US","DE","FR","GB","TR","AE","SA","EG","JO","IQ","SY","LB","MA","ZA","BR","AR","ES","IT","SE","NO","RU","CN","JP","KR","IN","PK","BD","ID","PH","TH","VN","IR","CA","AU","NZ" ];
 
   return (

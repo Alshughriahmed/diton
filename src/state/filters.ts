@@ -1,26 +1,28 @@
 "use client";
 import { create } from "zustand";
 
+export type GenderOpt="all"|"male"|"female"|"couple"|"lgbt";
+
 export type FiltersState = {
-  gender: string;        // we render exactly what's in src/data/genders.ts (unified taxonomy you approved)
-  countries: string[];   // ISO-3166 codes (ALL = global)
+  gender: GenderOpt;     // matches GenderOpt from utils/filters.ts
+  countries: string[];   // ISO-3166 codes (empty = global)
   isVip: boolean;
   setVip: (v:boolean)=>void;
-  setGender: (g:string)=>void;
+  setGender: (g:GenderOpt)=>void;
   setCountries: (codes:string[])=>void;
   reset: ()=>void;
 };
 
 export const useFilters = create<FiltersState>((set)=>({
-  gender: "All",
-  countries: ["ALL"],
+  gender: "all",
+  countries: [],
   isVip: false,
   setVip: (v)=>set({ isVip: !!v }),
-  setGender: (g)=>set((s)=> s.isVip ? { gender:g } : { gender:"All" }),
+  setGender: (g)=>set((s)=> s.isVip ? { gender:g } : { gender:"all" }),
   setCountries: (codes)=>set((s)=>{
-    if(!s.isVip) return { countries:["ALL"] };
-    const next = !codes?.length ? ["ALL"] : codes.slice(0,15);
+    if(!s.isVip) return { countries:[] };
+    const next = !codes?.length ? [] : codes.slice(0,15);
     return { countries: next };
   }),
-  reset: ()=>set({ gender:"All", countries:["ALL"] }),
+  reset: ()=>set({ gender:"all", countries:[] }),
 }));
