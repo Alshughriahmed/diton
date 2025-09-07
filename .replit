@@ -53,3 +53,4 @@ outputType = "console"
 
 [nix]
 packages = ["jq"]
+channel = "stable-25_05"
