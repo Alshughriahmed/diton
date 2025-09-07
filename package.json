@@ -14,7 +14,8 @@
     "gbtmap": "node scripts/gbtmap.mjs",
     "dev": "next dev",
     "build": "next build",
-    "start": "next start -p ${PORT:-3000}"
+    "start": "next start -p ${PORT:-3000}",
+    "export": "rm -rf .next out && NODE_ENV=development next build && next export"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
