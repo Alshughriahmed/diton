@@ -6,6 +6,7 @@ import CountryFilter from "./CountryFilter";
 import GenderFilter from "./GenderFilter";
 import BeautyControls from "./BeautyControls";
 import MaskStrip from "./MaskStrip";
+import FriendsView from "./FriendsView";
 
 export default function ChatToolbar(){
   const { isVip } = useFilters();
@@ -49,6 +50,7 @@ export default function ChatToolbar(){
 
           {/* Center-Right: Actions */}
           <div className="flex items-center gap-2">
+            <FriendsView />
             <button 
               onClick={() => emit("ui:report")}
               className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm border border-red-700 hover:bg-red-700 transition-colors" 

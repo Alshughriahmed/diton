@@ -8,6 +8,7 @@ import { getVideoEffects } from "@/lib/effects";
 import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
+import LikeSystem from "@/components/chat/LikeSystem";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
@@ -42,7 +43,18 @@ export default function ChatClient(){
       }
     });
     let off4=on("ui:openSettings",()=>{ /* open settings modal placeholder */ });
-    let off5=on("ui:like",()=>{ setLike(v=>!v); setMyLikes(v=> v?Math.max(0,v-1):v+1 ); });
+    let off5=on("ui:like",(data)=>{ 
+      setLike(data.isLiked); 
+      setMyLikes(data.myLikes);
+      
+      // Update LikeSystem component
+      emit("ui:likeUpdate", {
+        myLikes: data.myLikes,
+        peerLikes: peerLikes,
+        isLiked: data.isLiked,
+        canLike: true
+      });
+    });
     let off6=on("ui:report",()=>{ /* open report modal placeholder */ });
     let off7=on("ui:next",()=>{ next(); doMatch(); });
     let off8=on("ui:prev",()=>{ prev(); doMatch(true); });
@@ -187,7 +199,9 @@ export default function ChatClient(){
             <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{/* city placeholder */}City</span>
             <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{(match?.gender||"all").toUpperCase()}</span>
           </div>
-          {/* Bottom-right intentionally empty */}
+          {/* Like System - Top Right */}
+          <LikeSystem />
+          
           {/* Center remote area */}
           <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none">
             Remote peer area (states: connecting/matched/…)
