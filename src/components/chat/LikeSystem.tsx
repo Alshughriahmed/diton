@@ -26,7 +26,11 @@ export default function LikeSystem() {
       setLikeData(data);
     });
 
-    return unsubscribe;
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
   }, []);
 
   const handleLike = () => {

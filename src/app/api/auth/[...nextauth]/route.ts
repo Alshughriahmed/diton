@@ -1,8 +1,9 @@
-import NextAuth, { NextAuthOptions } from "next-auth";
+import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { checkRateLimit, getRateLimitKey } from "@/utils/ratelimit";
 
-export const authOptions: NextAuthOptions = {
+// Export authOptions for use in other parts of the app
+export const authOptions = {
   providers: [
     ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
       ? [Google({
@@ -11,15 +12,15 @@ export const authOptions: NextAuthOptions = {
         })]
       : []),
   ],
-  session: { strategy: "jwt" },
+  session: { strategy: "jwt" as const },
   callbacks: {
-    async jwt({ token }) {
+    async jwt({ token }: any) {
       // مرّر isVip من مصدرك (DB/Redis) لاحقًا؛ افتراضيًا false
-      if (typeof token.isVip === "undefined") token.isVip = false as any;
+      if (typeof token.isVip === "undefined") token.isVip = false;
       return token;
     },
-    async session({ session, token }) {
-      (session as any).isVip = (token as any).isVip || false;
+    async session({ session, token }: any) {
+      session.isVip = token.isVip || false;
       return session;
     },
   },
@@ -36,7 +37,7 @@ export async function GET(req: Request) {
       headers: { 'Content-Type': 'application/json' }
     });
   }
-  return handler(req);
+  return handler.GET(req);
 }
 
 export async function POST(req: Request) {
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
       headers: { 'Content-Type': 'application/json' }
     });
   }
-  return handler(req);
+  return handler.POST(req);
 }
 
 export const runtime = "nodejs";
