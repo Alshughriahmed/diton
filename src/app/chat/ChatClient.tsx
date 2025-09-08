@@ -28,17 +28,28 @@ export default function ChatClient(){
   useEffect(()=>{
     let off1=on("ui:toggleMic",()=>{ toggleMic(); });
     let off2=on("ui:toggleCam",()=>{ toggleCam(); });
-    let off3=on("ui:openSettings",()=>{ /* open settings modal placeholder */ });
-    let off4=on("ui:like",()=>{ setLike(v=>!v); setMyLikes(v=> v?Math.max(0,v-1):v+1 ); });
-    let off5=on("ui:report",()=>{ /* open report modal placeholder */ });
-    let off6=on("ui:next",()=>{ next(); doMatch(); });
-    let off7=on("ui:prev",()=>{ prev(); doMatch(true); });
+    let off3=on("ui:switchCamera",async ()=>{ 
+      try {
+        const newStream = await switchCamera();
+        if(localRef.current && newStream) {
+          localRef.current.srcObject = newStream;
+          localRef.current.play().catch(()=>{});
+        }
+      } catch(error) {
+        console.warn('Camera switch failed:', error);
+      }
+    });
+    let off4=on("ui:openSettings",()=>{ /* open settings modal placeholder */ });
+    let off5=on("ui:like",()=>{ setLike(v=>!v); setMyLikes(v=> v?Math.max(0,v-1):v+1 ); });
+    let off6=on("ui:report",()=>{ /* open report modal placeholder */ });
+    let off7=on("ui:next",()=>{ next(); doMatch(); });
+    let off8=on("ui:prev",()=>{ prev(); doMatch(true); });
     initLocalMedia().then(()=>{
       const s=getLocalStream(); if(localRef.current&&s){ localRef.current.srcObject=s; localRef.current.muted=true; localRef.current.play().catch(()=>{}); }
       setReady(true);
     }).catch(()=>{});
     fetch("/api/user/vip-status").then(r=>r.json()).then(j=> setVip(!!j.isVip)).catch(()=>{});
-    return ()=>{ off1();off2();off3();off4();off5();off6();off7(); };
+    return ()=>{ off1();off2();off3();off4();off5();off6();off7();off8(); };
   },[]);
 
 
