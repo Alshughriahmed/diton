@@ -1,53 +1,21 @@
-// DitonaChat: BEGIN legal-page privacy
-import Link from 'next/link';
+export const metadata = { title: "Privacy Policy — DitonaChat", description: "How DitonaChat handles your data." };
 
-export default function PrivacyPage() {
+export default function Privacy(){
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-4xl font-bold mb-8">Privacy Policy</h1>
-          
-          <div className="bg-white/10 backdrop-blur-md rounded-lg p-8 mb-8">
-            <h2 className="text-2xl font-semibold mb-4">1. Information We Collect</h2>
-            <p className="text-gray-200 mb-4">
-              We collect minimal data necessary for video chat services, including technical data for WebRTC connections and optional user preferences.
-            </p>
-          </div>
-
-          <div className="bg-white/10 backdrop-blur-md rounded-lg p-8 mb-8">
-            <h2 className="text-2xl font-semibold mb-4">2. Your Rights (GDPR/CCPA)</h2>
-            <ul className="text-gray-200 space-y-2">
-              <li>• Right to access your personal data</li>
-              <li>• Right to rectification of inaccurate data</li>
-              <li>• Right to erasure ("right to be forgotten")</li>
-              <li>• Right to data portability</li>
-              <li>• Right to object to processing</li>
-            </ul>
-          </div>
-
-          <div className="bg-white/10 backdrop-blur-md rounded-lg p-8 mb-8">
-            <h2 className="text-2xl font-semibold mb-4">3. Data Subject Access Requests (DSAR)</h2>
-            <p className="text-gray-200 mb-4">
-              To exercise your privacy rights or request data deletion, contact our privacy team:
-            </p>
-            <div className="bg-black/20 rounded-lg p-4">
-              <p className="font-medium">Privacy Team</p>
-              <p>Email: <a href="mailto:privacy@ditonachat.com" className="text-blue-400 hover:text-blue-300">privacy@ditonachat.com</a></p>
-              <p className="text-sm text-gray-400 mt-2">
-                Please include "DSAR Request" in the subject line and provide sufficient information to verify your identity.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex justify-center">
-            <Link href="/" className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg transition-colors">
-              Back to Home
-            </Link>
-          </div>
-        </div>
-      </div>
-    </div>
+    <main className="mx-auto max-w-3xl px-4 py-12 text-sm text-gray-200">
+      <h1 className="text-2xl font-bold mb-4">Privacy Policy</h1>
+      <p>We process minimal personal data necessary to operate the service. You must be 18+.</p>
+      <h2 className="text-xl font-semibold mt-6 mb-2">Data We Process</h2>
+      <ul className="list-disc pl-5 space-y-1">
+        <li>Technical logs (IP, device, timestamps) for security and abuse prevention.</li>
+        <li>Account data if you sign in (email or OAuth profile).</li>
+        <li>Payment metadata if you subscribe (handled by a third-party processor).</li>
+      </ul>
+      <h2 className="text-xl font-semibold mt-6 mb-2">Geo & Matching</h2>
+      <p>Approximate location may be inferred from headers or your consent via the browser to improve matching. You can deny location permissions.</p>
+      <h2 className="text-xl font-semibold mt-6 mb-2">Retention & Rights</h2>
+      <p>Data is retained only as long as necessary. Contact us to request deletion or access.</p>
+      <p className="mt-8">Questions: <a className="underline" href="mailto:privacy@ditonachat.com">privacy@ditonachat.com</a></p>
+    </main>
   );
 }
-// DitonaChat: END legal-page privacy
