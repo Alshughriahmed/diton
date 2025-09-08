@@ -5,7 +5,8 @@ import { useSession } from "next-auth/react";
 
 export default function HeaderLite() {
   const { data: session } = useSession();
-  
+const { data: session } = useSession();
+ 
   return (
     <header className="bg-gray-900 text-white p-4 shadow-lg">
       <div className="container mx-auto flex justify-between items-center">
