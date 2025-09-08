@@ -68,5 +68,5 @@ waitForPort = 5000
 outputType = "webview"
 
 [nix]
-packages = ["jq"]
+packages = ["jq", "dos2unix"]
 channel = "stable-25_05"

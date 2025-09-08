@@ -1,0 +1,488 @@
+إطار العمل
+
+فرع جديد لكل حزمة تغييرات.
+
+نسخ احتياطي تحت _ops/backups/….
+
+لا تعديل على Vercel أو Google Console. إن لزم متغيّر ENV مفقود، اطبع اسمه فقط.
+
+لا تغييرات واسعة. أقل تعديل يحقق القبول.
+
+شغّل كل سكربت عبر: bash _ops/bin/ops_run.sh ./<script>.sh
+
+معايير القبول
+
+Auth:
+/api/auth/providers تُرجع JSON غير فارغ.
+/api/auth/signin = 200/302 ويضبط next-auth.csrf-token.
+Header يعرض Login/Sign out حسب الجلسة.
+
+Stripe:
+/api/stripe/prices تُرجع 4 عناصر بدقة: Daily 1.49, Weekly 5.99, Monthly 16.99, Yearly 99.99 من Price IDs في ENV.
+
+Gender UI: مكوّن موحّد للرموز والألوان مستخدم في الهوم وأي مكان آخر.
+
+VIP: رفض سيرفري لطلب Prev عند عدم وجود جلسة أو عدم VIP.
+
+البناء ينجح.
+
+0) سكربت دعم عام: إنشاء فرع ونسخ احتياطي
+cat > step00_branch_backup.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+TS="$(date +%Y%m%d-%H%M%S)"
+BR="feat/auth-stripe-vip-${TS}"
+BK="_ops/backups/${BR}"
+mkdir -p "$BK"
+git rev-parse --abbrev-ref HEAD > "$BK/base_branch.txt" || true
+for f in \
+  src/app/api/auth/\[\.\.\.nextauth\]/route.ts \
+  src/components/HeaderLite.tsx \
+  src/app/api/stripe/prices/route.ts \
+  src/components/home/HomeClient.tsx \
+  src/app/chat/ChatClient.tsx \
+  src/app/api/match/next/route.ts \
+; do [ -f "$f" ] && install -D "$f" "$BK/$f" || true; done
+git checkout -b "$BR"
+echo "-- Acceptance --"; echo "BRANCH_NEW=$BR"; echo "BACKUP_DIR=$BK"; echo "-- End Acceptance --"
+SH
+chmod +x step00_branch_backup.sh
+bash _ops/bin/ops_run.sh ./step00_branch_backup.sh
+
+1) إصلاح NextAuth + ربط الهيدر بالحالة
+1.1 قراءة/تحديث راوت الأوث إن لزم
+
+متطلبات ENV المتوقعة: NEXTAUTH_URL, NEXTAUTH_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_TRUST_HOST=true.
+
+cat > step01_fix_auth_route.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROUTE="src/app/api/auth/[...nextauth]/route.ts"
+test -f "$ROUTE" || { echo "route-missing"; exit 1; }
+
+# رقّع المزودات بشروط آمنة ولا ترمِ أخطاء عند غياب Google
+perl -0777 -pe '
+  s/import\s+Google\s+from\s+["\']next-auth\/providers\/google["\'];?/import Google from "next-auth\/providers\/google";/s;
+  s/export\s+const\s+authOptions[\s\S]*?} as const;/(() => {
+    const providers:any[] = [];
+    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+      providers.push(Google({ clientId: process.env.GOOGLE_CLIENT_ID!, clientSecret: process.env.GOOGLE_CLIENT_SECRET! }));
+    }
+    return { providers } as const;
+  })();/s;
+' -i "$ROUTE" || true
+
+# تأكد من تصدير handlers بصيغة NextAuth v4/v5
+grep -q 'export const { GET, POST }' "$ROUTE" || \
+  perl -0777 -pe 's/export default .+?;?//s' -i "$ROUTE"
+
+# لا نتدخل أكثر. البناء سيكشف أي مشاكل.
+echo "-- Acceptance --"; echo "AUTH_ROUTE_PATCHED=1"; echo "-- End Acceptance --"
+SH
+chmod +x step01_fix_auth_route.sh
+bash _ops/bin/ops_run.sh ./step01_fix_auth_route.sh
+
+1.2 ربط الهيدر بـ useSession وعرض 18+
+cat > step01b_patch_header_session.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+HDR="src/components/HeaderLite.tsx"
+test -f "$HDR" || { echo "header-missing"; exit 1; }
+
+perl -0777 -pe '
+  s/^("use client";\s*)?/ "use client"; /e;
+  s/import\s+Link\s+from\s+["\']next\/link["\'];?/import Link from "next\/link"; import { useSession } from "next-auth\/react";/s;
+' -i "$HDR" || true
+
+# أدخل عناصر الحالة إن لم تكن موجودة
+grep -q 'useSession' "$HDR" || exit 0
+awk '
+/function HeaderLite/ { inComp=1 }
+{ print }
+/return \(/ && inComp==1 && inserted!=1 {
+  print "  const { data: session } = useSession();";
+  inserted=1
+}
+END{}' "$HDR" > "$HDR.tmp" && mv "$HDR.tmp" "$HDR"
+
+# بدّل أزرار اليمين: 18+ ثابت + Login/Signout حسب الحالة
+perl -0777 -pe '
+  s/<div className="flex items-center gap-2">[\s\S]*?<\/div>/<div className="flex items-center gap-3">
+    <span className="text-red-500 font-semibold text-sm">18\+<\/span>
+    {session?.user ? (
+      <>
+        <span className="text-sm text-neutral-300">{session.user.email ?? "Account"}</span>
+        <a href="\/api\/auth\/signout" className="px-3 py-1 rounded bg-neutral-800 border border-neutral-700 text-sm">Sign out<\/a>
+      </>
+    ) : (
+      <a href="\/api\/auth\/signin" className="px-3 py-1 rounded bg-neutral-800 border border-neutral-700 text-sm">Sign in<\/a>
+    )}
+  <\/div>/s;
+' -i "$HDR" || true
+
+echo "-- Acceptance --"; echo "HEADER_SESSION_WIRED=1"; echo "-- End Acceptance --"
+SH
+chmod +x step01b_patch_header_session.sh
+bash _ops/bin/ops_run.sh ./step01b_patch_header_session.sh
+
+1.3 تحقق إنتاج للأوث
+cat > step01c_auth_accept.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+BASE="${DITONA_BASE:-https://www.ditonachat.com}"
+PROV="$(curl -fsS "$BASE/api/auth/providers" || true)"
+HDRS="$(curl -fsSI "$BASE/api/auth/signin" || true)"
+STAT=$(echo "$HDRS" | awk "BEGIN{s=0} /^HTTP/{s=\$2} END{print s}")
+CSRF=$(echo "$HDRS" | grep -qi "set-cookie:.*next-auth\.csrf-token" && echo 1 || echo 0)
+echo "-- Acceptance --"
+echo "PROVIDERS_LEN=$(printf %s "$PROV" | wc -c | awk "{print \$1}")"
+echo "SIGNIN_STATUS=${STAT:-0}"
+echo "SET_CSRF_COOKIE=$CSRF"
+echo "-- End Acceptance --"
+SH
+chmod +x step01c_auth_accept.sh
+bash _ops/bin/ops_run.sh ./step01c_auth_accept.sh
+
+
+إن بقيت 500: أبلغ أن Google OAuth غير مكتمل: تأكد من Redirect URI في Google:
+https://www.ditonachat.com/api/auth/callback/google
+وتحقق من NEXTAUTH_URL وNEXTAUTH_SECRET على Vercel.
+
+2) Stripe: تفعيل 4 أسعار من ENV
+2.1 استبدال راوت /api/stripe/prices
+cat > step02_patch_stripe_prices.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROUTE="src/app/api/stripe/prices/route.ts"
+install -D /dev/null "$ROUTE"
+cat > "$ROUTE" <<'TS'
+import { NextResponse } from "next/server";
+import Stripe from "stripe";
+
+export const runtime = "nodejs";
+
+function normalize(p: Stripe.Price) {
+  return {
+    id: p.id,
+    amount: typeof p.unit_amount === "number" ? p.unit_amount : 0,
+    currency: (p.currency || "usd").toLowerCase(),
+    interval: (p.recurring?.interval || "month")
+  };
+}
+
+export async function GET() {
+  const ids = [
+    process.env.STRIPE_BOOST_ME_DAILY_ID,
+    process.env.STRIPE_PRO_WEEKLY_ID,
+    process.env.STRIPE_VIP_MONTHLY_ID,
+    process.env.STRIPE_ELITE_YEARLY_ID,
+  ].filter(Boolean) as string[];
+
+  // وضع ENV المحدد فقط
+  if (ids.length === 4 && process.env.STRIPE_SECRET_KEY) {
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-06-20" });
+    const prices: any[] = [];
+    for (const id of ids) {
+      try { prices.push(normalize(await stripe.prices.retrieve(id))); } catch { /* skip */ }
+    }
+    if (prices.length === 4) return NextResponse.json({ prices });
+  }
+
+  // Fallback قديم: basic فقط
+  return NextResponse.json({ prices: [{ id: "basic", amount: 999, currency: "usd", interval: "month" }] });
+}
+TS
+echo "-- Acceptance --"; echo "PRICES_ROUTE_WRITTEN=1"; echo "-- End Acceptance --"
+SH
+chmod +x step02_patch_stripe_prices.sh
+bash _ops/bin/ops_run.sh ./step02_patch_stripe_prices.sh
+
+2.2 تحقق إنتاج
+cat > step02b_prices_accept.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+BASE="${DITONA_BASE:-https://www.ditonachat.com}"
+JSON="$(curl -fsS "$BASE/api/stripe/prices" || true)"
+N=$(echo "$JSON" | tr -d '\n' | sed -E 's/.*"prices":\[(.*)\].*/\1/' | awk -F'}' '{print NF-1}')
+echo "-- Acceptance --"
+echo "PRICES_COUNT=${N:-0}"
+echo "SAMPLE=$(echo "$JSON" | tr -d '\n' | cut -c1-240)"
+echo "-- End Acceptance --"
+SH
+chmod +x step02b_prices_accept.sh
+bash _ops/bin/ops_run.sh ./step02b_prices_accept.sh
+
+
+إن كان PRICES_COUNT<4: اضبط على Vercel القيم الأربع لــ Price IDs.
+
+3) مكوّن GenderBadge موحّد واستخدامه
+cat > step03_gender_badge.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DST="src/components/ui/GenderBadge.tsx"
+install -D /dev/null "$DST"
+cat > "$DST" <<'TS'
+"use client";
+import React from "react";
+
+type G = "male" | "female" | "couple" | "lgbt";
+export function GenderBadge({ g, size="lg" }: { g: G; size?: "sm"|"md"|"lg"|"xl" }) {
+  const map: Record<G,{label:string; symbol:React.ReactNode; className:string}> = {
+    male:   { label:"Male",   symbol:"♂", className:"text-blue-600" },
+    female: { label:"Female", symbol:"♀", className:"text-red-600" },
+    couple: { label:"Couple", symbol:"⚥", className:"text-red-400" },
+    lgbt:   { label:"LGBT",   symbol:(<><span className="bg-gradient-to-r from-red-500 via-orange-400 via-yellow-400 via-green-500 via-blue-500 to-purple-600 bg-clip-text text-transparent">🏳️‍🌈 ⚧</span></>), className:"" },
+  };
+  const sz = { sm:"text-sm", md:"text-base", lg:"text-lg", xl:"text-xl" }[size];
+  const item = map[g];
+  return <span className={`inline-flex items-center gap-1 ${sz}`} aria-label={item.label}>
+    <span className={item.className} aria-hidden>{item.symbol}</span>
+    <span className={item.className}>{item.label}</span>
+  </span>;
+}
+export default GenderBadge;
+TS
+
+# إدراج الاستخدام في الهوم إن لم يكن موجودًا
+HC="src/components/home/HomeClient.tsx"
+grep -q 'GenderBadge' "$HC" || perl -0777 -pe '
+  s/import\s+Link\s+from\s+["\']next\/link["\'];?/import Link from "next\/link"; import GenderBadge from "@\/components\/ui\/GenderBadge";/s;
+  s/♂ Male/<GenderBadge g="male" \/>/g;
+  s/♀ Female/<GenderBadge g="female" \/>/g;
+  s/⚥ Couple/<GenderBadge g="couple" \/>/g;
+  s/🏳️‍🌈 ⚧ LGBT/<GenderBadge g="lgbt" \/>/g;
+' -i "$HC" || true
+
+echo "-- Acceptance --"; echo "GENDER_BADGE_ADDED=1"; echo "-- End Acceptance --"
+SH
+chmod +x step03_gender_badge.sh
+bash _ops/bin/ops_run.sh ./step03_gender_badge.sh
+
+4) VIP حارس سيرفري لطلب Prev
+
+يُرسل العميل هيدر x-ditona-prev: 1 عند Prev. نمنع على الخادم إذا لا جلسة أو ليس VIP (مؤقتًا نمنع عند غياب الجلسة فقط).
+
+cat > step04_vip_prev_guard.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROUTE="src/app/api/match/next/route.ts"
+test -f "$ROUTE" || { echo "route-missing"; exit 1; }
+
+# أدخل فحص prev عبر الهيدر
+perl -0777 -pe '
+  s/export async function GET\((req:[^)]+)\)\s*{/
+export async function GET($1) {
+  const prev = (req.headers.get("x-ditona-prev") === "1");
+  if (prev) {
+    try {
+      const { getServerSession } = await import("next-auth");
+      const session = await getServerSession();
+      if (!session) { return new Response("prev requires auth", { status: 403 }); }
+    } catch { return new Response("prev requires auth", { status: 403 }); }
+  }
+/s;
+' -i "$ROUTE" || true
+
+echo "-- Acceptance --"; echo "VIP_PREV_SERVER_GUARD=1"; echo "-- End Acceptance --"
+SH
+chmod +x step04_vip_prev_guard.sh
+bash _ops/bin/ops_run.sh ./step04_vip_prev_guard.sh
+
+5) فحص نهائي + فتح PR
+cat > step05_final_accept_push.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+BASE="${DITONA_BASE:-https://www.ditonachat.com}"
+
+# auth
+PROV="$(curl -fsS "$BASE/api/auth/providers" || true)"
+HDRS="$(curl -fsSI "$BASE/api/auth/signin" || true)"
+SIGNIN=$(echo "$HDRS" | awk "BEGIN{s=0} /^HTTP/{s=\$2} END{print s}")
+CSRF=$(echo "$HDRS" | grep -qi "set-cookie:.*next-auth\.csrf-token" && echo 1 || echo 0)
+
+# stripe
+PR_JSON="$(curl -fsS "$BASE/api/stripe/prices" || true)"
+PR_COUNT=$(echo "$PR_JSON" | tr -d '\n' | sed -E 's/.*"prices":\[(.*)\].*/\1/' | awk -F'}' '{print NF-1}')
+
+echo "-- Acceptance --"
+echo "AUTH_PROVIDERS_LEN=$(printf %s "$PROV" | wc -c | awk '{print $1}')"
+echo "AUTH_SIGNIN_STATUS=${SIGNIN:-0}"
+echo "AUTH_SET_CSRF=$CSRF"
+echo "STRIPE_PRICES_COUNT=${PR_COUNT:-0}"
+echo "-- End Acceptance --"
+
+git add -A
+git commit -m "Auth wiring, Stripe prices via ENV IDs, GenderBadge, server prev guard"
+git push -u origin HEAD || true
+echo "PR_URL=https://github.com/Alshughriahmed/diton/compare/main...$(git rev-parse --abbrev-ref HEAD)?expand=1"
+SH
+chmod +x step05_final_accept_push.sh
+bash _ops/bin/ops_run.sh ./step05_final_accept_push.sh
+
+*********************************    تعليمات للوكيل
+
+نفّذ “قراءة/كتابة” بحذر عبر الـwrapper فقط.
+
+أنشئ فرعًا ونسخة احتياطية تلقائيًا.
+
+لا تغيّر أي ENV.
+
+أعِد فقط كتلة القبول.
+
+أمر واحد للتنفيذ في الشيل
+# create + run
+cat > step_auth_pages_create_v1.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+TS="$(date +%Y%m%d-%H%M%S)"
+BR="feat/auth-pages-${TS}"
+BK="_ops/backups/${BR}"; mkdir -p "$BK"
+
+# 0) نسخ احتياطي للملفات المحتملة
+for f in \
+  src/app/api/auth/\[\.\.\.nextauth\]/route.ts \
+  src/components/HeaderLite.tsx \
+; do [ -f "$f" ] && install -D "$f" "$BK/$f" || true; done
+
+# 1) فرع جديد
+git checkout -b "$BR" >/dev/null 2>&1 || true
+
+# 2) مكوّن عميل لواجهة الدخول
+install -D /dev/null src/components/auth/LoginClient.tsx
+cat > src/components/auth/LoginClient.tsx <<'TS'
+"use client";
+import Link from "next/link";
+import { signIn } from "next-auth/react";
+
+export default function LoginClient({title="Sign in to DitonaChat"}:{title?:string}) {
+  const gradient = "bg-gradient-to-r from-violet-400 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent";
+  return (
+    <main className="min-h-[70vh] w-full flex items-center justify-center px-4 py-24">
+      <article className="w-full max-w-md rounded-2xl bg-neutral-900/70 border border-neutral-800 shadow-xl backdrop-blur p-6">
+        <h1 className={`text-3xl font-extrabold tracking-tight ${gradient}`}>{title}</h1>
+        <p className="mt-1 text-sm text-neutral-400">
+          <span className="text-red-500 font-semibold">18+</span> Only. By continuing you agree to{" "}
+          <Link className="underline hover:text-neutral-200" href="/terms">Terms</Link> and{" "}
+          <Link className="underline hover:text-neutral-200" href="/privacy">Privacy</Link>.
+        </p>
+        <button
+          onClick={() => signIn("google")}
+          className="mt-6 w-full h-11 rounded-xl bg-white text-neutral-900 font-semibold hover:bg-neutral-100 transition"
+          aria-label="Continue with Google"
+        >
+          Continue with Google
+        </button>
+        <a href="/api/auth/signin" className="sr-only">Fallback sign in</a>
+        <p className="mt-6 text-xs text-neutral-500 text-center">
+          Trouble signing in? Contact <a className="underline" href="mailto:info@ditonachat.com">info@ditonachat.com</a>
+        </p>
+      </article>
+    </main>
+  );
+}
+TS
+
+# 3) صفحة /login (خادمية مع metadata)
+install -D /dev/null src/app/login/page.tsx
+cat > src/app/login/page.tsx <<'TS'
+import LoginClient from "@/components/auth/LoginClient";
+
+export const metadata = {
+  title: "Login | DitonaChat",
+  description: "Sign in to DitonaChat to access chat, filters, and VIP features.",
+  alternates: { canonical: "/login" }
+};
+
+export default function Page() {
+  return <LoginClient title="Sign in to DitonaChat" />;
+}
+TS
+
+# 4) صفحة /signup (تعيد استخدام نفس الواجهة)
+install -D /dev/null src/app/signup/page.tsx
+cat > src/app/signup/page.tsx <<'TS'
+import LoginClient from "@/components/auth/LoginClient";
+
+export const metadata = {
+  title: "Sign up | DitonaChat",
+  description: "Create your account with Google and start chatting instantly.",
+  alternates: { canonical: "/signup" }
+};
+
+export default function Page() {
+  return <LoginClient title="Create your DitonaChat account" />;
+}
+TS
+
+# 5) ربط NextAuth بصفحة /login بدل صفحة المزود الافتراضية
+ROUTE="src/app/api/auth/[...nextauth]/route.ts"
+if [ -f "$ROUTE" ]; then
+  install -D "$ROUTE" "$BK/$ROUTE"
+  # أدخل pages.signIn إن لم توجد
+  perl -0777 -pe '
+    s/({\s*providers\s*:\s*\[[\s\S]*?\]\,?)/$1 pages: { signIn: "\/login" },/s unless /pages:\s*{[^}]*signIn/s;
+  ' -i "$ROUTE" || true
+fi
+
+# 6) تحديث الهيدر لروابط /login و /signup مع كشف الجلسة
+HDR="src/components/HeaderLite.tsx"
+if [ -f "$HDR" ]; then
+  install -D "$HDR" "$BK/$HDR"
+  # تأكد من "use client" و useSession
+  perl -0777 -pe '
+    s/^("use client";\s*)?/ "use client"; /e;
+    s/import\s+Link\s+from\s+["\']next\/link["\'];?/import Link from "next\/link"; import { useSession } from "next-auth\/react";/s;
+  ' -i "$HDR" || true
+
+  # أدخل useSession داخل الدالة
+  awk '
+  /function HeaderLite/ { inComp=1 }
+  { print }
+  /return \(/ && inComp==1 && inserted!=1 { print "  const { data: session } = useSession();"; inserted=1 }
+  ' "$HDR" > "$HDR.tmp" && mv "$HDR.tmp" "$HDR"
+
+  # استبدل كتلة أزرار اليمين
+  perl -0777 -pe '
+    s/<div className="flex items-center gap-2">[\s\S]*?<\/div>/<div className="flex items-center gap-3">
+      <span className="text-red-500 font-semibold text-sm">18\+<\/span>
+      {session?.user ? (
+        <>
+          <span className="text-sm text-neutral-300">{session.user.email ?? "Account"}</span>
+          <a href="\/api\/auth\/signout" className="px-3 py-1 rounded bg-neutral-800 border border-neutral-700 text-sm">Sign out<\/a>
+        </>
+      ) : (
+        <>
+          <Link href="\/login" className="px-3 py-1 rounded bg-neutral-800 border border-neutral-700 text-sm">Login<\/Link>
+          <Link href="\/signup" className="px-3 py-1 rounded bg-neutral-800 border border-neutral-700 text-sm">Sign up<\/Link>
+        </>
+      )}
+    <\/div>/s;
+  ' -i "$HDR" || true
+fi
+
+# 7) قبول مبسّط
+echo "-- Acceptance --"
+echo "BRANCH_NEW=$BR"
+echo "BACKUP_DIR=$BK"
+echo "LOGIN_PAGE=src/app/login/page.tsx"
+echo "SIGNUP_PAGE=src/app/signup/page.tsx"
+echo "LOGIN_CLIENT=src/components/auth/LoginClient.tsx"
+echo "AUTH_ROUTE_PAGES_SIGNIN_SET=$([ -f "$ROUTE" ] && grep -q 'pages: { signIn: \"/login\" }' "$ROUTE" && echo 1 || echo 0)"
+echo "HEADER_LINKS_UPDATED=$([ -f "$HDR" ] && grep -q '/login' "$HDR" && grep -q '/signup' "$HDR" && echo 1 || echo 0)"
+echo "-- End Acceptance --"
+SH
+chmod +x step_auth_pages_create_v1.sh
+bash _ops/bin/ops_run.sh ./step_auth_pages_create_v1.sh
+
+
+بعد التنفيذ:
+
+إن كانت /api/auth/signin لا تزال 500 فالمشكلة OAuth/ENV خارج الكود. تحقّق من:
+
+NEXTAUTH_URL=https://www.ditonachat.com
+
+NEXTAUTH_SECRET قوي
+
+Google OAuth: Authorized redirect URI = https://www.ditonachat.com/api/auth/callback/google
+
+عند نجاح المزوّد ستعمل /login و/signup بأزرار Google ويظهر تبدّل الحالة في الهيدر تلقائيًا.

@@ -1,0 +1,176 @@
+  تعليمات عامة للوكيل 
+
+نمط الإجابة: JSON واحد شامل.
+
+لكل جواب: ضع value + evidence.
+
+الأدلة: مسار ملف + سطر/مقتطف، أو مخرجات أمر curl/node -e/grep.
+
+ممنوع تعديلات. قراءة فقط.
+
+إن تعذّر جواب، اذكر السبب وبديل الدليل.
+
+عند الحاجة، نفّذ أوامر قراءة خفيفة فقط.
+
+مخطط الإرجاع
+
+أعد JSON بهذا الشكل:
+
+{
+  "repo": {...},
+  "home": {...},
+  "auth": {...},
+  "chat": {...},
+  "filters": {...},
+  "match": {...},
+  "age_flow": {...},
+  "headers_security": {...},
+  "vip": {...},
+  "geo": {...},
+  "media": {...},
+  "legal": {...},
+  "infra": {...},
+  "analytics": {...},
+  "open_issues": [...]
+}
+
+أسئلة تفصيلية
+1) المستودع / البنية
+
+root_branch: الفرع الحالي. الدليل: git rev-parse --abbrev-ref HEAD.
+
+app_router: تأكيد App Router. الدليل: وجود src/app/layout.tsx.
+
+pages_list: قائمة الصفحات الأساسية. الدليل: ls src/app/*/page.tsx.
+
+api_routes: قائمة مسارات API. الدليل: ls src/app/api.
+
+2) الصفحة الرئيسية (Home)
+
+home_file: المسار الفعلي للصفحة. الدليل: src/app/page.tsx.
+
+metadata_on_server: هل export const metadata في مكوّن خادمي؟ الدليل: أول سطور page.tsx بدون "use client".
+
+home_client_file: مسار مكوّن العميل. الدليل: src/components/home/HomeClient.tsx.
+
+background_image: ما الصورة المستخدمة؟ الدليل: وجود bg-[url('/hero.webp')] أو خلافه + وجود الملف تحت public/.
+
+header: وجود اسم الموقع + شارة 18+ + Login/Sign in. الدليل: src/components/HeaderLite.tsx.
+
+hero_texts: وجود “Welcome to Ditona Video Chat 🤗” و “🔥 Unleash Your Wild Side 🫦”.
+
+gender_ui: الأزرار الأربع بالرموز والألوان: ♂ أزرق، ♀ أحمر فاقع، ⚥ أحمر فاتح، 🏳️‍🌈⚧ متدرّج. الدليل: محتوى HomeClient.tsx.
+
+age_checkbox: شرط تفعيل زر Start. الدليل: منطق canStart.
+
+start_action: ما يحدث عند الضغط؟ الدليل: fetch('/api/age/allow',{method:'POST'}) ثم router.push('/chat').
+
+3) المصادقة (NextAuth)
+
+auth_route: وجود src/app/api/auth/[...nextauth]/route.ts.
+
+providers_list: مزوّدات معرفة في الكود. الدليل: أسطر import من next-auth/providers/*.
+
+env_required_present: حالة المتغيرات: NEXTAUTH_URL, NEXTAUTH_SECRET, وأي مزوّدات (Google/GitHub/Email…). الدليل: فحص ملفات ENV والإعداد على Vercel إن أمكن.
+
+prod_providers_api: مخرجات curl -fsS https://www.ditonachat.com/api/auth/providers (أعد اللقطات الأولى فقط).
+
+prod_signin_head: رؤوس curl -I https://www.ditonachat.com/api/auth/signin (تحقق من CSRF).
+
+signin_links_in_ui: وجود روابط /api/auth/signin في الواجهة. الدليل: grep في src.
+
+4) صفحة الدردشة (Chat)
+
+chat_client_file: مسار src/app/chat/ChatClient.tsx.
+
+ui_events_bound_once: عدد مستمعي on('ui:next') وon('ui:prev'). الدليل: grep + عدّ.
+
+dedup_cooldown: وجود lastTsRef وbusyRef ومدة ~700ms. الدليل: موقع الأسطر.
+
+gesture_layer: وجود #gesture-layer مع -z-10. الدليل: مسار وسطر.
+
+5) الفلاتر (Zustand)
+
+filters_store: src/state/filters.ts موجود؟
+
+vip_gating_client: سلوك setGender/setCountries لغير VIP يعيدان all/[]. الدليل: أسطر الدالة.
+
+filters_ui_files: مسارات src/components/filters/*.
+
+6) المطابقة (Match)
+
+match_endpoint: src/app/api/match/next/route.ts موجود؟
+
+client_fetch_source: مصدر وحيد لطلب المطابقة. الدليل: وجود fetch واحد في ChatClient.tsx.
+
+fetch_method: GET مع QueryString أم رؤوس فقط؟ الدليل: السطر النهائي بعد التعديلات.
+
+client_hints_headers: إرسال x-ditona-my-gender وx-ditona-geo. الدليل: أسطر fetch.
+
+server_reads_headers: قراءة الرؤوس في route. الدليل: أسطر new Headers(req.headers) وget(...).
+
+rate_limit: دليل الانفجار 5 = 200,200,200,429,429. الدليل: أمر test سابق أو كود الحارس.
+
+7) تدفّق العمر (Age Flow)
+
+pre_age_chat_status: GET /chat بدون كوكي ⇒ 307 إلى /api/age/start?return=/chat. الدليل: curl -I.
+
+post_age_status: بعد POST /api/age/allow ⇒ 200 على /chat. الدليل: أوامر curl.
+
+8) الرؤوس والأمان
+
+permissions_policy_on_chat: رأس Permissions-Policy بـ camera=(self), microphone=(self) يظهر بعد العمر. الدليل: curl -I /chat قبل/بعد.
+
+csp_headers: تأكيد وجود CSP وX-Frame-Options. الدليل: next.config.mjs أو الوسط الوسيط.
+
+9) VIP
+
+prev_button_guard_ui: زر Prev معطّل لغير VIP. الدليل: src/components/chat/ChatToolbar.tsx أو ما يعادله.
+
+server_side_vip_guard: هل يوجد تحقق سيرفري لPrev؟ الدليل: API ذات صلة أو عدمه.
+
+10) تحديد الموقع
+
+geo_api_route: src/app/api/geo/route.ts يقرأ رؤوس Vercel.
+
+geolocation_fallback: استخدام navigator.geolocation مع مهلة.
+
+local_storage_keys: ditona_myGender, ditona_geo, ditona_geo_hint.
+
+11) الوسائط والكام/المايك
+
+permissions_ui: مفاتيح تفعيل Camera/Mic في الشات. الدليل: أزرار Mic/Cam.
+
+permissions_policy_effect: التأكد من عدم طلب صلاحيات قبل العمر.
+
+12) الصفحات القانونية
+
+terms_page: موجودة وبها نص. الدليل: src/app/terms/page.tsx.
+
+privacy_page: موجودة وبها نص. الدليل: src/app/privacy/page.tsx.
+
+13) البنية التحتية والنشر
+
+vercel_linked: المشروع موصول بـ Vercel. الدليل: أحدث نشر مرتبط بآخر PR/commit.
+
+build_errors: آخر خطأ معروف تم حله (metadata/use client). الدليل: سجل البناء الأخير.
+
+14) التحليلات/الهوتجار/الخ
+
+analytics_present: أي سكربت تتبع؟ الدليل: layout.tsx أو إعدادات أخرى.
+
+إن وُجد: نوع المعرّف.
+
+15) قضايا مفتوحة
+
+قائمة موجزة بأي تناقض أو نقص يمنع تسجيل الدخول/التسجيل أو المطابقة الموجهة حسب البلد/الجنس.
+
+أوامر مساعدة مسموحة للوكيل (قراءة فقط)
+
+فحص وجود ملفات: ls, grep -RIn, rg -n.
+
+فحص صفحات الإنتاج: curl -I https://www.ditonachat.com/chat, curl -fsS https://www.ditonachat.com/api/auth/providers.
+
+طباعة مقتطفات: sed -n '1,120p' file | sed -n 'X,YYp'.
+ملاحظاتك ومقترحاتك
+إخراج وحيد مطلوب: JSON وفق المخطط وبالأدلة. بعد استلامه، أضع خطة تصحيح نهائية لتسجيل الدخول/التسجيل وربط الحالة في الهيد
