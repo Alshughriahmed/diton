@@ -4,6 +4,8 @@ import { useNextPrev } from "@/hooks/useNextPrev";
 import { useFilters } from "@/state/filters";
 import CountryFilter from "./CountryFilter";
 import GenderFilter from "./GenderFilter";
+import BeautyControls from "./BeautyControls";
+import MaskStrip from "./MaskStrip";
 
 export default function ChatToolbar(){
   const { isVip } = useFilters();
@@ -37,10 +39,12 @@ export default function ChatToolbar(){
             </button>
           </div>
           
-          {/* Center: Filters */}
+          {/* Center: Filters & Effects */}
           <div className="flex items-center gap-2">
             <CountryFilter />
             <GenderFilter />
+            <BeautyControls />
+            <MaskStrip />
           </div>
 
           {/* Center-Right: Actions */}

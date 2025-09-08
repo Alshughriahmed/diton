@@ -4,6 +4,7 @@ import { on, emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
+import { getVideoEffects } from "@/lib/effects";
 import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
@@ -22,6 +23,7 @@ export default function ChatClient(){
   const [match,setMatch]=useState<MatchEcho|null>(null);
   const { gender, countries, setGender, setCountries, isVip: vip, setVip } = useFilters();
   const [beauty,setBeauty]=useState(false);
+  const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
 
   useKeyboardShortcuts();
 
@@ -44,12 +46,66 @@ export default function ChatClient(){
     let off6=on("ui:report",()=>{ /* open report modal placeholder */ });
     let off7=on("ui:next",()=>{ next(); doMatch(); });
     let off8=on("ui:prev",()=>{ prev(); doMatch(true); });
-    initLocalMedia().then(()=>{
-      const s=getLocalStream(); if(localRef.current&&s){ localRef.current.srcObject=s; localRef.current.muted=true; localRef.current.play().catch(()=>{}); }
+    let off9=on("ui:toggleBeauty",async (data)=>{ 
+      try {
+        const effects = getVideoEffects();
+        effects.updateConfig({ beauty: { enabled: data.enabled, ...data.settings } });
+        setBeauty(data.enabled);
+      } catch(error) {
+        console.warn('Beauty toggle failed:', error);
+      }
+    });
+    let off10=on("ui:updateBeauty",(data)=>{ 
+      try {
+        const effects = getVideoEffects();
+        effects.updateConfig({ beauty: { enabled: beauty, ...data.settings } });
+      } catch(error) {
+        console.warn('Beauty update failed:', error);
+      }
+    });
+    let off11=on("ui:changeMask",(data)=>{ 
+      try {
+        const effects = getVideoEffects();
+        effects.updateConfig({ mask: { enabled: data.type !== 'none', type: data.type } });
+      } catch(error) {
+        console.warn('Mask change failed:', error);
+      }
+    });
+    
+    initLocalMedia().then(async ()=>{
+      const s=getLocalStream(); 
+      if(localRef.current && s){ 
+        // Initialize effects if VIP
+        if (vip) {
+          try {
+            const effects = getVideoEffects();
+            const video = document.createElement('video');
+            video.srcObject = s;
+            video.play();
+            
+            const processedStream = await effects.initialize(video);
+            if (processedStream) {
+              setEffectsStream(processedStream);
+              localRef.current.srcObject = processedStream;
+              effects.start();
+            } else {
+              localRef.current.srcObject = s;
+            }
+          } catch (error) {
+            console.warn('Effects initialization failed, using original stream:', error);
+            localRef.current.srcObject = s;
+          }
+        } else {
+          localRef.current.srcObject = s;
+        }
+        
+        localRef.current.muted = true; 
+        localRef.current.play().catch(()=>{}); 
+      }
       setReady(true);
     }).catch(()=>{});
     fetch("/api/user/vip-status").then(r=>r.json()).then(j=> setVip(!!j.isVip)).catch(()=>{});
-    return ()=>{ off1();off2();off3();off4();off5();off6();off7();off8(); };
+    return ()=>{ off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); };
   },[]);
 
 
