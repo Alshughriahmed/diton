@@ -38,6 +38,15 @@ function parse(input: any) {
 }
 
 export async function GET(req: Request) {
+  const prev = (req.headers.get("x-ditona-prev") === "1");
+  if (prev) {
+    try {
+      const { getServerSession } = await import("next-auth");
+      const session = await getServerSession();
+      if (!session) { return new Response("prev requires auth", { status: 403 }); }
+    } catch { return new Response("prev requires auth", { status: 403 }); }
+  }
+  
   try { const h = new Headers(req.headers); const _g = h.get("x-ditona-my-gender"); const _geo = h.get("x-ditona-geo"); void(_g); void(_geo); } catch {}
   const ip = ipFrom(req);
   const rl = allow(`${ip}:match-next`, 3, 2000);

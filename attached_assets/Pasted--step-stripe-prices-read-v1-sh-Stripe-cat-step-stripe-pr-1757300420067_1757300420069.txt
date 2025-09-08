@@ -1,0 +1,52 @@
+# step_stripe_prices_read_v1.sh — تدقيق راوت أسعار Stripe والإنتاج (قراءة فقط)
+cat > step_stripe_prices_read_v1.sh <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+TS="$(date +%Y%m%d-%H%M%S)"
+OUT="_ops/reports/stripe_prices_${TS}"; mkdir -p "$OUT"
+
+ROUTE="src/app/api/stripe/prices/route.ts"
+if [ ! -f "$ROUTE" ]; then
+  ROUTE="$(grep -RIn 'api/stripe/prices' src 2>/dev/null | awk -F: '/route\.(t|j)s/{print $1; exit}')"
+fi
+[ -n "${ROUTE:-}" ] && sed -n '1,220p' "$ROUTE" > "$OUT/route_head.txt" || true
+
+ENV_USED=""
+if [ -n "${ROUTE:-}" ]; then
+  ENV_USED="$(grep -oE 'process\.env\.[A-Z0-9_]+' "$ROUTE" 2>/dev/null | sed -E 's/.*\.//' | sort -u | tr '\n' ',' | sed 's/,$//')"
+fi
+
+HAS_BASIC=0; HAS_LIST_ALL=0; HAS_ENV_IDS=0
+if [ -n "${ROUTE:-}" ]; then
+  grep -q '"basic"' "$ROUTE" && HAS_BASIC=1 || true
+  grep -qE 'stripe\.prices\.list|new Stripe\(|from "stripe"' "$ROUTE" && HAS_LIST_ALL=1 || true
+  echo "$ENV_USED" | grep -qE 'STRIPE_.*_ID' && HAS_ENV_IDS=1 || true
+fi
+
+MODE="unknown"
+[ "$HAS_BASIC" = "1" ] && MODE="stub_basic"
+[ "$HAS_ENV_IDS" = "1" ] && MODE="env_ids"
+[ "$HAS_LIST_ALL" = "1" ] && MODE="list_all"
+
+BASE="${DITONA_BASE:-https://www.ditonachat.com}"
+HEADERS="$(curl -fsSI "$BASE/api/stripe/prices" || true)"
+STATUS="$(echo "$HEADERS" | awk 'BEGIN{s=0} /^HTTP/{s=$2} END{print s}')"
+BODY="$(curl -fsS "$BASE/api/stripe/prices" || true)"
+LEN="$(printf %s "$BODY" | wc -c | awk '{print $1}')"
+SAMPLE="$(echo "$BODY" | tr -d '\n' | cut -c1-200)"
+
+echo "-- Acceptance --"
+echo "ROUTE_FILE=${ROUTE:-none}"
+echo "ENV_VARS_USED=${ENV_USED:-none}"
+echo "DETECTED_MODE=$MODE"
+echo "PROD_STATUS=${STATUS:-0}"
+echo "PROD_BODY_LEN=$LEN"
+echo "PROD_BODY_SAMPLE=$SAMPLE"
+echo "ARTIFACTS_DIR=$OUT"
+echo "-- End Acceptance --"
+SH
+
+# تشغيل آمن عبر الـwrapper مع تطبيع الأسطر والصلاحيات
+( command -v perl >/dev/null && perl -pi -e 's/\r\n?/\n/g' step_stripe_prices_read_v1.sh ) || sed -i 's/\r$//' step_stripe_prices_read_v1.sh
+chmod +x step_stripe_prices_read_v1.sh
+bash _ops/bin/ops_run.sh ./step_stripe_prices_read_v1.sh
