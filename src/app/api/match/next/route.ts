@@ -38,6 +38,7 @@ function parse(input: any) {
 }
 
 export async function GET(req: Request) {
+  try { const h = new Headers(req.headers); const _g = h.get("x-ditona-my-gender"); const _geo = h.get("x-ditona-geo"); void(_g); void(_geo); } catch {}
   const ip = ipFrom(req);
   const rl = allow(`${ip}:match-next`, 3, 2000);
   if (!rl.ok) {
