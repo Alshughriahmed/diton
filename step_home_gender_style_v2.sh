@@ -1,3 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${DITONA_ROOT:-/home/runner/workspace}"
+cd "$ROOT"
+
+ts="$(date -u +%Y%m%d-%H%M%S)"
+backup="_ops/backups/home_gender_${ts}"
+report="_ops/reports/home_gender_${ts}"
+mkdir -p "$backup" "$report"
+
+HOME="src/app/page.tsx"
+HEADER="src/components/HeaderLite.tsx"
+GEO_API="src/app/api/geo/route.ts"
+install -D "$HOME" "$backup/page.tsx.orig" 2>/dev/null || true
+
+cat > "$HOME" <<'EOF_TSX'
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -144,3 +161,75 @@ export default function HomePage(){
     </div>
   );
 }
+EOF_TSX
+
+# تأكيد وجود الهيدر وAPI
+mkdir -p src/components src/app/api/geo
+[ -f "$HEADER" ] || cat > "$HEADER" <<'EOF_H'
+"use client";
+import Link from "next/link";
+export default function HeaderLite(){
+  return (
+    <header className="w-full fixed top-0 left-0 z-40">
+      <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
+        <Link href="/" className="text-white text-xl font-bold hover:text-gray-300 transition-colors">
+          <span className="mr-1">💫💥</span>DitonaChat
+        </Link>
+        <div className="flex items-center gap-3">
+          <span className="text-white bg-red-600 px-2 py-0.5 rounded text-sm font-semibold select-none">18+</span>
+          <Link href="/api/auth/signin" className="text-gray-200 hover:text-white text-sm">Login</Link>
+          <Link href="/api/auth/signin" className="bg-white/10 text-white text-sm px-3 py-1.5 rounded hover:bg-white/20 transition-colors">Sign in</Link>
+        </div>
+      </div>
+    </header>
+  );
+}
+EOF_H
+
+[ -f "$GEO_API" ] || cat > "$GEO_API" <<'EOF_G'
+import { NextResponse } from "next/server";
+export async function GET(req: Request) {
+  const h = new Headers((req as any).headers);
+  const data = {
+    country: h.get("x-vercel-ip-country") || h.get("cf-ipcountry") || null,
+    city:    h.get("x-vercel-ip-city")    || null,
+    region:  h.get("x-vercel-ip-region")  || null,
+    lat:     h.get("x-vercel-ip-latitude")|| null,
+    lon:     h.get("x-vercel-ip-longitude")|| null,
+    ip:      h.get("x-forwarded-for")     || h.get("x-real-ip") || null,
+    src: "headers"
+  };
+  return NextResponse.json(data, { status: 200 });
+}
+EOF_G
+
+# تحقّق وقبول
+grep -q '♂' "$HOME" && HAS_MALE=1 || HAS_MALE=0
+grep -q '♀' "$HOME" && HAS_FEMALE=1 || HAS_FEMALE=0
+grep -q '⚥' "$HOME" && HAS_COUPLE=1 || HAS_COUPLE=0
+grep -q 'LGBT' "$HOME" && HAS_LGBT=1 || HAS_LGBT=0
+grep -q 'bg-gradient-to-r.*to-purple-600' "$HOME" && HAS_RAINBOW=1 || HAS_RAINBOW=0
+grep -q "bg-\[url('/hero.webp.webp')\]" "$HOME" && HAS_BG=1 || HAS_BG=0
+
+BRANCH_BASE="$(git rev-parse --abbrev-ref HEAD || echo main)"
+BRANCH_NEW="feat/home-gender-style-${ts}"
+CHANGED=0
+if ! git diff --quiet; then
+  git checkout -b "$BRANCH_NEW"
+  git add -A
+  git commit -m "ui(home): standardized gender icons/colors and larger symbols; keep geo + 18+ gate"
+  CHANGED=1
+fi
+
+echo "-- Acceptance --"
+echo "HAS_MALE=$HAS_MALE"
+echo "HAS_FEMALE=$HAS_FEMALE"
+echo "HAS_COUPLE=$HAS_COUPLE"
+echo "HAS_LGBT=$HAS_LGBT"
+echo "HAS_RAINBOW=$HAS_RAINBOW"
+echo "HAS_BG=$HAS_BG"
+echo "BRANCH_BASE=$BRANCH_BASE"
+echo "BRANCH_NEW=$BRANCH_NEW"
+echo "CHANGED=$CHANGED"
+echo "BACKUP_DIR=$backup"
+echo "REPORT_DIR=$report"
