@@ -1,3 +1,4 @@
+import SessionProviderClient from "@/components/providers/SessionProviderClient";
 import "./globals.css";
 import type { Metadata } from "next";
 import CookieBanner from "@/components/common/CookieBanner";
@@ -38,8 +39,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>
       <body className="bg-gray-950 text-white antialiased">
+        <SessionProviderClient>
         {children}
         <CookieBanner />
+              </SessionProviderClient>
       </body>
     </html>
   );
