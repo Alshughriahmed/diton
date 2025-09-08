@@ -9,6 +9,8 @@ import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
+import MessageSystem from "@/components/chat/MessageSystem";
+import { getMobileOptimizer } from "@/lib/mobile";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
@@ -25,6 +27,7 @@ export default function ChatClient(){
   const { gender, countries, setGender, setCountries, isVip: vip, setVip } = useFilters();
   const [beauty,setBeauty]=useState(false);
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
 
   useKeyboardShortcuts();
 
@@ -116,8 +119,20 @@ export default function ChatClient(){
       }
       setReady(true);
     }).catch(()=>{});
-    fetch("/api/user/vip-status").then(r=>r.json()).then(j=> setVip(!!j.isVip)).catch(()=>{});
-    return ()=>{ off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); };
+    fetch("/api/user/vip-status").then(r=>r.json()).then(j=> { 
+      setVip(!!j.isVip); 
+      setIsGuest(!j.user); 
+    }).catch(()=>{
+      setIsGuest(true);
+    });
+    
+    // Initialize mobile optimizer
+    const mobileOptimizer = getMobileOptimizer();
+    const unsubscribeMobile = mobileOptimizer.subscribe((viewport) => {
+      // Handle viewport changes for mobile optimization
+      console.log('Viewport changed:', viewport);
+    });
+    return ()=>{ off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); unsubscribeMobile(); };
   },[]);
 
 
@@ -153,7 +168,7 @@ export default function ChatClient(){
   const allCountries=[ "US","DE","FR","GB","TR","AE","SA","EG","JO","IQ","SY","LB","MA","ZA","BR","AR","ES","IT","SE","NO","RU","CN","JP","KR","IN","PK","BD","ID","PH","TH","VN","IR","CA","AU","NZ" ];
 
   return (
-    <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
+    <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
       <div className="h-full grid grid-rows-2 gap-2 p-2">
         {/* ===== Top (peer) ===== */}
         <section className="relative rounded-2xl bg-black/30 overflow-hidden">
@@ -223,16 +238,19 @@ export default function ChatClient(){
             {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
           </div>
 
-          {/* Chat Composer with Emoji */}
+          {/* Enhanced Message System */}
           <div className="absolute inset-x-0 bottom-14">
-            <ChatComposer onSend={(message) => {
-              console.log('Message sent:', message);
-              // TODO: إرسال الرسالة عبر WebRTC أو Socket.io
-            }} />
+            <MessageSystem 
+              isGuest={isGuest}
+              onSend={(message) => {
+                console.log('Message sent:', message);
+                // TODO: إرسال الرسالة عبر WebRTC أو Socket.io
+              }} 
+            />
           </div>
 
           {/* Bottom toolbar: Prev | middle controls | Next */}
-          <div className="absolute inset-x-2 bottom-2">
+          <div className="absolute inset-x-2 bottom-2" data-toolbar>
             <div className="flex items-center justify-between gap-2">
               <button aria-label="Prev" className="px-5 py-2 rounded-full bg-neutral-800 text-white text-sm border border-neutral-700"
                 onClick={(e)=>{e.preventDefault(); emit("ui:prev");}}>⏮️ Prev</button>
