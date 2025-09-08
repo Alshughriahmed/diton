@@ -49,7 +49,9 @@ export default function ChatClient(){
     busyRef.current = true;
     lastTsRef.current = now;
     const qp=new URLSearchParams(); qp.set("gender",gender); if(countries.length) qp.set("countries", countries.join(","));
-    const j:MatchEcho=await fetch("/api/match/next?"+qp.toString(),{cache:"no-store"}).then(r=>r.json()).catch(()=>null as any);
+      const __mg = (typeof window!=="undefined" && window.localStorage) ? window.localStorage.getItem("ditona_myGender") : null;
+      const __geo = (typeof window!=="undefined" && window.localStorage) ? (window.localStorage.getItem("ditona_geo") || window.localStorage.getItem("ditona_geo_hint")) : null;
+    const j:MatchEcho=await fetch("/api/match/next?"+qp.toString(), { cache:"no-store", headers: { "x-ditona-my-gender": (__mg||""), "x-ditona-geo": (__geo||"") } }).then(r=>r.json()).catch(()=>null as any);
     if(j) setMatch(j);
     busyRef.current = false;
   }

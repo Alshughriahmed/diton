@@ -1,33 +1,21 @@
-// DitonaChat: BEGIN legal-page terms
-import Link from 'next/link';
+export const metadata = { title: "Terms of Use — DitonaChat", description: "Basic terms for using DitonaChat." };
 
-export default function TermsPage() {
+export default function Terms(){
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-4xl font-bold mb-8">Terms of Service</h1>
-          
-          <div className="bg-white/10 backdrop-blur-md rounded-lg p-8 mb-8">
-            <h2 className="text-2xl font-semibold mb-4">1. Acceptance of Terms</h2>
-            <p className="text-gray-200 mb-4">
-              By accessing and using DitonaChat, you accept and agree to be bound by the terms and provision of this agreement.
-            </p>
-
-            <h2 className="text-2xl font-semibold mb-4">2. Age Requirement</h2>
-            <p className="text-gray-200 mb-4">
-              You must be at least 18 years old to use this service. By using DitonaChat, you represent that you are at least 18 years of age.
-            </p>
-          </div>
-
-          <div className="flex justify-center">
-            <Link href="/" className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg transition-colors">
-              Back to Home
-            </Link>
-          </div>
-        </div>
-      </div>
-    </div>
+    <main className="mx-auto max-w-3xl px-4 py-12 text-sm text-gray-200">
+      <h1 className="text-2xl font-bold mb-4">Terms of Use</h1>
+      <p>By accessing or using DitonaChat, you agree to these Terms. You must be 18+ to use this service.</p>
+      <h2 className="text-xl font-semibold mt-6 mb-2">Acceptable Use</h2>
+      <ul className="list-disc pl-5 space-y-1">
+        <li>No illegal content or behavior.</li>
+        <li>No harassment, hate speech, or exploitation.</li>
+        <li>Respect privacy. Do not share others' personal data without consent.</li>
+      </ul>
+      <h2 className="text-xl font-semibold mt-6 mb-2">Accounts & Subscriptions</h2>
+      <p>Some features require an account or paid plan. Billing is handled by our payment processor. Refunds are evaluated case-by-case.</p>
+      <h2 className="text-xl font-semibold mt-6 mb-2">Disclaimer</h2>
+      <p>Service is provided "as-is" without warranties. We may suspend or terminate access for policy violations.</p>
+      <p className="mt-8">For questions: <a className="underline" href="mailto:info@ditonachat.com">info@ditonachat.com</a></p>
+    </main>
   );
 }
-// DitonaChat: END legal-page terms

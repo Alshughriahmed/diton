@@ -6,7 +6,8 @@ export const { handlers, auth } = NextAuth({
   providers: (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
     ? [Google({ clientId: process.env.GOOGLE_CLIENT_ID!, clientSecret: process.env.GOOGLE_CLIENT_SECRET! })]
     : [],
-  session: { strategy: "jwt" }
+  session: { strategy: "jwt" },
+  trustHost: true
 });
 
 // Rate-limited handlers
