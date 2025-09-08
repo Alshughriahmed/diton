@@ -1,0 +1,196 @@
+تعليمات للوكيل
+
+أعد ملف JSON واحدًا يغطي كل ما يلي. لكل بند ضع:
+
+value: النتيجة الدقيقة.
+
+evidence: دليل قصير لا يتجاوز سطرين: مسار ملف + أرقام أسطر، أو أمر curl مع أول 200 حرف من الاستجابة، أو مقتطف grep.
+
+لا تعدّل أي ملف. نفّذ أوامر قراءة فقط.
+
+مخطط الإخراج
+{
+  "repo": {...},
+  "home": {...},
+  "auth": {...},
+  "users_roles": {...},
+  "payments": {...},
+  "chat": {...},
+  "filters": {...},
+  "match": {...},
+  "geo": {...},
+  "age_flow": {...},
+  "headers_security": {...},
+  "media": {...},
+  "seo": {...},
+  "infra": {...},
+  "analytics": {...},
+  "open_issues": [...]
+}
+
+ما يجب جمعه
+repo
+
+root_branch
+
+commit: آخر hash.
+
+pages_list: find src/app -name 'page.tsx'.
+
+api_routes: find src/app/api -maxdepth 2 -type d.
+
+home
+
+home_file: تأكيد أن src/app/page.tsx خادمي ويصدر metadata.
+
+home_client_file: وجود "use client".
+
+background_image: المسار الفعلي تحت public/.
+
+header: وجود اسم الموقع + شارة 18+ + روابط /api/auth/signin.
+
+cta_logic: شرط تفعيل Start (تحديد الجنس + 18+).
+
+نصوص البطل: “Welcome to Ditona Video Chat 🤗”, “🔥 Unleash Your Wild Side 🫦”.
+
+auth (NextAuth)
+
+auth_route: وجود src/app/api/auth/[...nextauth]/route.ts.
+
+providers_list: أسماء المزوّدين من import next-auth/providers/*.
+
+uses_credentials_provider: نعم/لا.
+
+uses_email_provider: نعم/لا.
+
+uses_google_provider: نعم/لا.
+
+env_required_present: أسماء المتغيّرات المطلوبة الموجودة في الريبو أو ENV docs (لا تطبع القيم).
+
+إنتاج:
+
+prod_providers: curl -fsS https://www.ditonachat.com/api/auth/providers مع الطول والعينة.
+
+prod_csrf: curl -fsS https://www.ditonachat.com/api/auth/csrf الطول.
+
+signin_headers: curl -fsSI https://www.ditonachat.com/api/auth/signin الحالة ووجود next-auth.csrf-token.
+
+session_no_cookie: curl -fsS https://www.ditonachat.com/api/auth/session الطول.
+
+users_roles
+
+تعريف الأدوار: Guest, Member, VIP في الكود.
+
+أين تُحدَّد حالة VIP في الواجهة (useFilters.isVip) والدعم السيرفري لها.
+
+نقاط المنع لغير VIP: زر Prev في الواجهة + أي تحقق سيرفري.
+
+payments (Stripe)
+
+وجود مفاتيح Stripe في ENV docs.
+
+مسارات: /api/stripe/prices, /api/stripe/subscribe, /api/stripe/portal, /api/stripe/webhook.
+
+إنتاج:
+
+curl -fsS https://www.ditonachat.com/api/stripe/prices الحالة وطول الاستجابة.
+
+هل هناك صفحات خطط /plans تسحب الأسعار بالفعل.
+
+chat
+
+chat_client_file: src/app/chat/ChatClient.tsx.
+
+مستمعو الأحداث: عد on('ui:next') وon('ui:prev') مرة واحدة.
+
+التبريد ومنع إعادة الدخول: وجود lastTsRef وbusyRef و<700ms.
+
+gesture_layer: وجود id="gesture-layer" مع -z-10.
+
+أزرار: Video, Mic, Report, Settings, Prev, Next.
+
+filters
+
+filters_store: src/state/filters.ts.
+
+سلوك setGender/setCountries لغير VIP.
+
+الـUI الحالية للفلاتر.
+
+match
+
+endpoint_file: src/app/api/match/next/route.ts.
+
+client_fetch_source: مصدر واحد للـfetch في ChatClient.doMatch.
+
+طريقة الطلب: GET مع QueryString.
+
+رؤوس التلميحات: إرسال x-ditona-my-gender, x-ditona-geo وقراءتها في الـAPI.
+
+تحديد المعدّل: المنطق في السيرفر.
+
+إنتاج: اختبار رشقة 5 طلبات إلى /api/match/next مع فواصل 50ms، وذكر تسلسل الأكواد.
+
+geo
+
+geo_api: src/app/api/geo/route.ts يقرأ رؤوس Vercel.
+
+geolocation_fallback: استخدام navigator.geolocation بمهلة.
+
+LocalStorage: ditona_myGender, ditona_geo, ditona_geo_hint.
+
+age_flow
+
+قبل العمر: curl -I https://www.ditonachat.com/chat الحالة 307 والموقع.
+
+بعد العمر: اذكر وجود POST /api/age/allow وأنه يضع الكوكي (دليل من الكود).
+
+headers_security
+
+permissions_policy_on_chat: من next.config.mjs والقيم في الإنتاج.
+
+CSP وX-Frame-Options وReferrer-Policy.
+
+media
+
+طلب صلاحيات الكام/الميك متى يبدأ.
+
+تحقق أن Permissions-Policy لا يظهر قبل اجتياز العمر.
+
+seo
+
+<title>, <meta name="description">, canonical في الصفحة الرئيسية.
+
+robots.txt وsitemap.xml في الإنتاج.
+
+infra
+
+الربط بـVercel ونمط البناء.
+
+آخر خطأ تم إصلاحه: metadata مع use client.
+
+analytics
+
+وجود أي تتبّع.
+
+open_issues
+
+قائمة مختصرة بأي فجوات تمنع: تسجيل الدخول، الاشتراك، المطابقة بحسب البلد/الجنس، حماية VIP سيرفريًا.
+
+أوامر مساعدة مسموحة
+
+استخدم فقط:
+
+قراءة كود: grep -RInE, sed -n, find, head -n.
+
+إنتاج: curl -fsS وcurl -I.
+
+ممنوع أي تعديل.
+
+معيار القبول
+
+JSON صالح يغطي كل الأقسام المذكورة.
+
+كل value معه evidence.
+
+يبيّن بوضوح سبب فشل /api/auth/providers و/api/auth/signin على الإنتاج، وأي متغيّرات ENV الناقصة بحسب المزوّدات المكتشفة.
