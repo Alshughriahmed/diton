@@ -18,9 +18,17 @@ export const useFilters = create<FiltersState>((set)=>({
   countries: [],
   isVip: false,
   setVip: (v)=>set({ isVip: !!v }),
-  setGender: (g)=>set((s)=> s.isVip ? { gender:g } : { gender:"all" }),
+  setGender: (g)=>set((s)=> {
+    // Free users limited to "all", VIP can choose any gender
+    const FREE_FOR_ALL = process.env.NODE_ENV !== 'production' || process.env.FREE_FOR_ALL === '1';
+    if (!s.isVip && !FREE_FOR_ALL && g !== "all") return s;
+    return { gender: g };
+  }),
   setCountries: (codes)=>set((s)=>{
-    if(!s.isVip) return { countries:[] };
+    const FREE_FOR_ALL = process.env.NODE_ENV !== 'production' || process.env.FREE_FOR_ALL === '1';
+    // Free users limited to empty array (global) or their own country
+    if (!s.isVip && !FREE_FOR_ALL) return { countries: [] };
+    // VIP users can select up to 15 countries
     const next = !codes?.length ? [] : codes.slice(0,15);
     return { countries: next };
   }),
