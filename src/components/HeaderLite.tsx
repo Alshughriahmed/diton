@@ -4,13 +4,8 @@ import Link from 'next/link';
 import { useSession } from "next-auth/react";
 
 export default function HeaderLite() {
-<<<<<<< HEAD
-  const _u = (useSession as any)?.();
-  const session = _u?.data ?? null;
+  const { data: session } = useSession();
   
-=======
- const { data: session } = useSession();
->>>>>>> b69fcac47044dd2a6a0751998bfe3d503b723bea
   return (
     <header className="bg-gray-900 text-white p-4 shadow-lg">
       <div className="container mx-auto flex justify-between items-center">
