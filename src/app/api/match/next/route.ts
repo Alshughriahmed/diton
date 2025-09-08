@@ -1,5 +1,6 @@
 import { allow, ipFrom } from "../../../../lib/ratelimit";
 import { NextRequest, NextResponse } from "next/server";
+import { requireVip } from "../../../../utils/vip";
 export const dynamic = "force-dynamic";
 
 // hCaptcha verification function
@@ -76,6 +77,29 @@ export async function GET(req: Request) {
   }
   
   const p = parse({ gender, countries });
+  
+  // VIP filters check
+  const genders = Array.isArray(p.gender) ? p.gender : (p.gender ? [p.gender] : []);
+  const countriesArray = p.countries || [];
+  
+  const isVip = await requireVip();
+  if (!isVip && process.env.FREE_FOR_ALL !== "1") {
+    if (genders.length > 1) {
+      return NextResponse.json({ error: "VIP gender filter" }, { status: 403 });
+    }
+    if (countriesArray.length > 1) {
+      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+    }
+  }
+  if (isVip) {
+    if (genders.length > 2) {
+      return NextResponse.json({ error: "max 2 genders" }, { status: 400 });
+    }
+    if (countriesArray.length > 15) {
+      return NextResponse.json({ error: "max 15 countries" }, { status: 400 });
+    }
+  }
+  
   return NextResponse.json({ ts: Date.now(), ...p });
 }
 
@@ -106,5 +130,28 @@ export async function POST(req: Request) {
   }
   
   const p = parse(params);
+  
+  // VIP filters check  
+  const genders = Array.isArray(p.gender) ? p.gender : (p.gender ? [p.gender] : []);
+  const countriesArray = p.countries || [];
+  
+  const isVip = await requireVip();
+  if (!isVip && process.env.FREE_FOR_ALL !== "1") {
+    if (genders.length > 1) {
+      return NextResponse.json({ error: "VIP gender filter" }, { status: 403 });
+    }
+    if (countriesArray.length > 1) {
+      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+    }
+  }
+  if (isVip) {
+    if (genders.length > 2) {
+      return NextResponse.json({ error: "max 2 genders" }, { status: 400 });
+    }
+    if (countriesArray.length > 15) {
+      return NextResponse.json({ error: "max 15 countries" }, { status: 400 });
+    }
+  }
+  
   return NextResponse.json({ ts: Date.now(), ...p });
 }

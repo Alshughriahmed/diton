@@ -1,60 +1,36 @@
-import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
-import { checkRateLimit, getRateLimitKey } from "@/utils/ratelimit";
+import { NextRequest, NextResponse } from "next/server";
+import Stripe from "stripe";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
-const FILE = path.join(process.cwd(), "_ops", "runtime", "stripe_events.json");
+export async function POST(req: NextRequest) {
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-06-20" as any });
+  const sig = req.headers.get("stripe-signature");
+  if (!sig) return NextResponse.json({ error: "no sig" }, { status: 400 });
 
-async function loadSet(): Promise<Set<string>> {
+  const raw = await req.text();
+  let event: Stripe.Event;
   try {
-    const buf = await fs.readFile(FILE, "utf8");
-    const arr = JSON.parse(buf) as string[];
-    return new Set(arr);
-  } catch {
-    return new Set();
+    event = stripe.webhooks.constructEvent(raw, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 400 });
   }
-}
 
-async function saveSet(set: Set<string>) {
-  await fs.mkdir(path.dirname(FILE), { recursive: true });
-  const arr = Array.from(set);
-  await fs.writeFile(FILE, JSON.stringify(arr, null, 2));
-}
-
-export async function POST(req: Request) {
-  // Rate limiting
-  const rateLimitKey = getRateLimitKey(req, 'stripe-webhook');
-  if (!checkRateLimit(rateLimitKey, 30, 30)) {
-    return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const email = (session.customer_details?.email || session.customer_email || "").toLowerCase();
+    if (email) {
+      // TODO: اربط DB/Redis. مؤقتًا: نادِ داخليًا نقطة VIP لديك إن كانت موجودة.
+      try {
+        await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/user/vip/dev/grant`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+      } catch {}
+    }
   }
-  
-  let body: any;
-  try { 
-    body = await req.json(); 
-  } catch { 
-    return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); 
-  }
-  
-  const id = body?.id;
-  if (typeof id !== "string" || !id) {
-    return NextResponse.json({ ok: false, error: "missing_id" }, { status: 400 });
-  }
-  
-  // Deduplication check
-  const set = await loadSet();
-  const duplicate = set.has(id);
-  if (!duplicate) { 
-    set.add(id); 
-    await saveSet(set); 
-    
-    // Process P0 events
-    await processStripeEvent(body);
-  }
-  
-  return NextResponse.json({ ok: true, duplicate }, { status: 200 });
+  return NextResponse.json({ ok: true });
 }
 
 async function processStripeEvent(event: any) {
