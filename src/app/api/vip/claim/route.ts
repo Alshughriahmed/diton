@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { cookies } from "next/headers";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import crypto from "crypto";
@@ -30,16 +29,20 @@ export async function GET(req: NextRequest) {
   const exp = typeof cs.expires_at === "number" ? cs.expires_at : Math.floor(Date.now()/1000) + 30*24*3600;
   const value = sign(email, exp);
 
-  cookies().set({
+  const res = NextResponse.redirect(new URL("/chat", req.url));
+  const isProd = process.env.NODE_ENV === "production";
+  
+  res.cookies.set({
     name: "vip",
     value,
     httpOnly: true,
     secure: true,
     sameSite: "lax",
     path: "/",
-    domain: ".ditonachat.com",
+    // لا تضع domain في المعاينة/المحلي حتى لا تفشل الكوكيز
+    ...(isProd ? { domain: ".ditonachat.com" } : {}),
     maxAge: Math.max(0, exp - Math.floor(Date.now()/1000)),
   });
 
-  return NextResponse.redirect(new URL("/chat", req.url));
+  return res;
 }
