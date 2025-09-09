@@ -57,7 +57,7 @@ export default function CountrySelect(){
           aria-haspopup="listbox" aria-expanded={open}>
           Countries {countries.includes("ALL") ? "(All)" : `(${countries.length})`}
         </button>
-        {!isVip && <span className="ml-2 text-[10px] opacity-60">VIP</span>}
+        {!isVip && process.env.NEXT_PUBLIC_FREE_FOR_ALL !== "1" && <span className="ml-2 text-[10px] opacity-60">VIP</span>}
       {open && (
         <div className="absolute right-0 mt-2 z-[40] w-[460px] max-h-[320px] overflow-auto p-3 rounded-xl bg-neutral-900 border border-neutral-700 shadow-lg">
           <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search countries..."

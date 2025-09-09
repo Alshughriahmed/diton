@@ -28,7 +28,7 @@ export default function ChatToolbar(){
           }}
         >
           Prev
-          {!isVip && <span className="ml-1 text-xs">🔒</span>}
+          {!isVip && process.env.NEXT_PUBLIC_FREE_FOR_ALL !== "1" && <span className="ml-1 text-xs">🔒</span>}
         </button>
         
         {/* الأزرار الوسطى */}
@@ -77,7 +77,7 @@ export default function ChatToolbar(){
             aria-label="Masks"
           >
             🤡
-            {!isVip && <span className="absolute -top-1 -right-1 text-[10px]">🔒</span>}
+            {!isVip && process.env.NEXT_PUBLIC_FREE_FOR_ALL !== "1" && <span className="absolute -top-1 -right-1 text-[10px]">🔒</span>}
           </button>
 
           {/* Settings ⚙️ */}

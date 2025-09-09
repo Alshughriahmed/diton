@@ -19,7 +19,7 @@ export default function GenderSelect(){
             <option key={g.value} value={g.value}>{g.label}</option>
           ))}
         </select>
-        {!isVip && <span className="text-[10px] opacity-60">VIP</span>}
+        {!isVip && process.env.NEXT_PUBLIC_FREE_FOR_ALL !== "1" && <span className="text-[10px] opacity-60">VIP</span>}
       </div>
     </div>
   );

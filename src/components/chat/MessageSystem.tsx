@@ -106,10 +106,33 @@ export default function MessageSystem({ onSend, isGuest = false }: MessageSystem
     }
   };
 
-  const sendQuickEmoji = (emoji: string) => {
-    if (!canSendMessage) {
-      alert("Guest users can only send 3 messages. Sign up for unlimited messaging!");
+  const sendQuickEmoji = async (emoji: string) => {
+    // Check FREE_FOR_ALL mode
+    const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+    
+    if (!freeForAll && !canSendMessage) {
+      // Import emit dynamically to trigger upsell
+      const { emit } = await import('@/utils/events');
+      emit('ui:upsell', 'guest-messages');
       return;
+    }
+    
+    // Make actual API call to /api/message
+    try {
+      const res = await fetch('/api/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txt: emoji })
+      });
+      
+      if (res.status === 429) {
+        // Import emit dynamically to trigger upsell
+        const { emit } = await import('@/utils/events');
+        emit('ui:upsell', 'guest-messages');
+        return;
+      }
+    } catch (error) {
+      console.warn('Message API error:', error);
     }
     
     addMessage(emoji, 'me', emoji);
@@ -208,7 +231,7 @@ export default function MessageSystem({ onSend, isGuest = false }: MessageSystem
         )}
 
         {/* Message Counter for Guests */}
-        {isGuest && (
+        {isGuest && process.env.NEXT_PUBLIC_FREE_FOR_ALL !== "1" && (
           <div className="px-2 py-1 bg-yellow-600/20 border border-yellow-500/30 rounded text-xs text-yellow-200">
             {messageCount}/{MAX_GUEST_MESSAGES} messages
           </div>
