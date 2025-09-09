@@ -21,8 +21,18 @@ export async function POST(req: NextRequest) {
       isVip: true
     });
     
-    // Set VIP cookie as well for immediate frontend access
-    res.cookies.set("vip", "1", { path: "/", sameSite: "lax", httpOnly: false, maxAge: 60 * 60 * 24 * 30 });
+    // Set VIP cookie with security attributes
+    const prod = process.env.VERCEL_ENV === "production";
+    res.cookies.set({
+      name: "vip",
+      value: "1",                 // للاختبار فقط. في الإنتاج استخدم claim الموقّع.
+      httpOnly: true,
+      secure: prod,               // true على الإنتاج
+      sameSite: "lax",
+      path: "/",
+      ...(prod ? { domain: ".ditonachat.com" } : {}),
+      maxAge: 60 * 60 * 24 * 30   // 30 يوم
+    });
     
     return res;
   } catch (error) {
