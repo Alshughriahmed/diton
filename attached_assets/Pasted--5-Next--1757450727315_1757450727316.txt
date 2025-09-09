@@ -1,0 +1,150 @@
+الدفعة 5 — ترتيب/تموضع الواجهة (وفق المواصفات النهائية)
+الهدف المختصر
+
+الشريط السفلي: يمين = Next (أكبر)، يسار = Prev (مقفول لغير-VIP)، والوسط بالترتيب:
+MutePeer 🔈 → Mic 🎙️ → Like ❤ → Masks 🤡 → Settings ⚙️ → Pause ⏯️ → Report 🚩 → Messages 💬
+
+Country/Gender أعلى يمين القسم العلوي (بدون تراكب).
+
+MyControls (Switch Cam + Beauty) أعلى يمين القسم السفلي.
+
+لا تكرارات/تراكبات/نصوص تقنية.
+
+ملاحظة: إن تعارضت الأسطر أثناء تطبيق الباتش، يُسمح للوكيل بإجراء نفس التعديلات يدويًا مع الحفاظ على السلوك المطلوب ثم تشغيل سكربت القبول.
+
+1) باتش ترتيب الشريط السفلي
+
+احفظه 5001-toolbar-order.patch ثم طبّقه بـgit apply.
+
+*** a/src/components/chat/ChatToolbar.tsx
+--- b/src/components/chat/ChatToolbar.tsx
+@@
+-export default function ChatToolbar(){
+-  return (
+-    <div className="w-full px-3 py-2 flex items-center gap-2">
+-      {/* existing order */}
+-    </div>
+-  )
+-}
++export default function ChatToolbar(){
++  return (
++    <div className="w-full px-3 py-2 flex items-center justify-between gap-2">
++      {/* يسار: Prev */}
++      <div className="shrink-0">
++        <button aria-label="Prev" className="px-3 py-2 rounded bg-neutral-800 text-white opacity-80 hover:opacity-100">
++          ⟵ Prev
++        </button>
++      </div>
++      {/* وسط: الأدوات بالترتيب */}
++      <div className="flex items-center gap-2">
++        <button aria-label="MutePeer" className="px-3 py-2 rounded bg-neutral-800 text-white">🔈</button>
++        <button aria-label="Mic" className="px-3 py-2 rounded bg-neutral-800 text-white">🎙️</button>
++        <button aria-label="Like" className="px-3 py-2 rounded bg-neutral-800 text-white">❤</button>
++        <button aria-label="Masks" className="px-3 py-2 rounded bg-neutral-800 text-white">🤡</button>
++        <button aria-label="Settings" className="px-3 py-2 rounded bg-neutral-800 text-white">⚙️</button>
++        <button aria-label="Pause" className="px-3 py-2 rounded bg-neutral-800 text-white">⏯️</button>
++        <button aria-label="Report" className="px-3 py-2 rounded bg-neutral-800 text-white">🚩</button>
++        <button aria-label="Messages" className="px-3 py-2 rounded bg-neutral-800 text-white">💬</button>
++      </div>
++      {/* يمين: Next (أكبر) */}
++      <div className="shrink-0">
++        <button aria-label="Next" className="px-5 py-2 rounded bg-emerald-600 text-white font-medium">
++          Next ⟶
++        </button>
++      </div>
++    </div>
++  )
++}
+
+2) باتش تموضع المرشحات أعلى يمين القسم العلوي
+
+احفظه 5002-filters-placement.patch.
+
+*** a/src/components/filters/CountryFilter.tsx
+--- b/src/components/filters/CountryFilter.tsx
+@@
+-export default function CountryFilter(){
+-  /* existing UI */
+-}
++export default function CountryFilter(){
++  return (
++    <div className="absolute top-2 right-2 z-50">
++      {/* existing select/list UI */}
++    </div>
++  );
++}
+*** a/src/components/filters/GenderFilter.tsx
+--- b/src/components/filters/GenderFilter.tsx
+@@
+-export default function GenderFilter(){
+-  /* existing UI */
+-}
++export default function GenderFilter(){
++  return (
++    <div className="absolute top-2 right-40 z-50">
++      {/* existing select/list UI */}
++    </div>
++  );
++}
+
+
+لو كان لديك Container علوي خاص بالـremote، يُفضّل تضمين هذين المكونين داخله لضمان التموضع الصحيح على كل المقاسات.
+
+3) باتش تموضع أدواتي (Switch Cam + Beauty) أعلى يمين القسم السفلي
+
+احفظه 5003-mycontrols-beauty.patch.
+
+*** a/src/components/chat/MyControls.tsx
+--- b/src/components/chat/MyControls.tsx
+@@
+-export default function MyControls(){
+-  /* existing */
+-}
++export default function MyControls(){
++  return (
++    <div className="absolute top-2 right-2 z-30 flex items-center gap-2">
++      <button aria-label="Switch Camera" className="px-3 py-2 rounded bg-neutral-800 text-white">🎥</button>
++      <button aria-label="Beauty" className="px-3 py-2 rounded bg-neutral-800 text-white">✨</button>
++      <span className="text-xs bg-black/60 text-white px-2 py-0.5 rounded">Beauty ON</span>
++    </div>
++  );
++}
+
+4) سكربت قبول سريع (رؤوس/صفحات/صحة)
+
+احفظه acc_layout.sh ثم شغّله.
+
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+echo "[Headers] /chat"
+curl -s -I "$BASE/chat" | grep -iE 'Permissions-Policy|Content-Security-Policy' | sed -E 's/;.*$//'
+echo "[Legal]"
+for p in privacy terms dmca abuse 2257 ; do
+  echo -n "/$p -> "; curl -s -o /dev/null -w "%{http_code}\n" "$BASE/$p";
+done
+echo "[Health] /api/health -> $(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health")"
+
+5) خطوات التنفيذ المختصرة (للنسخ-واللصق)
+git checkout -b feature/batch-5
+git apply 5001-toolbar-order.patch || true
+git apply 5002-filters-placement.patch || true
+git apply 5003-mycontrols-beauty.patch || true
+
+pnpm i --frozen-lockfile
+pnpm build || pnpm dev
+
+bash acc_layout.sh https://www.ditonachat.com
+
+git add -A && git commit -m "Batch 5: UI placement/order finalization (toolbar, filters, my-controls)"
+
+
+المخرجات المتوقعة:
+
+يظهر في acc_layout.sh رؤوس Permissions-Policy وCSP.
+
+صفحات القوانين 200.
+
+شريط الرسائل ما زال فوق الشريط السفلي (من الدفعة 1).
+
+الترتيب والتموضع حسب المواصفات دون تراكبات/تكرارات.
