@@ -27,9 +27,16 @@ export default function ChatToolbar(){
             <button 
               onClick={() => emit("ui:toggleMic")}
               className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
-              aria-label="Toggle Mic"
+              aria-label="Mic"
             >
-              🎤
+              🎙️
+            </button>
+            <button 
+              onClick={() => emit("ui:toggleRemoteAudio" as any)}
+              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
+              aria-label="Mute remote"
+            >
+              🔈
             </button>
             <button 
               onClick={() => emit("ui:switchCamera")}
@@ -52,11 +59,25 @@ export default function ChatToolbar(){
           <div className="flex items-center gap-2">
             <FriendsView />
             <button 
+              onClick={() => emit("ui:toggleMasks" as any)}
+              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
+              aria-label="Masks"
+            >
+              🤡
+            </button>
+            <button 
+              onClick={() => emit("ui:togglePlay" as any)}
+              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
+              aria-label="Stop/Play"
+            >
+              ⏯️
+            </button>
+            <button 
               onClick={() => emit("ui:report")}
               className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm border border-red-700 hover:bg-red-700 transition-colors" 
               aria-label="Report"
             >
-              🚫
+              🚩
             </button>
             <button 
               onClick={() => {

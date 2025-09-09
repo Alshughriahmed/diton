@@ -11,6 +11,9 @@ import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import MessageSystem from "@/components/chat/MessageSystem";
 import { getMobileOptimizer } from "@/lib/mobile";
+import { toast } from "@/lib/ui/toast";
+import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
+import { useProfile } from "@/state/profile";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
@@ -28,6 +31,8 @@ export default function ChatClient(){
   const [beauty,setBeauty]=useState(false);
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const [isGuest, setIsGuest] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const { profile } = useProfile();
 
   useKeyboardShortcuts();
 
@@ -47,20 +52,47 @@ export default function ChatClient(){
     });
     let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
     let off5=on("ui:like",(data)=>{ 
-      setLike(data.isLiked); 
-      setMyLikes(data.myLikes);
+      setLike(data?.isLiked || false); 
+      setMyLikes(data?.myLikes || 0);
       
       // Update LikeSystem component
       emit("ui:likeUpdate", {
-        myLikes: data.myLikes,
+        myLikes: data?.myLikes || 0,
         peerLikes: peerLikes,
-        isLiked: data.isLiked,
+        isLiked: data?.isLiked || false,
         canLike: true
       });
     });
-    let off6=on("ui:report",()=>{ /* open report modal placeholder */ });
-    let off7=on("ui:next",()=>{ next(); doMatch(); });
-    let off8=on("ui:prev",()=>{ prev(); doMatch(true); });
+    let off6=on("ui:report", async ()=>{ 
+      try{ 
+        await fetch('/api/moderation/report',{method:'POST'}); 
+        toast('🚩 تم إرسال البلاغ وجاري الانتقال'); 
+      }catch{}
+      nextMatch({gender, countries});
+    });
+    let off7=on("ui:next",()=>{ nextMatch({gender, countries}); });
+    let off8=on("ui:prev",()=>{ tryPrevOrRandom({gender, countries}); });
+    let offRemoteAudio=on("ui:toggleRemoteAudio", ()=>{
+      const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
+      if(v){ v.muted = !v.muted; toast(v.muted?'🔇 صمت الطرف الثاني':'🔈 سماع الطرف الثاني'); }
+    });
+    let offTogglePlay=on("ui:togglePlay", ()=>{
+      setPaused(p => !p);
+      toast('تبديل حالة المطابقة');
+    });
+    let offToggleMasks=on("ui:toggleMasks", ()=>{
+      toast('🤡 تفعيل/إلغاء الأقنعة');
+    });
+    let offUpsell=on("ui:upsell", (feature)=>{
+      toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
+    });
+    let offGenderFilter=on("filters:gender", (value)=>{
+      setGender(value);
+      toast(`تم تحديد الجنس: ${value}`);
+    });
+    let offCountryFilter=on("filters:country", (value)=>{
+      toast(`تم اختيار الدولة: ${value}`);
+    });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
         const effects = getVideoEffects();
@@ -132,7 +164,11 @@ export default function ChatClient(){
       // Handle viewport changes for mobile optimization
       console.log('Viewport changed:', viewport);
     });
-    return ()=>{ off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); unsubscribeMobile(); };
+    return ()=>{ 
+      off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
+      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilter();offCountryFilter();
+      unsubscribeMobile(); 
+    };
   },[]);
 
 
@@ -150,15 +186,22 @@ export default function ChatClient(){
     busyRef.current = false;
   }
 
-  // Gesture swipe: يسار/يمين = Prev/Next
+  // Pointer gesture swipe: يسار/يمين = Prev/Next
   useEffect(()=>{
-    let sx=0, sy=0, dx=0, dy=0;
-    const start=(e:TouchEvent)=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; };
-    const move=(e:TouchEvent)=>{ const t=e.touches[0]; dx=t.clientX-sx; dy=t.clientY-sy; };
-    const end=()=>{ if(Math.abs(dx)>80 && Math.abs(dy)<60){ if(dx<0) emit("ui:next"); else emit("ui:prev"); } sx=sy=dx=dy=0; };
-    const el=document.getElementById("gesture-layer"); if(!el) return;
-    el.addEventListener("touchstart",start,{passive:true}); el.addEventListener("touchmove",move,{passive:true}); el.addEventListener("touchend",end);
-    return ()=>{ el.removeEventListener("touchstart",start); el.removeEventListener("touchmove",move); el.removeEventListener("touchend",end); };
+    let x0=0, y0=0, moved=false;
+    const down=(e:PointerEvent)=>{ x0=e.clientX; y0=e.clientY; moved=false; };
+    const up=(e:PointerEvent)=>{
+      const dx=e.clientX-x0, dy=e.clientY-y0;
+      if(Math.abs(dx) > 60 && Math.abs(dy) < 60){
+        if(dx<0) emit('ui:next'); else emit('ui:prev');
+      }
+    };
+    window.addEventListener('pointerdown',down);
+    window.addEventListener('pointerup',up);
+    return ()=>{
+      window.removeEventListener('pointerdown',down);
+      window.removeEventListener('pointerup',up);
+    };
   },[]);
 
   function toggleCountry(code:string){ 
