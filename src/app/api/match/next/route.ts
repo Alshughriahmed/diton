@@ -1,6 +1,9 @@
 import { allow, ipFrom } from "../../../../lib/ratelimit";
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { requireVip } from "../../../../utils/vip";
+
+export const runtime = "nodejs"; // نحتاج الوصول للكوكيز بثبات
 export const dynamic = "force-dynamic";
 
 // hCaptcha verification function
@@ -78,11 +81,15 @@ export async function GET(req: Request) {
   
   const p = parse({ gender, countries });
   
-  // VIP filters check
+  // VIP filters check with enhanced country restrictions
   const genders = Array.isArray(p.gender) ? p.gender : (p.gender ? [p.gender] : []);
   const countriesArray = p.countries || [];
   
   const isVip = await requireVip();
+  const c = await cookies();
+  const myCountry = c.get("geo")?.value || req.headers.get("x-geo-country") || "";
+
+  // غير-VIP: gender ≤ 1، countries ≤ 1، والدولة = ALL أو بلدي فقط
   if (!isVip && process.env.FREE_FOR_ALL !== "1") {
     if (genders.length > 1) {
       return NextResponse.json({ error: "VIP gender filter" }, { status: 403 });
@@ -90,13 +97,18 @@ export async function GET(req: Request) {
     if (countriesArray.length > 1) {
       return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
     }
+    if (countriesArray.length === 1 && countriesArray[0] !== "ALL" && myCountry && countriesArray[0] !== myCountry) {
+      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+    }
   }
+
+  // VIP: حدود أمان فقط
   if (isVip) {
     if (genders.length > 2) {
-      return NextResponse.json({ error: "max 2 genders" }, { status: 400 });
+      return NextResponse.json({ error: "gender too many" }, { status: 400 });
     }
     if (countriesArray.length > 15) {
-      return NextResponse.json({ error: "max 15 countries" }, { status: 400 });
+      return NextResponse.json({ error: "countries too many" }, { status: 400 });
     }
   }
   
@@ -131,11 +143,15 @@ export async function POST(req: Request) {
   
   const p = parse(params);
   
-  // VIP filters check  
+  // VIP filters check with enhanced country restrictions
   const genders = Array.isArray(p.gender) ? p.gender : (p.gender ? [p.gender] : []);
   const countriesArray = p.countries || [];
   
   const isVip = await requireVip();
+  const c = await cookies();
+  const myCountry = c.get("geo")?.value || req.headers.get("x-geo-country") || "";
+
+  // غير-VIP: gender ≤ 1، countries ≤ 1، والدولة = ALL أو بلدي فقط
   if (!isVip && process.env.FREE_FOR_ALL !== "1") {
     if (genders.length > 1) {
       return NextResponse.json({ error: "VIP gender filter" }, { status: 403 });
@@ -143,13 +159,18 @@ export async function POST(req: Request) {
     if (countriesArray.length > 1) {
       return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
     }
+    if (countriesArray.length === 1 && countriesArray[0] !== "ALL" && myCountry && countriesArray[0] !== myCountry) {
+      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+    }
   }
+
+  // VIP: حدود أمان فقط
   if (isVip) {
     if (genders.length > 2) {
-      return NextResponse.json({ error: "max 2 genders" }, { status: 400 });
+      return NextResponse.json({ error: "gender too many" }, { status: 400 });
     }
     if (countriesArray.length > 15) {
-      return NextResponse.json({ error: "max 15 countries" }, { status: 400 });
+      return NextResponse.json({ error: "countries too many" }, { status: 400 });
     }
   }
   
