@@ -37,6 +37,30 @@ export default function MessageSystem({ onSend, isGuest = false }: MessageSystem
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Mobile keyboard support
+  useEffect(() => {
+    const handleViewportChange = () => {
+      if (typeof window !== 'undefined' && 'visualViewport' in window) {
+        const viewport = window.visualViewport;
+        if (viewport) {
+          const isKeyboardOpen = viewport.height < window.innerHeight * 0.8;
+          const container = document.querySelector('[data-chat-container]') as HTMLElement;
+          
+          if (isKeyboardOpen && container) {
+            container.style.paddingBottom = `${window.innerHeight - viewport.height}px`;
+          } else if (container) {
+            container.style.paddingBottom = '0px';
+          }
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined' && 'visualViewport' in window) {
+      window.visualViewport?.addEventListener('resize', handleViewportChange);
+      return () => window.visualViewport?.removeEventListener('resize', handleViewportChange);
+    }
+  }, []);
+
   // Mock incoming messages for demo
   useEffect(() => {
     const interval = setInterval(() => {
