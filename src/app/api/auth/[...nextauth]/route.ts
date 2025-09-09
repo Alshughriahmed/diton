@@ -26,10 +26,6 @@ export const authOptions = {
       // Legacy support
       session.isVip = token.isVip || token.vip || false;
       // تفضيل الكوكي للعرض فقط
-      try {
-        const { cookies } = await import("next/headers");
-        if (cookies().get("vip")?.value === "1") (session as any).vip = true;
-      } catch {}
       return session;
     },
   },
