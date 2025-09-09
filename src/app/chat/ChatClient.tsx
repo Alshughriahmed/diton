@@ -41,6 +41,7 @@ export default function ChatClient(){
   const [isGuest, setIsGuest] = useState(false);
   const [paused, setPaused] = useState(false);
   const [showMessaging, setShowMessaging] = useState(false);
+  const [showUpsell, setShowUpsell] = useState(false);
   const { profile } = useProfile();
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
@@ -132,6 +133,13 @@ export default function ChatClient(){
       toast('🤡 تفعيل/إلغاء الأقنعة');
     });
     let offUpsell=on("ui:upsell", (feature)=>{
+      const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+      if (freeForAll) {
+        // In free mode, don't show upsell, just show notification
+        toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
+        return;
+      }
+      setShowUpsell(true);
       toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
     });
     let offCountryFilter=on("filters:country", (value)=>{
@@ -368,7 +376,7 @@ export default function ChatClient(){
       <ChatToolbar />
       
       {/* Upsell Modal */}
-      <UpsellModal />
+      <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
       
       {/* Chat Messaging */}
       <ChatMessagingBar />

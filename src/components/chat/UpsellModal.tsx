@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from "react";
 
-export default function UpsellModal(_: any) {
+interface UpsellModalProps {
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export default function UpsellModal({ open = false, onClose }: UpsellModalProps) {
   const [plans, setPlans] = useState<any[]>([]);
   useEffect(() => {
     (async () => {
@@ -24,10 +29,22 @@ export default function UpsellModal(_: any) {
     } catch {}
   };
 
+  if (!open) return null;
+
   return (
     <div className="fixed inset-0 z-[101] bg-black/60 flex items-center justify-center p-3">
       <div className="bg-white text-black rounded-lg w-full max-w-2xl overflow-hidden">
-        <div className="px-4 py-3 border-b font-semibold">ترقية إلى VIP</div>
+        <div className="px-4 py-3 border-b font-semibold flex justify-between items-center">
+          <span>ترقية إلى VIP</span>
+          {onClose && (
+            <button 
+              onClick={onClose}
+              className="text-gray-500 hover:text-gray-700 text-xl font-bold"
+            >
+              ×
+            </button>
+          )}
+        </div>
         <div className="p-3 max-h-[80vh] overflow-y-auto">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {plans.map((p: any) => (

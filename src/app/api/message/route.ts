@@ -12,6 +12,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid message" }, { status: 400 });
     }
     
+    // FREE_FOR_ALL mode bypasses guest limits
+    const freeForAll = process.env.FREE_FOR_ALL === "1";
+    if (freeForAll) {
+      return NextResponse.json({ ok: true, n: 1, remaining: 999, freeMode: true });
+    }
+    
     const n = (COUNTS.get(ip) || 0) + 1;
     COUNTS.set(ip, n);
     
