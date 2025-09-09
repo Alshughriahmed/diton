@@ -10,6 +10,7 @@ export const metadata: Metadata = {
   keywords: seoConfig.keywords,
   applicationName: seoConfig.siteName,
   metadataBase: new URL(seoConfig.baseUrl),
+  icons: { icon: '/favicon.ico' },
   openGraph: {
     title: pageMetadata.home.title,
     description: pageMetadata.home.description,

@@ -3,18 +3,29 @@ import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useHydrated } from "@/hooks/useHydrated";
 import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
-import { getVideoEffects } from "@/lib/effects";
 import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import MessageSystem from "@/components/chat/MessageSystem";
+import RemoteTopRight from "@/components/chat/RemoteTopRight";
+import PeerInfoCard from "@/components/chat/PeerInfoCard";
+import PeerMetadata from "@/components/chat/PeerMetadata";
+import MyControls from "@/components/chat/MyControls";
+import UpsellModal from "@/components/chat/UpsellModal";
+import ChatToolbar from "@/components/chat/ChatToolbar";
+import ChatMessaging from "@/components/chat/ChatMessaging";
 import { getMobileOptimizer } from "@/lib/mobile";
+import { toast } from "@/lib/ui/toast";
+import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
+import { useProfile } from "@/state/profile";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
 export default function ChatClient(){
+  const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
   const lastTsRef = useRef(0);
   const busyRef = useRef(false);
@@ -28,6 +39,19 @@ export default function ChatClient(){
   const [beauty,setBeauty]=useState(false);
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const [isGuest, setIsGuest] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [showMessaging, setShowMessaging] = useState(false);
+  const { profile } = useProfile();
+  const [peerInfo, setPeerInfo] = useState({
+    name: "Anonymous",
+    isVip: Math.random() > 0.7,
+    likes: Math.floor(Math.random() * 500),
+    isOnline: true,
+    country: "US",
+    city: "New York", 
+    gender: "female",
+    age: 24
+  });
 
   useKeyboardShortcuts();
 
@@ -45,43 +69,115 @@ export default function ChatClient(){
         console.warn('Camera switch failed:', error);
       }
     });
-    let off4=on("ui:openSettings",()=>{ /* open settings modal placeholder */ });
-    let off5=on("ui:like",(data)=>{ 
-      setLike(data.isLiked); 
-      setMyLikes(data.myLikes);
-      
-      // Update LikeSystem component
-      emit("ui:likeUpdate", {
-        myLikes: data.myLikes,
-        peerLikes: peerLikes,
-        isLiked: data.isLiked,
-        canLike: true
-      });
+    let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
+    let off5=on("ui:like", async (data)=>{ 
+      try {
+        // Send like to backend
+        const response = await fetch('/api/likes/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ liked: data?.isLiked || true })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          setLike(data?.isLiked || false); 
+          setMyLikes(result.myLikes || data?.myLikes || 0);
+          
+          // Update LikeSystem component
+          emit("ui:likeUpdate", {
+            myLikes: result.myLikes || data?.myLikes || 0,
+            peerLikes: result.peerLikes || peerLikes,
+            isLiked: data?.isLiked || false,
+            canLike: true
+          });
+          
+          toast(`تم الإعجاب ${data?.isLiked ? '❤️' : '💔'}`);
+        } else {
+          toast('خطأ في إرسال الإعجاب');
+        }
+      } catch (error) {
+        console.warn('Like failed:', error);
+        // Fallback to local update
+        setLike(data?.isLiked || false); 
+        setMyLikes(data?.myLikes || 0);
+        emit("ui:likeUpdate", {
+          myLikes: data?.myLikes || 0,
+          peerLikes: peerLikes,
+          isLiked: data?.isLiked || false,
+          canLike: true
+        });
+      }
     });
-    let off6=on("ui:report",()=>{ /* open report modal placeholder */ });
-    let off7=on("ui:next",()=>{ next(); doMatch(); });
-    let off8=on("ui:prev",()=>{ prev(); doMatch(true); });
+    let off6=on("ui:report", async ()=>{ 
+      try{ 
+        await fetch('/api/moderation/report',{method:'POST'}); 
+        toast('🚩 تم إرسال البلاغ وجاري الانتقال'); 
+      }catch{}
+      nextMatch({gender, countries});
+    });
+    let off7=on("ui:next",()=>{ nextMatch({gender, countries}); });
+    let off8=on("ui:prev",()=>{ tryPrevOrRandom({gender, countries}); });
+    let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
+    let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
+    let offRemoteAudio=on("ui:toggleRemoteAudio", ()=>{
+      const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
+      if(v){ v.muted = !v.muted; toast(v.muted?'🔇 صمت الطرف الثاني':'🔈 سماع الطرف الثاني'); }
+    });
+    let offTogglePlay=on("ui:togglePlay", ()=>{
+      setPaused(p => !p);
+      toast('تبديل حالة المطابقة');
+    });
+    let offToggleMasks=on("ui:toggleMasks", ()=>{
+      toast('🤡 تفعيل/إلغاء الأقنعة');
+    });
+    let offUpsell=on("ui:upsell", (feature)=>{
+      toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
+    });
+    let offCountryFilter=on("filters:country", (value)=>{
+      // Trigger new match with updated filters
+      doMatch();
+    });
+    let offGenderFilterUpdate=on("filters:gender", (value)=>{
+      // Trigger new match with updated filters  
+      doMatch();
+    });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
-        const effects = getVideoEffects();
-        effects.updateConfig({ beauty: { enabled: data.enabled, ...data.settings } });
-        setBeauty(data.enabled);
+        if (typeof window !== 'undefined') {
+          const { getVideoEffects } = await import("@/lib/effects");
+          const effects = getVideoEffects();
+          if (effects) {
+            effects.updateConfig({ beauty: { enabled: data.enabled, ...data.settings } });
+            setBeauty(data.enabled);
+          }
+        }
       } catch(error) {
         console.warn('Beauty toggle failed:', error);
       }
     });
-    let off10=on("ui:updateBeauty",(data)=>{ 
+    let off10=on("ui:updateBeauty",async (data)=>{ 
       try {
-        const effects = getVideoEffects();
-        effects.updateConfig({ beauty: { enabled: beauty, ...data.settings } });
+        if (typeof window !== 'undefined') {
+          const { getVideoEffects } = await import("@/lib/effects");
+          const effects = getVideoEffects();
+          if (effects) {
+            effects.updateConfig({ beauty: { enabled: beauty, ...data.settings } });
+          }
+        }
       } catch(error) {
         console.warn('Beauty update failed:', error);
       }
     });
-    let off11=on("ui:changeMask",(data)=>{ 
+    let off11=on("ui:changeMask",async (data)=>{ 
       try {
-        const effects = getVideoEffects();
-        effects.updateConfig({ mask: { enabled: data.type !== 'none', type: data.type } });
+        if (typeof window !== 'undefined') {
+          const { getVideoEffects } = await import("@/lib/effects");
+          const effects = getVideoEffects();
+          if (effects) {
+            effects.updateConfig({ mask: { enabled: data.type !== 'none', type: data.type } });
+          }
+        }
       } catch(error) {
         console.warn('Mask change failed:', error);
       }
@@ -90,19 +186,24 @@ export default function ChatClient(){
     initLocalMedia().then(async ()=>{
       const s=getLocalStream(); 
       if(localRef.current && s){ 
-        // Initialize effects if VIP
-        if (vip) {
+        // Initialize effects if VIP or beauty enabled
+        if (vip && typeof window !== 'undefined') {
           try {
+            const { getVideoEffects } = await import("@/lib/effects");
             const effects = getVideoEffects();
-            const video = document.createElement('video');
-            video.srcObject = s;
-            video.play();
-            
-            const processedStream = await effects.initialize(video);
-            if (processedStream) {
-              setEffectsStream(processedStream);
-              localRef.current.srcObject = processedStream;
-              effects.start();
+            if (effects) {
+              const video = document.createElement('video');
+              video.srcObject = s;
+              video.play();
+              
+              const processedStream = await effects.initialize(video);
+              if (processedStream) {
+                setEffectsStream(processedStream);
+                localRef.current.srcObject = processedStream;
+                effects.start();
+              } else {
+                localRef.current.srcObject = s;
+              }
             } else {
               localRef.current.srcObject = s;
             }
@@ -132,7 +233,11 @@ export default function ChatClient(){
       // Handle viewport changes for mobile optimization
       console.log('Viewport changed:', viewport);
     });
-    return ()=>{ off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); unsubscribeMobile(); };
+    return ()=>{ 
+      off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
+      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilterUpdate();offCountryFilter();offOpenMessaging();offCloseMessaging();
+      unsubscribeMobile(); 
+    };
   },[]);
 
 
@@ -150,16 +255,34 @@ export default function ChatClient(){
     busyRef.current = false;
   }
 
-  // Gesture swipe: يسار/يمين = Prev/Next
+  // Enhanced gesture swipe with feedback
   useEffect(()=>{
-    let sx=0, sy=0, dx=0, dy=0;
-    const start=(e:TouchEvent)=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; };
-    const move=(e:TouchEvent)=>{ const t=e.touches[0]; dx=t.clientX-sx; dy=t.clientY-sy; };
-    const end=()=>{ if(Math.abs(dx)>80 && Math.abs(dy)<60){ if(dx<0) emit("ui:next"); else emit("ui:prev"); } sx=sy=dx=dy=0; };
-    const el=document.getElementById("gesture-layer"); if(!el) return;
-    el.addEventListener("touchstart",start,{passive:true}); el.addEventListener("touchmove",move,{passive:true}); el.addEventListener("touchend",end);
-    return ()=>{ el.removeEventListener("touchstart",start); el.removeEventListener("touchmove",move); el.removeEventListener("touchend",end); };
-  },[]);
+    let x0=0, y0=0, moved=false;
+    const down=(e:PointerEvent)=>{ x0=e.clientX; y0=e.clientY; moved=false; };
+    const up=(e:PointerEvent)=>{
+      const dx=e.clientX-x0, dy=e.clientY-y0;
+      if(Math.abs(dx) > 60 && Math.abs(dy) < 60){
+        if(dx<0) {
+          toast('⏭️ سحب للمطابقة التالية');
+          emit('ui:next'); 
+        } else {
+          if (!vip) {
+            toast('🔒 العودة للسابق متاحة لـ VIP فقط');
+            emit('ui:upsell', 'prev');
+          } else {
+            toast('⏮️ محاولة العودة للمطابقة السابقة...');
+            emit('ui:prev');
+          }
+        }
+      }
+    };
+    window.addEventListener('pointerdown',down);
+    window.addEventListener('pointerup',up);
+    return ()=>{
+      window.removeEventListener('pointerdown',down);
+      window.removeEventListener('pointerup',up);
+    };
+  },[vip]);
 
   function toggleCountry(code:string){ 
     const newCountries = countries.includes(code) ? countries.filter(c=>c!==code) : [...countries,code];
@@ -167,55 +290,48 @@ export default function ChatClient(){
   }
   const allCountries=[ "US","DE","FR","GB","TR","AE","SA","EG","JO","IQ","SY","LB","MA","ZA","BR","AR","ES","IT","SE","NO","RU","CN","JP","KR","IN","PK","BD","ID","PH","TH","VN","IR","CA","AU","NZ" ];
 
+  if (!hydrated) {
+    return (
+      <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
+        <div className="h-full grid grid-rows-2 gap-2 p-2">
+          <section className="relative rounded-2xl bg-black/30 overflow-hidden">
+            <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm">
+              Loading...
+            </div>
+          </section>
+          <section className="relative rounded-2xl bg-black/20 overflow-hidden">
+            <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">
+              Initializing...
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
       <div className="h-full grid grid-rows-2 gap-2 p-2">
         {/* ===== Top (peer) ===== */}
         <section className="relative rounded-2xl bg-black/30 overflow-hidden">
-          {/* Top-left: avatar + likes + VIP */}
-          <div className="absolute top-2 left-2 flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-500" aria-label="Peer avatar" />
-            <span className="px-2 py-0.5 rounded-full bg-rose-600/20 border border-rose-500 text-xs">♥ {peerLikes}</span>
-            {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
+          {/* Peer Info Card - Top Left */}
+          <PeerInfoCard peerInfo={peerInfo} />
+          
+          {/* Peer Metadata - Bottom Left */}
+          <PeerMetadata 
+            country={peerInfo.country}
+            city={peerInfo.city}
+            gender={peerInfo.gender}
+            age={peerInfo.age}
+          />
+          
+          {/* Filters - Top Right */}
+          <RemoteTopRight />
+          
+          {/* Like System - Bottom Right */}
+          <div className="absolute bottom-4 right-4 z-30">
+            <LikeSystem />
           </div>
-          {/* Top-right: FilterBar (countries + gender) */}
-          <div className="absolute top-2 right-2 flex items-center gap-2">
-            <div className="relative">
-              <details className="group">
-                <summary className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs cursor-pointer">🌐 Countries ({countries.length||"0"})</summary>
-                <div className="absolute right-0 mt-2 w-64 max-h-64 overflow-auto rounded-xl bg-slate-900/95 border border-slate-700 p-2 space-y-1">
-                  <input placeholder="Search…" className="w-full mb-2 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-xs outline-none" onChange={(e)=>{
-                    const q=e.target.value.toLowerCase(); document.querySelectorAll<HTMLButtonElement>("[data-cc]").forEach(b=>{ b.style.display=b.dataset.cc!.includes(q)?"":"none"; });
-                  }}/>
-                  <div className="grid grid-cols-3 gap-1">
-                    {allCountries.map(c=>(
-                      <button key={c} data-cc={c.toLowerCase()} onClick={(e)=>{e.preventDefault(); toggleCountry(c);}}
-                        className={"text-xs px-2 py-1 rounded border "+(countries.includes(c)?"bg-emerald-700/40 border-emerald-500":"bg-slate-800 border-slate-700")}>{c}</button>
-                    ))}
-                  </div>
-                </div>
-              </details>
-            </div>
-            <div className="relative">
-              <details className="group">
-                <summary className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs cursor-pointer">Gender: {gender[0].toUpperCase()+gender.slice(1)}</summary>
-                <div className="absolute right-0 mt-2 w-40 rounded-xl bg-slate-900/95 border border-slate-700 p-1">
-                  {(["all","male","female","couple","lgbt"] as GenderOpt[]).map(g=>(
-                    <button key={g} className={"w-full text-left text-xs px-2 py-1 rounded "+(gender===g?"bg-emerald-700/40":"hover:bg-slate-800")}
-                      onClick={(e)=>{e.preventDefault(); setGender(g);}}>{g[0].toUpperCase()+g.slice(1)}</button>
-                  ))}
-                </div>
-              </details>
-            </div>
-          </div>
-          {/* Bottom-left: peer meta */}
-          <div className="absolute bottom-2 left-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{match?.countries?.[0]||"—"}</span>
-            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{/* city placeholder */}City</span>
-            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{(match?.gender||"all").toUpperCase()}</span>
-          </div>
-          {/* Like System - Top Right */}
-          <LikeSystem />
           
           {/* Center remote area */}
           <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none">
@@ -229,14 +345,8 @@ export default function ChatClient(){
           <video data-local-video ref={localRef} className="w-full h-full object-cover" playsInline />
           {!ready && <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Requesting camera/mic…</div>}
 
-          {/* Top-right user controls */}
-          <div className="absolute top-2 right-2 flex items-center gap-2">
-            <button aria-label="Switch Camera" className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs"
-              onClick={async (e)=>{e.preventDefault(); const s=await switchCamera(); if(localRef.current&&s){localRef.current.srcObject=s; localRef.current.play().catch(()=>{});} }}>↺</button>
-            <button aria-label="Beauty" className={"px-3 py-1.5 rounded-full border text-xs "+(beauty?"bg-fuchsia-700/30 border-fuchsia-500":"bg-slate-800/80 border-slate-600")}
-              onClick={(e)=>{e.preventDefault(); setBeauty(v=>!v);}}>✨</button>
-            {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
-          </div>
+          {/* My Controls - Top Right */}
+          <MyControls />
 
           {/* Enhanced Message System */}
           <div className="absolute inset-x-0 bottom-14">
@@ -249,29 +359,22 @@ export default function ChatClient(){
             />
           </div>
 
-          {/* Bottom toolbar: Prev | middle controls | Next */}
-          <div className="absolute inset-x-2 bottom-2" data-toolbar>
-            <div className="flex items-center justify-between gap-2">
-              <button aria-label="Prev" className="px-5 py-2 rounded-full bg-neutral-800 text-white text-sm border border-neutral-700"
-                onClick={(e)=>{e.preventDefault(); emit("ui:prev");}}>⏮️ Prev</button>
-              <div className="flex items-center gap-2">
-                <button aria-label="Mic" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:toggleMic");}}>🎙️</button>
-                <button aria-label="Camera" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:toggleCam");}}>📷</button>
-                <button aria-label="Speaker" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700">🔊</button>
-                <button aria-label="Settings" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:openSettings");}}>⚙️</button>
-                <button aria-label="Report" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:report");}}>🛡️</button>
-                <button aria-label="Like" className={"px-3 py-2 rounded-lg border "+(like?"bg-rose-600/40 border-rose-400":"bg-neutral-800 border-neutral-700")}
-                  onClick={(e)=>{e.preventDefault(); emit("ui:like");}}>♥ {myLikes}</button>
-              </div>
-              <button aria-label="Next" className="px-5 py-2 rounded-full bg-emerald-600 text-white text-sm border border-emerald-500"
-                onClick={(e)=>{e.preventDefault(); emit("ui:next");}}>Next ⏭️</button>
-            </div>
-          </div>
-
           {/* Gesture layer */}
           <div id="gesture-layer" className="absolute inset-0 -z-10" />
         </section>
       </div>
+      
+      {/* Chat Toolbar */}
+      <ChatToolbar />
+      
+      {/* Upsell Modal */}
+      <UpsellModal />
+      
+      {/* Chat Messaging */}
+      <ChatMessaging 
+        isVisible={showMessaging} 
+        onToggle={() => setShowMessaging(!showMessaging)} 
+      />
     </div>
   );
 }

@@ -1,120 +1,69 @@
 # Overview
-
-DitonaChat is a Next.js-based video chat platform that connects users with strangers worldwide for 18+ adult conversations. The application features a modern React frontend with real-time video communication capabilities, user authentication through NextAuth, and premium subscription management via Stripe. The platform includes safety features, moderation tools, and enhanced user experience elements like AR masks, translation services, and social features.
+DitonaChat is a Next.js-based video chat platform designed for connecting users globally for 18+ adult conversations. It features a modern React frontend, real-time video communication via WebRTC, user authentication with NextAuth, and premium subscription management through Stripe. The platform emphasizes a rich user experience with features like AR masks, translation services, social interactions, and robust safety/moderation tools, aiming to provide a secure and engaging environment for adult communication.
 
 # User Preferences
-
 Preferred communication style: Simple, everyday language.
 
 # System Architecture
-
-## Frontend Architecture
-- **Framework**: Next.js 15.5.2 with React 19.1.1 and TypeScript
-- **UI Components**: Component-based architecture with dynamic imports for performance
-- **Styling**: Tailwind CSS with responsive design and Arabic language support
-- **State Management**: React hooks and context for user sessions and VIP status
-- **Client-Side Routing**: Next.js App Router with protected routes and middleware
+## Frontend
+- **Framework**: Next.js 15.5.2 (React 19.1.1, TypeScript), utilizing the App Router.
+- **UI/UX**: Component-based architecture with Tailwind CSS for responsive design and Arabic language support. Features include a professional 8-button toolbar, `PeerInfoCard` for peer details, `PeerMetadata` for contextual information (country, gender, age), and `MyControls` for personal camera/beauty settings.
+- **State Management**: React hooks and context API, with Zustand for persistent profile storage (e.g., `ditona.profile.v1` in localStorage).
+- **Navigation**: Client-side routing with protected routes and middleware, including seamless navigation between chat and settings.
 
 ## Authentication & Session Management
-- **Provider**: NextAuth 4.24.11 with Google OAuth integration
-- **Session Storage**: JWT tokens with secure HTTP-only cookies
-- **Age Verification**: Cookie-based age confirmation system for 18+ compliance
-- **User Roles**: Guest, authenticated user, and VIP subscription tiers
+- **Provider**: NextAuth 4.24.11 with Google OAuth for user authentication.
+- **Session**: JWT tokens via secure HTTP-only cookies.
+- **Access Control**: Cookie-based 18+ age verification and role-based access (Guest, Authenticated, VIP).
 
 ## Real-Time Communication
-- **WebRTC**: Peer-to-peer video chat with TURN/STUN server fallbacks
-- **Socket.io**: Real-time messaging and event broadcasting (4.8.1)
-- **Media Bridge**: Custom utilities for gesture detection and media stream management
-- **Auto-Next**: Automatic peer switching on connection failures or user action
+- **Video Chat**: WebRTC for peer-to-peer connections, supported by TURN/STUN servers for NAT traversal.
+- **Messaging & Events**: Socket.io 4.8.1 for real-time messaging and event broadcasting.
+- **Features**: Auto-Next for automatic peer switching, custom media bridge for gesture detection, and enhanced media controls (audio, mask toggles).
 
-## Payment & Subscription System
-- **Payment Processor**: Stripe integration for VIP subscriptions
-- **Subscription Tiers**: Multiple pricing plans (daily, weekly, monthly, yearly)
-- **Rate Limiting**: API protection for payment endpoints
-- **Portal Integration**: Customer billing management through Stripe portal
+## Payment & Subscription
+- **Processor**: Stripe for VIP subscription management, supporting multiple pricing plans (daily, weekly, monthly, yearly).
+- **Integration**: Stripe Checkout for hosted payment pages and Stripe Customer Portal for billing management.
+- **Monetization**: Comprehensive VIP lock system with visual indicators (🔒) and a dynamic upsell modal that provides feature-specific content.
 
 ## Security & Safety
-- **Content Security Policy**: Comprehensive CSP headers in middleware
-- **Rate Limiting**: Request throttling for sensitive endpoints
-- **Age Verification**: Mandatory 18+ confirmation with persistent cookies
-- **Reporting System**: In-app abuse reporting and moderation tools
+- **Policies**: Content Security Policy (CSP) headers and request throttling for sensitive endpoints.
+- **User Protection**: Mandatory 18+ age verification, in-app reporting system for abuse, and moderation tools.
 
 ## Performance & Monitoring
-- **Caching**: Smart cache implementation with TTL support
-- **Metrics API**: Real-time monitoring of system performance and WebRTC stats
-- **Error Tracking**: Client-side error monitoring and reporting
-- **Health Checks**: System health endpoints for uptime monitoring
+- **Optimization**: Smart caching with TTL support.
+- **Telemetry**: Metrics API for WebRTC stats, client-side error monitoring, and health checks.
 
 ## Enhanced Features
-- **AR Masks**: Video filter system with multiple mask options
-- **Translation**: Multi-language support with real-time translation
-- **Friends System**: Social features for user connections
-- **Screen Effects**: Visual feedback for user interactions
-- **Gender Filtering**: User preference-based matching system
+- **Visuals**: AR Masks (Jeeliz/MediaPipe), beauty effects (MediaPipe), and screen effects.
+- **Social**: Friends system with "liked by me" and "liked by them" views, like system with real-time animations.
+- **Matching**: Gender and country filtering with VIP gating and intelligent upsell prompts, camera switching, and auto-next functionality.
+- **Localization**: Multi-language support with real-time translation options.
+- **Interaction**: Gesture-based navigation (swipe for Next/Previous), custom toast notification system for user feedback, and advanced messaging features.
 
 # External Dependencies
-
 ## Core Technologies
-- **Next.js 15.5.2**: Full-stack React framework with App Router
-- **React 19.1.1**: Frontend UI library with concurrent features
-- **TypeScript 5.9.2**: Type safety and development tooling
-- **Socket.io-client 4.8.1**: Real-time bidirectional communication
+- **Next.js**: Full-stack React framework.
+- **React**: Frontend UI library.
+- **TypeScript**: Type-safe development.
+- **Socket.io-client**: Real-time communication.
 
 ## Authentication Services
-- **NextAuth 4.24.11**: Authentication library with OAuth providers
-- **Google OAuth**: Primary authentication provider integration
+- **NextAuth**: Authentication library.
+- **Google OAuth**: Primary authentication provider.
 
 ## Payment Processing
-- **Stripe**: Payment gateway for subscription management
-- **Stripe Checkout**: Hosted payment page integration
-- **Stripe Customer Portal**: Self-service billing management
+- **Stripe**: Payment gateway for subscriptions.
 
 ## WebRTC Infrastructure
-- **TURN/STUN Servers**: ICE server configuration for NAT traversal
-- **Google STUN**: Public STUN servers for connection establishment
-- **Custom TURN**: Environment-configurable TURN server support
+- **TURN/STUN Servers**: For NAT traversal.
+- **Google STUN**: Public STUN servers.
 
 ## Development Tools
-- **ESLint 9.34.0**: Code linting and style enforcement
-- **PNPM**: Package manager for dependency management
-- **TypeScript ESLint**: TypeScript-specific linting rules
+- **ESLint**: Code linting.
+- **PNPM**: Package manager.
 
 ## Optional Integrations
-- **Translation API**: External service for real-time message translation
-- **Analytics**: User behavior tracking and metrics collection
-- **Content Moderation**: Automated content filtering and safety systems
-
-## Recent Implementation (September 8, 2025)
-
-### Phase 1 Features Complete Implementation
-
-Successfully implemented comprehensive Phase 1 requirements for DitonaChat video platform:
-
-#### Advanced Filtering System
-**1. Country Filter**: Dropdown with 2-column layout, search functionality, max 15 countries for VIP (unlimited for free)
-**2. Gender Filter**: Clean UI matching theme, max 2 selections for VIP, "All/Male/Female/Couple/LGBT" options
-**3. VIP Feature Gating**: FREE_FOR_ALL=1 compatible with internal restrictions and upsell prompts
-
-#### Camera & Media Controls
-**4. Camera Switching**: WebRTC-based front/back camera toggle with proper stream replacement
-**5. Beauty Effects**: MediaPipe integration for real-time facial enhancement (VIP-only feature)
-**6. AR Masks**: Strip-based mask selection system with Jeeliz/MediaPipe backend (VIP-only)
-
-#### Social Features
-**7. Like System**: Real-time heart animations, counter persistence, database APIs for tracking
-**8. Friends View**: Modal displaying "liked by me" and "liked by them" with online status
-**9. Social Integration**: Complete friend management APIs with mock data generation
-
-#### Enhanced Messaging
-**10. Message System**: Last 3 messages overlay, emoji quick-send, guest limitations (3 messages max)
-**11. Scroll Mode**: Advanced messaging with visual effects and VIP unlimited access
-**12. Mobile Optimization**: Keyboard handling with visualViewport and dynamic padding
-
-#### Technical Achievements
-- **Zero LSP Errors**: All TypeScript compilation issues resolved
-- **API Completeness**: Like, friends, and VIP status endpoints fully functional
-- **Mobile-First**: Responsive design with viewport optimization for mobile keyboards
-- **Performance**: Optimized state management and efficient event handling
-- **VIP Integration**: Comprehensive feature gating with upgrade prompts
-
-All acceptance criteria passed with stable performance, proper error handling, and full mobile compatibility.
+- **Translation API**: For real-time message translation.
+- **Analytics**: For user behavior tracking.
+- **Content Moderation**: Automated content filtering.

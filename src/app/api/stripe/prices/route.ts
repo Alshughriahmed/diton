@@ -1,51 +1,40 @@
-import { NextResponse } from "next/server";
-import Stripe from "stripe";
+import { FALLBACK_PLANS } from '@/lib/plans';
+import Stripe from 'stripe';
+import { NextResponse } from 'next/server';
 
 export const runtime = "nodejs";
 
-function normalize(p: Stripe.Price) {
-  return {
-    id: p.id,
-    amount: typeof p.unit_amount === "number" ? p.unit_amount : 0,
-    currency: (p.currency || "usd").toLowerCase(),
-    interval: (p.recurring?.interval || "month")
-  };
-}
-
 export async function GET() {
-  const ids = [
-    process.env.STRIPE_BOOST_ME_DAILY_ID,
-    process.env.STRIPE_PRO_WEEKLY_ID,
-    process.env.STRIPE_VIP_MONTHLY_ID,
-    process.env.STRIPE_ELITE_YEARLY_ID,
-  ].filter(Boolean) as string[];
+  try {
+    const key = process.env.STRIPE_SECRET_KEY;
+    const ids = [
+      process.env.STRIPE_PRICE_DAILY,
+      process.env.STRIPE_PRICE_WEEKLY,
+      process.env.STRIPE_PRICE_MONTHLY,
+      process.env.STRIPE_PRICE_YEARLY,
+    ].filter(Boolean) as string[];
 
-  // ENV specific mode only
-  if (ids.length === 4 && process.env.STRIPE_SECRET_KEY) {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-    const plans: any[] = [];
-    for (const id of ids) {
-      try { 
-        const price = await stripe.prices.retrieve(id);
-        plans.push({
-          id: price.id,
-          nickname: price.nickname || `Plan ${plans.length + 1}`,
-          unit_amount: price.unit_amount || 0,
-          currency: price.currency || "usd",
-          interval: price.recurring?.interval || "month"
-        });
-      } catch { /* skip */ }
+    if (!key || ids.length !== 4) {
+      return NextResponse.json({ plans: FALLBACK_PLANS }, { status: 200 });
     }
-    if (plans.length === 4) return NextResponse.json({ plans });
-  }
 
-  // Fallback: 4 mock plans
-  return NextResponse.json({ 
-    plans: [
-      { id: "boost_daily", nickname: "Boost Me Daily", unit_amount: 299, currency: "usd", interval: "day" },
-      { id: "pro_weekly", nickname: "Pro Weekly", unit_amount: 999, currency: "usd", interval: "week" },
-      { id: "vip_monthly", nickname: "VIP Monthly", unit_amount: 2999, currency: "usd", interval: "month" },
-      { id: "elite_yearly", nickname: "Elite Yearly", unit_amount: 29999, currency: "usd", interval: "year" }
-    ]
-  });
+    const stripe = new Stripe(key);
+    const prices = await Promise.all(ids.map(id => stripe.prices.retrieve(id)));
+    const plans = prices.map(p => ({
+      id: p.id,
+      priceId: p.id,
+      nickname: p.nickname ?? (p.recurring?.interval ?? 'plan'),
+      interval: p.recurring?.interval ?? 'month',
+      amount: p.unit_amount ?? 0,
+      currency: (p.currency ?? 'usd') as 'usd',
+    }));
+
+    // ترتيب: day, week, month, year
+    const order = { day: 0, week: 1, month: 2, year: 3 } as any;
+    plans.sort((a,b) => (order[a.interval] ?? 9) - (order[b.interval] ?? 9));
+
+    return NextResponse.json({ plans }, { status: 200 });
+  } catch {
+    return NextResponse.json({ plans: FALLBACK_PLANS }, { status: 200 });
+  }
 }

@@ -26,8 +26,14 @@ export const useFilters = create<FiltersState>((set)=>({
   }),
   setCountries: (codes)=>set((s)=>{
     const FREE_FOR_ALL = process.env.NODE_ENV !== 'production' || process.env.FREE_FOR_ALL === '1';
-    // Free users limited to empty array (global) or their own country
-    if (!s.isVip && !FREE_FOR_ALL) return { countries: [] };
+    // Free users can use ALL or single country selection
+    if (!s.isVip && !FREE_FOR_ALL) {
+      // Allow "ALL" or single country selection for non-VIP
+      if (!codes?.length || codes.includes("ALL")) return { countries: codes || [] };
+      // Allow single country selection
+      const next = codes.slice(0, 1);
+      return { countries: next };
+    }
     // VIP users can select up to 15 countries
     const next = !codes?.length ? [] : codes.slice(0,15);
     return { countries: next };

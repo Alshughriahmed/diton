@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/state/filters";
+import { emit } from "@/utils/events";
+import { toast } from "@/lib/ui/toast";
 
 interface GenderOption {
   key: GenderOpt;
@@ -58,16 +60,36 @@ export default function GenderFilter() {
     gender === "all" ? [] : [gender]
   );
 
-  const handleGenderToggle = (genderKey: GenderOpt) => {
+  const handleGenderToggle = async (genderKey: GenderOpt) => {
     if (genderKey === "all") {
       setSelectedGenders([]);
       setGender("all");
       setIsOpen(false);
+      
+      // Save to profile store
+      try {
+        const { useProfile } = await import("@/state/profile");
+        const profile = useProfile.getState().profile;
+        const updatedProfile = { 
+          ...profile, 
+          preferences: { 
+            ...profile.preferences, 
+            gender: "all" 
+          } 
+        };
+        useProfile.getState().setProfile(updatedProfile);
+      } catch (error) {
+        console.warn('Failed to save gender preference:', error);
+      }
+      
+      emit('filters:gender', 'all');
       return;
     }
 
-    if (!isVip) {
-      alert("Gender filtering is a VIP feature. Upgrade to filter by specific genders!");
+    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    if (!isVip && !FREE_FOR_ALL) {
+      toast('🔒 فلترة الجنس حصرية VIP');
+      emit('ui:upsell', 'gender');
       return;
     }
 
@@ -77,7 +99,7 @@ export default function GenderFilter() {
       newSelected = selectedGenders.filter(g => g !== genderKey);
     } else {
       if (selectedGenders.length >= 2) {
-        alert("VIP users can select up to 2 genders maximum.");
+        toast("حد أقصى 2 جنس لمستخدمي VIP");
         return;
       }
       newSelected = [...selectedGenders, genderKey];
@@ -86,14 +108,39 @@ export default function GenderFilter() {
     setSelectedGenders(newSelected);
     
     // Update the main gender state
+    let primaryGender: GenderOpt = "all";
     if (newSelected.length === 0) {
-      setGender("all");
+      primaryGender = "all";
     } else if (newSelected.length === 1) {
-      setGender(newSelected[0]);
+      primaryGender = newSelected[0];
     } else {
       // For multiple selections, we keep the first one as primary
-      setGender(newSelected[0]);
+      primaryGender = newSelected[0];
     }
+    
+    setGender(primaryGender);
+    
+    // Save to profile store
+    try {
+      const { useProfile } = await import("@/state/profile");
+      const profile = useProfile.getState().profile;
+      const updatedProfile = { 
+        ...profile, 
+        preferences: { 
+          ...profile.preferences, 
+          gender: primaryGender,
+          genderSelections: newSelected
+        } 
+      };
+      useProfile.getState().setProfile(updatedProfile);
+    } catch (error) {
+      console.warn('Failed to save gender preference:', error);
+    }
+    
+    emit('filters:gender', primaryGender);
+    
+    const option = genderOptions.find(opt => opt.key === genderKey);
+    toast(`تم ${selectedGenders.includes(genderKey) ? 'إزالة' : 'إضافة'} ${option?.label || genderKey}`);
   };
 
   const currentOption = genderOptions.find(opt => opt.key === gender) || genderOptions[0];
@@ -116,14 +163,15 @@ export default function GenderFilter() {
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-64 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 overflow-hidden">
+        <div className="absolute top-full left-0 mt-2 w-64 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-[90] overflow-hidden">
           {/* Gender Options */}
           <div className="p-2">
             {genderOptions.map((option) => {
               const isSelected = option.key === "all" 
                 ? selectedGenders.length === 0
                 : selectedGenders.includes(option.key);
-              const isDisabled = !isVip && option.key !== "all";
+              const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+              const isDisabled = !isVip && !FREE_FOR_ALL && option.key !== "all";
               
               return (
                 <button
@@ -158,10 +206,10 @@ export default function GenderFilter() {
           </div>
 
           {/* VIP Notice */}
-          {!isVip && (
+          {!isVip && !(globalThis as any).__vip?.FREE_FOR_ALL && (
             <div className="p-3 border-t border-gray-600 bg-gradient-to-r from-purple-600/20 to-blue-600/20">
               <p className="text-xs text-gray-300 text-center">
-                🔒 Upgrade to VIP to filter by specific genders (up to 2)
+                🔒 ترقية لـ VIP لفلترة الجنس (حتى خيارين)
               </p>
             </div>
           )}
@@ -188,7 +236,7 @@ export default function GenderFilter() {
       {/* Backdrop */}
       {isOpen && (
         <div 
-          className="fixed inset-0 z-40" 
+          className="fixed inset-0 z-[85]" 
           onClick={() => setIsOpen(false)}
         />
       )}

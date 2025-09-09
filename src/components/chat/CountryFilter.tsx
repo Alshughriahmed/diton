@@ -3,6 +3,8 @@
 import { useState, useMemo } from "react";
 import { useFilters } from "@/state/filters";
 import countries from "world-countries";
+import { emit } from "@/utils/events";
+import { toast } from "@/lib/ui/toast";
 
 interface CountryOption {
   code: string;
@@ -31,30 +33,56 @@ export default function CountryFilter() {
     );
   }, [countryOptions, search]);
 
-  const handleCountryToggle = (code: string) => {
-    if (!isVip) {
-      // Show upsell for non-VIP users
-      alert("Country filtering is a VIP feature. Upgrade to select specific countries!");
+  const handleCountryToggle = async (code: string) => {
+    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    if (!isVip && !FREE_FOR_ALL) {
+      toast('🔒 ميزة تصفية الدول حصرية لـ VIP');
+      emit('ui:upsell', 'countries');
       return;
     }
 
+    let newSelection: string[];
     if (selectedCountries.includes(code)) {
-      setCountries(selectedCountries.filter(c => c !== code));
+      newSelection = selectedCountries.filter(c => c !== code);
     } else {
       if (selectedCountries.length >= 15) {
-        alert("VIP users can select up to 15 countries maximum.");
+        toast("حد أقصى 15 دولة لمستخدمي VIP");
         return;
       }
-      setCountries([...selectedCountries, code]);
+      newSelection = [...selectedCountries, code];
     }
+
+    setCountries(newSelection);
+    
+    // Save to profile store
+    try {
+      const { useProfile } = await import("@/state/profile");
+      const profile = useProfile.getState().profile;
+      const updatedProfile = { 
+        ...profile, 
+        preferences: { 
+          ...profile.preferences, 
+          countries: newSelection 
+        } 
+      };
+      useProfile.getState().setProfile(updatedProfile);
+    } catch (error) {
+      console.warn('Failed to save country preference:', error);
+    }
+    
+    emit('filters:country', code);
+    toast(`تم ${selectedCountries.includes(code) ? 'إزالة' : 'إضافة'} ${getCountryName(code)}`);
   };
 
   const handleSelectAll = () => {
-    if (!isVip) {
-      alert("Country filtering is a VIP feature. Upgrade to access!");
+    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    if (!isVip && !FREE_FOR_ALL) {
+      toast('🔒 ميزة تصفية الدول حصرية لـ VIP');
+      emit('ui:upsell', 'countries');
       return;
     }
     setCountries([]);
+    emit('filters:country', 'all');
   };
 
   const selectedDisplay = selectedCountries.length === 0 
@@ -79,7 +107,7 @@ export default function CountryFilter() {
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 max-h-96 overflow-hidden">
+        <div className="absolute top-full left-0 mt-2 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-[90] max-h-96 overflow-hidden">
           {/* Search */}
           <div className="p-3 border-b border-gray-600">
             <input
@@ -112,7 +140,8 @@ export default function CountryFilter() {
             <div className="grid grid-cols-2 gap-1">
               {filteredCountries.map((country) => {
                 const isSelected = selectedCountries.includes(country.code);
-                const isDisabled = !isVip && selectedCountries.length === 0;
+                const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+                const isDisabled = !isVip && !FREE_FOR_ALL && !isSelected;
                 
                 return (
                   <button
@@ -138,10 +167,10 @@ export default function CountryFilter() {
           </div>
 
           {/* VIP Notice */}
-          {!isVip && (
+          {!isVip && !(globalThis as any).__vip?.FREE_FOR_ALL && (
             <div className="p-3 border-t border-gray-600 bg-gradient-to-r from-purple-600/20 to-blue-600/20">
               <p className="text-xs text-gray-300 text-center">
-                🔒 Upgrade to VIP to filter by specific countries (up to 15)
+                🔒 ترقية لـ VIP لفلترة الدول (حتى 15 دولة)
               </p>
             </div>
           )}
@@ -168,7 +197,7 @@ export default function CountryFilter() {
       {/* Backdrop */}
       {isOpen && (
         <div 
-          className="fixed inset-0 z-40" 
+          className="fixed inset-0 z-[85]" 
           onClick={() => setIsOpen(false)}
         />
       )}

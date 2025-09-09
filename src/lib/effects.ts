@@ -1,10 +1,5 @@
 "use client";
 
-import { FaceMesh } from "@mediapipe/face_mesh";
-import { Camera } from "@mediapipe/camera_utils";
-import { drawConnectors, drawLandmarks } from "@mediapipe/drawing_utils";
-import { FACEMESH_TESSELATION, FACEMESH_RIGHT_EYE, FACEMESH_LEFT_EYE } from "@mediapipe/face_mesh";
-
 export interface EffectConfig {
   beauty: {
     enabled: boolean;
@@ -20,13 +15,14 @@ export interface EffectConfig {
 }
 
 class VideoEffects {
-  private faceMesh: FaceMesh | null = null;
-  private camera: Camera | null = null;
+  private faceMesh: any = null;
+  private camera: any = null;
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
   private video: HTMLVideoElement | null = null;
   private outputStream: MediaStream | null = null;
   private isProcessing = false;
+  private isInitialized = false;
   
   private config: EffectConfig = {
     beauty: {
@@ -43,11 +39,25 @@ class VideoEffects {
   };
 
   constructor() {
-    this.initializeFaceMesh();
+    // Don't initialize immediately - wait for client-side call
   }
 
-  private async initializeFaceMesh() {
+  private async loadMediaPipe() {
+    if (typeof window === 'undefined') return false;
+    
     try {
+      const [
+        { FaceMesh },
+        { Camera },
+        { drawConnectors, drawLandmarks },
+        { FACEMESH_TESSELATION, FACEMESH_RIGHT_EYE, FACEMESH_LEFT_EYE }
+      ] = await Promise.all([
+        import("@mediapipe/face_mesh"),
+        import("@mediapipe/camera_utils"),
+        import("@mediapipe/drawing_utils"),
+        import("@mediapipe/face_mesh")
+      ]);
+
       this.faceMesh = new FaceMesh({
         locateFile: (file: string) => 
           `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
@@ -60,16 +70,31 @@ class VideoEffects {
         minTrackingConfidence: 0.5
       });
 
-      this.faceMesh.onResults((results) => {
+      this.faceMesh.onResults((results: any) => {
         this.onResults(results);
       });
+
+      this.isInitialized = true;
+      return true;
     } catch (error) {
-      console.error('Failed to initialize FaceMesh:', error);
+      console.warn('MediaPipe not available:', error);
+      return false;
     }
   }
 
   public async initialize(videoElement: HTMLVideoElement): Promise<MediaStream | null> {
+    if (typeof window === 'undefined') return null;
+    
     try {
+      // Load MediaPipe only when needed
+      if (!this.isInitialized) {
+        const loaded = await this.loadMediaPipe();
+        if (!loaded) {
+          console.warn('MediaPipe failed to load, using fallback video stream');
+          return null;
+        }
+      }
+
       this.video = videoElement;
       
       // Create canvas for processing
@@ -82,13 +107,18 @@ class VideoEffects {
         throw new Error('Failed to get canvas context');
       }
 
-      // Setup camera
-      if (this.faceMesh) {
+      // Setup camera if MediaPipe loaded successfully
+      if (this.faceMesh && this.isInitialized) {
+        const { Camera } = await import("@mediapipe/camera_utils");
         this.camera = new Camera(videoElement, {
           onFrame: async () => {
             if (this.isProcessing) return;
             this.isProcessing = true;
-            await this.faceMesh!.send({ image: videoElement });
+            try {
+              await this.faceMesh.send({ image: videoElement });
+            } catch (e) {
+              console.warn('Face processing error:', e);
+            }
             this.isProcessing = false;
           },
           width: 640,
@@ -130,11 +160,6 @@ class VideoEffects {
       if (this.config.mask.enabled && this.config.mask.type !== 'none') {
         this.applyMask(ctx, landmarks, canvas.width, canvas.height);
       }
-      
-      // Debug: Draw face landmarks (remove in production)
-      if (process.env.NODE_ENV === 'development') {
-        this.drawDebugLandmarks(ctx, landmarks, canvas.width, canvas.height);
-      }
     }
     
     ctx.restore();
@@ -148,28 +173,28 @@ class VideoEffects {
   ) {
     const { smoothing, brightening, eyeEnlargement } = this.config.beauty;
     
-    // Apply smoothing filter
+    // Apply skin smoothing with stronger effect
     if (smoothing > 0) {
-      ctx.filter = `blur(${smoothing * 2}px)`;
-      ctx.globalCompositeOperation = 'overlay';
-      ctx.globalAlpha = smoothing * 0.3;
+      ctx.filter = `blur(${smoothing * 3}px) brightness(${1 + brightening * 0.3})`;
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = smoothing * 0.4;
       ctx.drawImage(this.canvas!, 0, 0);
       ctx.filter = 'none';
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
     }
     
-    // Apply brightening
+    // Apply brightening with glow effect
     if (brightening > 0) {
       ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = brightening * 0.2;
-      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = brightening * 0.25;
+      ctx.fillStyle = '#fff8e1';
       ctx.fillRect(0, 0, width, height);
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
     }
     
-    // Eye enlargement (basic implementation)
+    // Eye enlargement
     if (eyeEnlargement > 0) {
       this.enlargeEyes(ctx, landmarks, width, height, eyeEnlargement);
     }
@@ -182,29 +207,33 @@ class VideoEffects {
     height: number,
     intensity: number
   ) {
-    // Get eye landmarks
+    // Enhanced eye enlargement with better landmark detection
     const leftEyeIndices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
     const rightEyeIndices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
     
-    // Calculate eye centers and apply enlargement
     const leftEyeCenter = this.getEyeCenter(landmarks, leftEyeIndices, width, height);
     const rightEyeCenter = this.getEyeCenter(landmarks, rightEyeIndices, width, height);
     
     if (leftEyeCenter && rightEyeCenter) {
-      this.enlargeRegion(ctx, leftEyeCenter.x, leftEyeCenter.y, 25 * (1 + intensity), intensity);
-      this.enlargeRegion(ctx, rightEyeCenter.x, rightEyeCenter.y, 25 * (1 + intensity), intensity);
+      const eyeSize = 30 * (1 + intensity * 0.5);
+      this.enlargeRegion(ctx, leftEyeCenter.x, leftEyeCenter.y, eyeSize, intensity);
+      this.enlargeRegion(ctx, rightEyeCenter.x, rightEyeCenter.y, eyeSize, intensity);
     }
   }
 
   private getEyeCenter(landmarks: any[], indices: number[], width: number, height: number) {
     let x = 0, y = 0;
+    let validPoints = 0;
+    
     for (const index of indices) {
       if (landmarks[index]) {
         x += landmarks[index].x * width;
         y += landmarks[index].y * height;
+        validPoints++;
       }
     }
-    return { x: x / indices.length, y: y / indices.length };
+    
+    return validPoints > 0 ? { x: x / validPoints, y: y / validPoints } : null;
   }
 
   private enlargeRegion(
@@ -217,7 +246,7 @@ class VideoEffects {
     const imageData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
     const { data, width, height } = imageData;
     
-    const scale = 1 + intensity * 0.3;
+    const scale = 1 + intensity * 0.4;
     const radiusSquared = radius * radius;
     
     for (let y = Math.max(0, centerY - radius); y < Math.min(height, centerY + radius); y++) {
@@ -228,7 +257,7 @@ class VideoEffects {
         
         if (distanceSquared < radiusSquared) {
           const distance = Math.sqrt(distanceSquared);
-          const factor = Math.pow(Math.cos(distance / radius * Math.PI / 2), 2);
+          const factor = Math.pow(Math.cos(distance / radius * Math.PI / 2), 2) * intensity;
           
           const sourceX = centerX + dx / scale;
           const sourceY = centerY + dy / scale;
@@ -237,9 +266,11 @@ class VideoEffects {
             const sourceIndex = (Math.floor(sourceY) * width + Math.floor(sourceX)) * 4;
             const targetIndex = (y * width + x) * 4;
             
-            data[targetIndex] = data[sourceIndex] * factor + data[targetIndex] * (1 - factor);
-            data[targetIndex + 1] = data[sourceIndex + 1] * factor + data[targetIndex + 1] * (1 - factor);
-            data[targetIndex + 2] = data[sourceIndex + 2] * factor + data[targetIndex + 2] * (1 - factor);
+            if (sourceIndex >= 0 && sourceIndex < data.length && targetIndex >= 0 && targetIndex < data.length) {
+              data[targetIndex] = data[sourceIndex] * factor + data[targetIndex] * (1 - factor);
+              data[targetIndex + 1] = data[sourceIndex + 1] * factor + data[targetIndex + 1] * (1 - factor);
+              data[targetIndex + 2] = data[sourceIndex + 2] * factor + data[targetIndex + 2] * (1 - factor);
+            }
           }
         }
       }
@@ -264,7 +295,7 @@ class VideoEffects {
     if (!noseTip || !leftEye || !rightEye) return;
     
     const centerX = noseTip.x * width;
-    const centerY = (noseTip.y - 0.1) * height; // Slightly above nose
+    const centerY = (noseTip.y - 0.1) * height;
     const eyeDistance = Math.abs(leftEye.x - rightEye.x) * width;
     const maskSize = eyeDistance * 2;
     
@@ -275,48 +306,15 @@ class VideoEffects {
     
     let maskEmoji = '';
     switch (type) {
-      case 'cat':
-        maskEmoji = '🐱';
-        break;
-      case 'dog':
-        maskEmoji = '🐶';
-        break;
-      case 'bunny':
-        maskEmoji = '🐰';
-        break;
-      case 'robot':
-        maskEmoji = '🤖';
-        break;
+      case 'cat': maskEmoji = '🐱'; break;
+      case 'dog': maskEmoji = '🐶'; break;
+      case 'bunny': maskEmoji = '🐰'; break;
+      case 'robot': maskEmoji = '🤖'; break;
     }
     
-    ctx.fillText(maskEmoji, centerX, centerY);
-    ctx.restore();
-  }
-
-  private drawDebugLandmarks(
-    ctx: CanvasRenderingContext2D,
-    landmarks: any[],
-    width: number,
-    height: number
-  ) {
-    ctx.save();
-    
-    // Draw face mesh
-    drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {
-      color: '#C0C0C070',
-      lineWidth: 1
-    });
-    
-    // Draw eyes
-    drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE, {
-      color: '#FF3030',
-      lineWidth: 2
-    });
-    drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE, {
-      color: '#30FF30',
-      lineWidth: 2
-    });
-    
+    if (maskEmoji) {
+      ctx.fillText(maskEmoji, centerX, centerY);
+    }
     ctx.restore();
   }
 
@@ -325,7 +323,7 @@ class VideoEffects {
   }
 
   public start() {
-    if (this.camera) {
+    if (this.camera && typeof window !== 'undefined') {
       this.camera.start();
     }
   }
@@ -342,12 +340,18 @@ class VideoEffects {
   public getOutputStream(): MediaStream | null {
     return this.outputStream;
   }
+
+  public isBeautyEnabled(): boolean {
+    return this.config.beauty.enabled;
+  }
 }
 
-// Singleton instance
+// Singleton instance - only create in browser
 let effectsInstance: VideoEffects | null = null;
 
-export const getVideoEffects = (): VideoEffects => {
+export const getVideoEffects = (): VideoEffects | null => {
+  if (typeof window === 'undefined') return null;
+  
   if (!effectsInstance) {
     effectsInstance = new VideoEffects();
   }
