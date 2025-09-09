@@ -22,7 +22,7 @@ export default function LowerRightQuick() {
     <div className="relative">
       {/* Expanded Menu */}
       {isExpanded && (
-        <div className="absolute bottom-16 right-0 bg-gray-800 rounded-lg shadow-xl p-2 min-w-[160px]">
+        <div className="absolute top-16 right-0 bg-gray-800 rounded-lg shadow-xl p-2 min-w-[160px]">
           {quickActions.map(item => (
             <button
               key={item.id}

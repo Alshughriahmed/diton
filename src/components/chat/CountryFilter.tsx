@@ -3,6 +3,8 @@
 import { useState, useMemo } from "react";
 import { useFilters } from "@/state/filters";
 import countries from "world-countries";
+import { emit } from "@/utils/events";
+import { toast } from "@/lib/ui/toast";
 
 interface CountryOption {
   code: string;
@@ -32,9 +34,10 @@ export default function CountryFilter() {
   }, [countryOptions, search]);
 
   const handleCountryToggle = (code: string) => {
-    if (!isVip) {
-      // Show upsell for non-VIP users
-      alert("Country filtering is a VIP feature. Upgrade to select specific countries!");
+    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    if (!isVip && !FREE_FOR_ALL) {
+      toast('🔒 ميزة تصفية الدول حصرية لـ VIP');
+      emit('ui:upsell', 'countries');
       return;
     }
 
@@ -42,19 +45,23 @@ export default function CountryFilter() {
       setCountries(selectedCountries.filter(c => c !== code));
     } else {
       if (selectedCountries.length >= 15) {
-        alert("VIP users can select up to 15 countries maximum.");
+        toast("حد أقصى 15 دولة لمستخدمي VIP");
         return;
       }
       setCountries([...selectedCountries, code]);
+      emit('filters:country', code);
     }
   };
 
   const handleSelectAll = () => {
-    if (!isVip) {
-      alert("Country filtering is a VIP feature. Upgrade to access!");
+    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    if (!isVip && !FREE_FOR_ALL) {
+      toast('🔒 ميزة تصفية الدول حصرية لـ VIP');
+      emit('ui:upsell', 'countries');
       return;
     }
     setCountries([]);
+    emit('filters:country', 'all');
   };
 
   const selectedDisplay = selectedCountries.length === 0 

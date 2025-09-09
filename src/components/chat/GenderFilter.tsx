@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/state/filters";
+import { emit } from "@/utils/events";
+import { toast } from "@/lib/ui/toast";
 
 interface GenderOption {
   key: GenderOpt;
@@ -66,8 +68,10 @@ export default function GenderFilter() {
       return;
     }
 
-    if (!isVip) {
-      alert("Gender filtering is a VIP feature. Upgrade to filter by specific genders!");
+    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    if (!isVip && !FREE_FOR_ALL) {
+      toast('🔒 فلترة الجنس حصرية VIP');
+      emit('ui:upsell', 'gender');
       return;
     }
 
@@ -77,7 +81,7 @@ export default function GenderFilter() {
       newSelected = selectedGenders.filter(g => g !== genderKey);
     } else {
       if (selectedGenders.length >= 2) {
-        alert("VIP users can select up to 2 genders maximum.");
+        toast("حد أقصى 2 جنس لمستخدمي VIP");
         return;
       }
       newSelected = [...selectedGenders, genderKey];
@@ -88,11 +92,14 @@ export default function GenderFilter() {
     // Update the main gender state
     if (newSelected.length === 0) {
       setGender("all");
+      emit('filters:gender', 'all');
     } else if (newSelected.length === 1) {
       setGender(newSelected[0]);
+      emit('filters:gender', newSelected[0]);
     } else {
       // For multiple selections, we keep the first one as primary
       setGender(newSelected[0]);
+      emit('filters:gender', newSelected[0]);
     }
   };
 
