@@ -4,7 +4,6 @@ import { on, emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
-import { getVideoEffects } from "@/lib/effects";
 import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
@@ -110,25 +109,40 @@ export default function ChatClient(){
     });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
-        const effects = getVideoEffects();
-        effects.updateConfig({ beauty: { enabled: data.enabled, ...data.settings } });
-        setBeauty(data.enabled);
+        if (typeof window !== 'undefined') {
+          const { getVideoEffects } = await import("@/lib/effects");
+          const effects = getVideoEffects();
+          if (effects) {
+            effects.updateConfig({ beauty: { enabled: data.enabled, ...data.settings } });
+            setBeauty(data.enabled);
+          }
+        }
       } catch(error) {
         console.warn('Beauty toggle failed:', error);
       }
     });
-    let off10=on("ui:updateBeauty",(data)=>{ 
+    let off10=on("ui:updateBeauty",async (data)=>{ 
       try {
-        const effects = getVideoEffects();
-        effects.updateConfig({ beauty: { enabled: beauty, ...data.settings } });
+        if (typeof window !== 'undefined') {
+          const { getVideoEffects } = await import("@/lib/effects");
+          const effects = getVideoEffects();
+          if (effects) {
+            effects.updateConfig({ beauty: { enabled: beauty, ...data.settings } });
+          }
+        }
       } catch(error) {
         console.warn('Beauty update failed:', error);
       }
     });
-    let off11=on("ui:changeMask",(data)=>{ 
+    let off11=on("ui:changeMask",async (data)=>{ 
       try {
-        const effects = getVideoEffects();
-        effects.updateConfig({ mask: { enabled: data.type !== 'none', type: data.type } });
+        if (typeof window !== 'undefined') {
+          const { getVideoEffects } = await import("@/lib/effects");
+          const effects = getVideoEffects();
+          if (effects) {
+            effects.updateConfig({ mask: { enabled: data.type !== 'none', type: data.type } });
+          }
+        }
       } catch(error) {
         console.warn('Mask change failed:', error);
       }
@@ -137,7 +151,7 @@ export default function ChatClient(){
     initLocalMedia().then(async ()=>{
       const s=getLocalStream(); 
       if(localRef.current && s){ 
-        // Initialize effects if VIP
+        // Initialize effects if VIP or beauty enabled
         if (vip) {
           try {
             const effects = getVideoEffects();
