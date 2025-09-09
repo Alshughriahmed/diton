@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { on } from "@/utils/events";
+import type { Plan } from "@/lib/plans";
 
 interface UpsellModalProps {
   isOpen?: boolean;
@@ -44,8 +45,15 @@ const featureMessages = {
 export default function UpsellModal({ isOpen: externalOpen, onClose }: UpsellModalProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [feature, setFeature] = useState<string>("default");
+  const [plans, setPlans] = useState<Plan[]>([]);
 
   useEffect(() => {
+    // Fetch plans on component mount
+    fetch('/api/stripe/prices')
+      .then(r => r.json())
+      .then(d => setPlans(d.plans || []))
+      .catch(() => setPlans([]));
+
     const offUpsell = on("ui:upsell", (featureType) => {
       setFeature(featureType || "default");
       setIsOpen(true);
@@ -120,21 +128,49 @@ export default function UpsellModal({ isOpen: externalOpen, onClose }: UpsellMod
               </div>
             </div>
 
-            {/* Pricing */}
-            <div className="bg-white/10 rounded-xl p-4 mb-4">
-              <div className="text-center">
-                <div className="text-yellow-400 text-2xl font-bold">$9.99</div>
-                <div className="text-gray-300 text-sm">شهرياً</div>
-                <div className="text-green-400 text-xs mt-1">خصم 50% لأول شهر!</div>
-              </div>
+            {/* All Plans */}
+            <div className="space-y-3 mb-4">
+              {plans.map((plan) => (
+                <form key={plan.id} action="/api/stripe/subscribe" method="POST" className="block">
+                  <input type="hidden" name="priceId" value={plan.priceId ?? plan.id} />
+                  <button 
+                    type="submit"
+                    className="w-full bg-white/10 hover:bg-white/20 rounded-xl p-4 text-left transition-all border border-white/20 hover:border-purple-400"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-white">{plan.nickname}</div>
+                        <div className="text-sm text-gray-300">
+                          ${(plan.amount / 100).toFixed(2)} / {plan.interval === 'day' ? 'يوم' : plan.interval === 'week' ? 'أسبوع' : plan.interval === 'month' ? 'شهر' : 'سنة'}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-purple-400 font-bold text-lg">
+                          ${(plan.amount / 100).toFixed(2)}
+                        </div>
+                        {plan.interval === 'yearly' && (
+                          <div className="text-green-400 text-xs">أفضل قيمة!</div>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                </form>
+              ))}
             </div>
+
+            {/* Fallback if no plans */}
+            {plans.length === 0 && (
+              <div className="bg-white/10 rounded-xl p-4 mb-4">
+                <div className="text-center">
+                  <div className="text-yellow-400 text-2xl font-bold">$16.99</div>
+                  <div className="text-gray-300 text-sm">شهرياً</div>
+                  <div className="text-green-400 text-xs mt-1">أفضل قيمة!</div>
+                </div>
+              </div>
+            )}
 
             {/* Actions */}
             <div className="space-y-3">
-              <button className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold py-3 px-6 rounded-xl transition-all transform hover:scale-105 shadow-lg">
-                🚀 ترقية الآن
-              </button>
-              
               <button 
                 onClick={handleClose}
                 className="w-full text-gray-400 hover:text-white text-sm transition-colors"

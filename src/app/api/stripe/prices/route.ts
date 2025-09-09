@@ -18,7 +18,7 @@ export async function GET() {
       return NextResponse.json({ plans: FALLBACK_PLANS }, { status: 200 });
     }
 
-    const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
+    const stripe = new Stripe(key);
     const prices = await Promise.all(ids.map(id => stripe.prices.retrieve(id)));
     const plans = prices.map(p => ({
       id: p.id,
