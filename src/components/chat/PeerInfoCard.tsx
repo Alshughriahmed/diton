@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useHydrated } from "@/hooks/useHydrated";
 
 interface PeerInfo {
   name: string;
@@ -15,6 +16,7 @@ interface PeerInfoCardProps {
 }
 
 export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
+  const hydrated = useHydrated();
   const [peer, setPeer] = useState<PeerInfo>(peerInfo || {
     name: "Connecting...",
     isVip: false,
@@ -60,6 +62,22 @@ export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
       setPeer(peerInfo);
     }
   }, [peerInfo]);
+
+  if (!hydrated) {
+    return (
+      <div className="absolute top-3 left-3 z-30">
+        <div className="bg-black/60 backdrop-blur-md rounded-xl px-3 py-2 border border-white/10 shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gray-600 animate-pulse" />
+            <div className="flex flex-col gap-1">
+              <div className="w-16 h-3 bg-gray-600 animate-pulse rounded" />
+              <div className="w-12 h-2 bg-gray-600 animate-pulse rounded" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="absolute top-3 left-3 z-30">

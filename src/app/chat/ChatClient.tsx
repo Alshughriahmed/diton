@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useHydrated } from "@/hooks/useHydrated";
 import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
 import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/utils/filters";
@@ -23,6 +24,7 @@ import { useProfile } from "@/state/profile";
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
 export default function ChatClient(){
+  const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
   const lastTsRef = useRef(0);
   const busyRef = useRef(false);
@@ -115,8 +117,8 @@ export default function ChatClient(){
     });
     let off7=on("ui:next",()=>{ nextMatch({gender, countries}); });
     let off8=on("ui:prev",()=>{ tryPrevOrRandom({gender, countries}); });
-    let offOpenMessaging=on("ui:openMessaging", ()=>{ setShowMessaging(true); });
-    let offCloseMessaging=on("ui:closeMessaging", ()=>{ setShowMessaging(false); });
+    let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
+    let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
     let offRemoteAudio=on("ui:toggleRemoteAudio", ()=>{
       const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
       if(v){ v.muted = !v.muted; toast(v.muted?'🔇 صمت الطرف الثاني':'🔈 سماع الطرف الثاني'); }
@@ -286,6 +288,25 @@ export default function ChatClient(){
     setCountries(newCountries);
   }
   const allCountries=[ "US","DE","FR","GB","TR","AE","SA","EG","JO","IQ","SY","LB","MA","ZA","BR","AR","ES","IT","SE","NO","RU","CN","JP","KR","IN","PK","BD","ID","PH","TH","VN","IR","CA","AU","NZ" ];
+
+  if (!hydrated) {
+    return (
+      <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
+        <div className="h-full grid grid-rows-2 gap-2 p-2">
+          <section className="relative rounded-2xl bg-black/30 overflow-hidden">
+            <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm">
+              Loading...
+            </div>
+          </section>
+          <section className="relative rounded-2xl bg-black/20 overflow-hidden">
+            <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">
+              Initializing...
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>

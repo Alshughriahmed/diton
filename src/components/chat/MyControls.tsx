@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { emit, on } from "@/utils/events";
 import { useFilters } from "@/state/filters";
+import { useHydrated } from "@/hooks/useHydrated";
 
 interface MyControlsProps {
   myLikes?: number;
@@ -10,9 +11,24 @@ interface MyControlsProps {
 }
 
 export default function MyControls({ myLikes = 0, beautyEnabled = false }: MyControlsProps) {
+  const hydrated = useHydrated();
   const [likes, setLikes] = useState(myLikes);
   const [beauty, setBeauty] = useState(beautyEnabled);
   const { isVip } = useFilters();
+
+  if (!hydrated) {
+    return (
+      <div className="absolute top-3 right-3 z-30">
+        <div className="bg-black/60 backdrop-blur-md rounded-xl p-2 border border-white/10 shadow-lg">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-lg bg-gray-600 animate-pulse" />
+            <div className="w-10 h-10 rounded-lg bg-gray-600 animate-pulse" />
+            <div className="w-12 h-6 rounded-lg bg-gray-600 animate-pulse" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     const offLikes = on("ui:likeUpdate", (data) => {
