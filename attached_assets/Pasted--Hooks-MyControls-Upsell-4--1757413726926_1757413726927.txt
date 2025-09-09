@@ -1,0 +1,364 @@
+🟢 الهدف
+
+إزالة خطأ الـHooks في MyControls نهائيًا.
+
+تصحيح نافذة الـUpsell لعرض 4 خطط (يومي/أسبوعي/شهري/سنوي) بالمبالغ الصحيحة وربطها بـStripe.
+
+جعل قائمة الدول تحتوي كل دول العالم، وتضع دولة المستخدم مباشرة بعد “All Countries”، ومسموح بها للمستخدم العادي.
+
+إعادة تشغيل الفحص الشامل والتوقف فقط عند خلوّ الكونسول والـAPI من الأخطاء.
+
+🧭 ثوابت
+
+لا تُحذف ميزات، لا تغييرات بصرية خارج ما ورد هنا.
+
+أي كود جديد “عميل” يُحاط بـSSR-safe (تم تطبيقه سابقًا).
+
+تشغيل _ops/phase2/check_all.sh في النهاية، وإصلاح أي خطأ يظهر قبل إنهاء الدفعة.
+
+1) إصلاح Hooks في MyControls (سبب الخطأ: استدعاء Hooks بشكل شرطي)
+
+استبدل محتوى src/components/chat/MyControls.tsx بهذا (حافظ على أي أيقونات/كلاسات لديك إن وُجدت—المهم ترتيب الـHooks ثابت):
+
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { emit, on } from '@/lib/bus';
+import { useProfileStore } from '@/state/profile'; // إن كان اسم المتجر مختلفًا عدّله
+import { useVip } from '@/lib/vip';                 // إن لم يوجد، استخدم منطق VIP الحالي
+
+export default function MyControls() {
+  // ✅ جميع الـHooks في أعلى المكوّن وبترتيب ثابت
+  const { profile } = useProfileStore.getState ? useProfileStore() : { profile: {} as any };
+  const { isVip } = useVip ? useVip() : { isVip: false };
+
+  const [likes, setLikes] = useState<number>(0);
+  const [paused, setPaused] = useState<boolean>(false);
+
+  // ✅ اشترك في الأحداث دائمًا (لا تضع useEffect داخل شرط)
+  useEffect(() => {
+    const offLikes = on('ui:likeUpdate', (d: any) => {
+      if (d?.myLikes !== undefined) setLikes(d.myLikes);
+    });
+    const offPause = on('ui:playPause', (d: any) => setPaused(!!d?.paused));
+    return () => {
+      offLikes();
+      offPause();
+    };
+  }, []);
+
+  // ✅ كولباكات ثابتة (بدون إنشاء Hooks حسب حالة)
+  const onNext = useCallback(() => emit('match:next'), []);
+  const onPrev = useCallback(() => emit(isVip ? 'match:prev' : 'ui:upsell', { feature: 'prev' }), [isVip]);
+  const onTogglePeerAudio = useCallback(() => emit('ui:toggleRemoteAudio'), []);
+  const onToggleMic = useCallback(() => emit('ui:toggleMic'), []);
+  const onLike = useCallback(() => emit('ui:likeToggle'), []);
+  const onMasks = useCallback(() => emit(isVip ? 'ui:toggleMasks' : 'ui:upsell', { feature: 'masks' }), [isVip]);
+  const onSettings = useCallback(() => emit('ui:openSettings'), []);
+  const onPlayPause = useCallback(() => emit('ui:togglePlay'), []);
+  const onReport = useCallback(() => emit('ui:reportAndNext'), []);
+  const onBeauty = useCallback(() => emit(isVip ? 'ui:toggleBeauty' : 'ui:upsell', { feature: 'beauty' }), [isVip]);
+  const onSwitchCam = useCallback(() => emit('media:switchCamera'), []);
+
+  // ✅ JSX فقط (لا Hooks داخل شروط)
+  return (
+    <div className="pointer-events-auto">
+      {/* أعلى يمين - أدواتي: تبديل كاميرا + تجميل + عدّاد إعجاباتي */}
+      <div className="absolute top-2 right-2 flex gap-2 z-[60]">
+        <button onClick={onSwitchCam} aria-label="Switch camera" className="btn-ghost">🔄</button>
+        <button onClick={onBeauty} aria-label="Beauty" className="btn-ghost">{isVip ? '✨' : '✨🔒'}</button>
+        <div className="badge">{likes}</div>
+      </div>
+
+      {/* شريط الأدوات السفلي (يمين→يسار): Next, mute peer, mic, like, masks, settings, pause, report, Prev */}
+      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[55] flex items-center gap-3 bg-black/40 backdrop-blur rounded-2xl px-4 py-2">
+        <button onClick={onNext} className="btn-primary">Next</button>
+        <button onClick={onTogglePeerAudio} className="btn-ghost">🔈</button>
+        <button onClick={onToggleMic} className="btn-ghost">🎙️</button>
+        <button onClick={onLike} className="btn-ghost">❤</button>
+        <button onClick={onMasks} className="btn-ghost">{isVip ? '🤡' : '🤡🔒'}</button>
+        <button onClick={onSettings} className="btn-ghost">⚙️</button>
+        <button onClick={onPlayPause} className="btn-ghost">{paused ? '▶️' : '⏸️'}</button>
+        <button onClick={onReport} className="btn-danger">🚩</button>
+        <button onClick={onPrev} className="btn-ghost">{isVip ? 'Prev' : 'Prev🔒'}</button>
+      </div>
+    </div>
+  );
+}
+
+
+المبدأ: لا يوجد useEffect/useState/Hook داخل فروع شرطية أو بعد return يعتمد على حالة، وبذلك ينتهي تحذير “change in the order of Hooks”.
+
+2) خطط الـVIP الصحيحة في الـUpsell + API أسعار Stripe
+أ) مصدر خطط موحّد
+
+أضِف الملف src/lib/plans.ts:
+
+export type Plan = {
+  id: string;
+  nickname: string;
+  interval: 'day' | 'week' | 'month' | 'year';
+  amount: number; // cents
+  currency: 'usd';
+  priceId?: string;
+};
+
+export const FALLBACK_PLANS: Plan[] = [
+  { id: 'daily',   nickname: 'Daily',   interval: 'day',   amount: 149,  currency: 'usd' },
+  { id: 'weekly',  nickname: 'Weekly',  interval: 'week',  amount: 599,  currency: 'usd' },
+  { id: 'monthly', nickname: 'Monthly', interval: 'month', amount: 1699, currency: 'usd' },
+  { id: 'yearly',  nickname: 'Yearly',  interval: 'year',  amount: 9999, currency: 'usd' },
+];
+
+ب) تأكد أن /api/stripe/prices تُرجع 4 خطط مرتّبة:
+// src/app/api/stripe/prices/route.ts
+import { FALLBACK_PLANS } from '@/lib/plans';
+import Stripe from 'stripe';
+
+export async function GET() {
+  try {
+    const key = process.env.STRIPE_SECRET_KEY;
+    const ids = [
+      process.env.STRIPE_PRICE_DAILY,
+      process.env.STRIPE_PRICE_WEEKLY,
+      process.env.STRIPE_PRICE_MONTHLY,
+      process.env.STRIPE_PRICE_YEARLY,
+    ].filter(Boolean) as string[];
+
+    if (!key || ids.length !== 4) {
+      return Response.json({ plans: FALLBACK_PLANS }, { status: 200 });
+    }
+
+    const stripe = new Stripe(key, { apiVersion: '2024-06-20' });
+    const prices = await Promise.all(ids.map(id => stripe.prices.retrieve(id)));
+    const plans = prices.map(p => ({
+      id: p.id,
+      priceId: p.id,
+      nickname: p.nickname ?? (p.recurring?.interval ?? 'plan'),
+      interval: p.recurring?.interval ?? 'month',
+      amount: p.unit_amount ?? 0,
+      currency: (p.currency ?? 'usd') as 'usd',
+    }));
+
+    // ترتيب: day, week, month, year
+    const order = { day: 0, week: 1, month: 2, year: 3 } as any;
+    plans.sort((a,b) => (order[a.interval] ?? 9) - (order[b.interval] ?? 9));
+
+    return Response.json({ plans }, { status: 200 });
+  } catch {
+    return Response.json({ plans: FALLBACK_PLANS }, { status: 200 });
+  }
+}
+
+ج) واجهة الـUpsell تعرض جميع الخطط الصحيحة
+
+في UpsellModal (أو حيث تُعرض الترقية) اجلب /api/stripe/prices واعرض كل الخطط:
+
+// مثال مبسّط داخل UpsellModal.tsx
+'use client';
+import { useEffect, useState } from 'react';
+import type { Plan } from '@/lib/plans';
+
+export default function UpsellModal({ feature }: { feature: string }) {
+  const [plans, setPlans] = useState<Plan[]>([]);
+  useEffect(() => {
+    fetch('/api/stripe/prices').then(r => r.json()).then(d => setPlans(d.plans ?? []));
+  }, []);
+
+  return (
+    <div className="z-[100] fixed inset-0 grid place-items-center bg-black/60">
+      <div className="w-full max-w-md bg-neutral-900 rounded-2xl p-4">
+        <h3 className="text-xl font-semibold mb-2">Upgrade to VIP</h3>
+        <p className="text-neutral-300 mb-4">Unlock {feature} and more.</p>
+        <div className="grid gap-2">
+          {plans.map((p) => (
+            <form key={p.id} action={`/api/stripe/subscribe`} method="POST" className="flex items-center justify-between bg-neutral-800 rounded-xl p-3">
+              <div>
+                <div className="font-medium">{p.nickname}</div>
+                <div className="text-sm text-neutral-400">
+                  ${(p.amount / 100).toFixed(2)} / {p.interval}
+                </div>
+              </div>
+              <input type="hidden" name="priceId" value={(p as any).priceId ?? p.id} />
+              <button className="btn-primary" type="submit">Choose</button>
+            </form>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+إن كان لديك /api/stripe/subscribe جاهزًا فسيعمل مباشرة؛ وإلا أبقه كما هو مستخدمًا لديك.
+
+3) قائمة الدول الشاملة + دولة المستخدم أولاً
+
+أضِف التابع world-countries (قائمة ISO رسمية):
+pnpm add world-countries
+
+حدّث مكوّن فلتر الدول ليقرأ كل الدول، ويجلب /api/geo لتحديد دولة الزائر، ويجعل الترتيب: All Countries ثم دولة المستخدم ثم باقي الدول ترتيبًا أبجديًا. لغير الـVIP: المسموح All + دولة المستخدم، أما باقي الدول فتعطي Upsell.
+
+// src/components/filters/CountryFilter.tsx
+'use client';
+import { useEffect, useMemo, useState } from 'react';
+import countriesRaw from 'world-countries';
+import { emit } from '@/lib/bus';
+import { useVip } from '@/lib/vip';
+
+type Country = { code: string; name: string };
+
+export default function CountryFilter() {
+  const { isVip } = useVip ? useVip() : { isVip: false };
+  const [home, setHome] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    fetch('/api/geo').then(r => r.json()).then(d => setHome(d?.country || d?.countryCode || undefined)).catch(() => {});
+  }, []);
+
+  const countries: Country[] = useMemo(() => {
+    const list = countriesRaw.map(c => ({ code: c.cca2, name: c.name.common }));
+    const my = home ? list.find(c => c.code === home) : undefined;
+    const rest = list.filter(c => !home || c.code !== home).sort((a,b) => a.name.localeCompare(b.name));
+    const out: Country[] = [{ code: 'ALL', name: 'All Countries' }];
+    if (my) out.push(my);
+    return out.concat(rest);
+  }, [home]);
+
+  const onSelect = (c: Country) => {
+    const allowed = isVip || c.code === 'ALL' || (home && c.code === home);
+    if (!allowed) {
+      emit('ui:upsell', { feature: 'country-filters' });
+      return;
+    }
+    emit('filters:country', { code: c.code });
+  };
+
+  return (
+    <div className="relative">
+      {/* زر الفلتر */}
+      <button className="btn-filter">
+        🌍 {home ? (countries.find(c => c.code === home)?.name ?? 'Countries') : 'Countries'}
+      </button>
+      {/* قائمة منسدلة */}
+      <div className="dropdown z-[90]">
+        {countries.map(c => (
+          <button
+            key={c.code}
+            onClick={() => onSelect(c)}
+            className={`dropdown-item ${(!isVip && !(c.code==='ALL' || c.code===home)) ? 'opacity-60' : ''}`}
+          >
+            {c.name} {(!isVip && !(c.code==='ALL' || c.code===home)) ? '🔒' : ''}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+النتيجة: القائمة تُظهر كل الدول، وتضع دولة المستخدم مباشرة بعد “All Countries”، وتبقى قابلة للاستخدام للجميع.
+
+4) أوامر التنفيذ والفحص
+
+نفّذ بالترتيب التالي في الـShell (أو اجمعها في مهمة واحدة):
+
+# 0) فرع عمل آمن + نسخة احتياطية
+git checkout -b fix/phase-2-3
+mkdir -p _ops/backups && cp -r src/components/chat/MyControls.tsx "_ops/backups/MyControls_$(date +%s).tsx"
+
+# 1) تثبيت مكتبة الدول
+pnpm add world-countries
+
+# 2) بناء سريع محلي
+pnpm build
+
+# 3) فحص شامل (يجب أن يمرّ دون أخطاء) – عدّل الدومين إن لزم
+_ops/phase2/check_all.sh http://localhost:3000 || true
+
+# 4) اعالج أي تحذير/خطأ يظهر فورًا ثم أعد الفحص
+       A) التحقق من شريط الرسائل (Message Bar)
+
+الهدف: يعمل بسلاسة على الجوال وسطح المكتب بدون تغطية الفيديو وبحد الرسائل الحالي من الخادم.
+
+ما ينفّذه الوكيل:
+
+ضمان ظهور حقل الإدخال، زر الإرسال، وفتّاحة الإيموجي، وأن:
+
+Enter/Send يرسلان الرسالة، وIME لا يكرر الإرسال.
+
+آخر 3 رسائل تظهر فوق الشريط، والقديم يُعرض بالسحب العمودي، مع نسخ النص بالنقر المطوّل.
+
+يتم تفريغ الرسائل عند انتهاء/تبدّل المطابقة.
+
+لا يغطي الكيبورد الشريط (visualViewport + padding ديناميكي).
+
+فحص حدّ الضيف خادميًا: إرسال رسائل متتالية حتى يظهر 429 (يُسجَّل مثل: GUEST_MSG_CODES=200,...,429,...).
+
+لا تغييرات بصرية خارج هذه البنود.
+
+قبول:
+
+الكتابة/الإرسال/الإيموجي تعمل.
+
+آخر 3 رسائل مرئية وتُفرّغ عند نهاية الجلسة.
+
+لا تغطية مع الكيبورد على الجوال.
+
+تسلسل الأكواد يُظهر 429 بعد حدّ الخادم.
+
+B) تحويل خطط VIP إلى اليورو (€)
+
+الهدف: عرض الخطط الأربع باليورو في الـUpsell وبـAPI الأسعار.
+
+تغييرات بسيطة في الكود (يُطبقها الوكيل):
+
+تحديث خطط fallback إلى EUR:
+
+// src/lib/plans.ts
+export const FALLBACK_PLANS = [
+  { id: 'daily',   nickname: 'Daily',   interval: 'day',   amount: 149,  currency: 'eur' },
+  { id: 'weekly',  nickname: 'Weekly',  interval: 'week',  amount: 599,  currency: 'eur' },
+  { id: 'monthly', nickname: 'Monthly', interval: 'month', amount: 1699, currency: 'eur' },
+  { id: 'yearly',  nickname: 'Yearly',  interval: 'year',  amount: 9999, currency: 'eur' },
+];
+
+
+تنسيق السعر حسب العملة القادمة من الـAPI (Stripe أو fallback):
+
+// داخل UpsellModal قبل العرض
+const fmt = (amt:number, cur:string) =>
+  new Intl.NumberFormat(undefined, { style: 'currency', currency: cur as any })
+    .format(amt / 100);
+
+// عند العرض: fmt(p.amount, p.currency)  → يعرض €1.49 / day … إلخ
+
+
+ملاحظة: إن كانت متغيرات Stripe لديك لأسعار يورو أصلاً، يمرّر /api/stripe/prices العملة كما هي. وإلا فـfallback الآن باليورو.
+
+قبول:
+
+نافذة الترقية تعرض أربع خطط: €1.49 يومي، €5.99 أسبوعي، €16.99 شهري، €99.99 سنوي.
+
+/api/stripe/prices يعيد currency: "eur" (للخطط fallback أو من Stripe).
+
+لا كسر لأي تدفّق Stripe موجود.                                            ****************************
+
+لا تتوقف حتى:
+
+يختفي تحذير/خطأ Hooks تمامًا.
+
+/api/stripe/prices يعرض 4 خطط صحيحة، والـUpsell يعرضها كلها.
+
+قائمة الدول تعمل وتضع دولة المستخدم بعد “All Countries” وتلتزم بسياسة VIP.
+
+_ops/phase2/check_all.sh يمرّ، والكونسول نظيف.
+
+وأخيرًا:
+
+git add .
+git commit -m "fix: stable hooks in MyControls, full VIP plans, smart countries dropdown; pass checks"
+git push -u origin fix/phase-2-3
+
+
+أبقِ الـPR بلا تغييرات بصرية خارج البنود أعلاه. إذا ظهر أي خطأ جديد أثناء الفحص، أصلحه محلّيًا داخل نفس الفرع ثم أعد تشغيل الفحص قبل إنهاء الدفعة.
