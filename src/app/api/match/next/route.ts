@@ -33,12 +33,19 @@ async function verifyHCaptcha(token: string): Promise<boolean> {
 
 function parse(input: any) {
   const genderRaw = input?.gender ?? null;
-  const g = (typeof genderRaw === "string" && genderRaw.toLowerCase()) || null;
+  let genders: string[] = [];
+  if (Array.isArray(genderRaw)) {
+    genders = genderRaw.map(String).filter(Boolean);
+  } else if (typeof genderRaw === "string" && genderRaw) {
+    genders = [genderRaw.toLowerCase()];
+  }
+  
   const countriesRaw = input?.countries;
   let countries: string[] = [];
-  if (Array.isArray(countriesRaw)) countries = countriesRaw.map(String);
+  if (Array.isArray(countriesRaw)) countries = countriesRaw.map(String).filter(Boolean);
   else if (typeof countriesRaw === "string") countries = countriesRaw.split(",").map(s => s.trim()).filter(Boolean);
-  return { gender: g, countries };
+  
+  return { gender: genders, countries };
 }
 
 export async function GET(req: Request) {
@@ -82,7 +89,7 @@ export async function GET(req: Request) {
   const p = parse({ gender, countries });
   
   // VIP filters check with enhanced country restrictions
-  const genders = Array.isArray(p.gender) ? p.gender : (p.gender ? [p.gender] : []);
+  const genders = p.gender || [];
   const countriesArray = p.countries || [];
   
   const isVip = await requireVip();
@@ -144,7 +151,7 @@ export async function POST(req: Request) {
   const p = parse(params);
   
   // VIP filters check with enhanced country restrictions
-  const genders = Array.isArray(p.gender) ? p.gender : (p.gender ? [p.gender] : []);
+  const genders = p.gender || [];
   const countriesArray = p.countries || [];
   
   const isVip = await requireVip();
