@@ -340,10 +340,7 @@ export default function ChatClient(){
           {!ready && <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Requesting camera/mic…</div>}
 
           {/* My Controls - Top Right */}
-          <MyControls 
-            myLikes={myLikes} 
-            beautyEnabled={beauty}
-          />
+          <MyControls />
 
           {/* Enhanced Message System */}
           <div className="absolute inset-x-0 bottom-14">
