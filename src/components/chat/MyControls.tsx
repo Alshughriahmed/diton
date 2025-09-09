@@ -31,16 +31,63 @@ export default function MyControls({ myLikes = 0, beautyEnabled = false }: MyCon
     };
   }, []);
 
-  const handleCameraSwitch = () => {
+  const handleCameraSwitch = async () => {
+    // Save camera switch preference
+    try {
+      const { useProfile } = await import("@/state/profile");
+      const profile = useProfile.getState().profile;
+      // Toggle camera facing preference
+      const currentFacing = profile.preferences?.camera?.facing || 'user';
+      const newFacing = currentFacing === 'user' ? 'environment' : 'user';
+      
+      const updatedProfile = { 
+        ...profile, 
+        preferences: { 
+          ...profile.preferences, 
+          camera: {
+            ...profile.preferences?.camera,
+            facing: newFacing
+          }
+        } 
+      };
+      useProfile.getState().setProfile(updatedProfile);
+    } catch (error) {
+      console.warn('Failed to save camera preference:', error);
+    }
+    
     emit("ui:switchCamera");
   };
 
-  const handleBeautyToggle = () => {
+  const handleBeautyToggle = async () => {
     if (!isVip) {
       emit("ui:upsell", "beauty");
       return;
     }
-    emit("ui:toggleBeauty", { enabled: !beauty });
+
+    const newState = !beauty;
+    
+    // Save to profile store
+    try {
+      const { useProfile } = await import("@/state/profile");
+      const profile = useProfile.getState().profile;
+      const updatedProfile = { 
+        ...profile, 
+        preferences: { 
+          ...profile.preferences, 
+          beauty: {
+            enabled: newState,
+            strength: profile.preferences?.beauty?.strength ?? 50,
+            brightness: profile.preferences?.beauty?.brightness ?? 50,
+            smoothness: profile.preferences?.beauty?.smoothness ?? 50
+          }
+        } 
+      };
+      useProfile.getState().setProfile(updatedProfile);
+    } catch (error) {
+      console.warn('Failed to save beauty preference:', error);
+    }
+    
+    emit("ui:toggleBeauty", { enabled: newState });
   };
 
   return (

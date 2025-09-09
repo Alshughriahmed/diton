@@ -16,4 +16,22 @@ export interface Profile {
   privacy: { hideCountry: boolean; hideCity: boolean };
   likes: { showCount: boolean };
   translation: { enabled: boolean; language?: LangOpt };
+  preferences?: {
+    gender?: string;
+    genderSelections?: string[];
+    countries?: string[];
+    beauty?: {
+      enabled: boolean;
+      strength: number;
+      brightness: number;
+      smoothness: number;
+    };
+    masks?: {
+      enabled: boolean;
+      currentMask: string;
+    };
+    camera?: {
+      facing: 'user' | 'environment';
+    };
+  };
 }
