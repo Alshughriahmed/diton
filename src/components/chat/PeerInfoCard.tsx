@@ -15,14 +15,51 @@ interface PeerInfoCardProps {
 }
 
 export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
-  const [defaultPeer] = useState<PeerInfo>({
+  const [peer, setPeer] = useState<PeerInfo>(peerInfo || {
     name: "Connecting...",
     isVip: false,
     likes: 0,
     isOnline: false
   });
 
-  const peer = peerInfo || defaultPeer;
+  useEffect(() => {
+    // Listen for peer info updates from match data
+    const handleMatchUpdate = (matchData: any) => {
+      if (matchData?.peer) {
+        setPeer({
+          name: matchData.peer.name || "Anonymous",
+          avatar: matchData.peer.avatar,
+          isVip: matchData.peer.isVip || false,
+          likes: matchData.peer.likes || 0,
+          isOnline: true
+        });
+      }
+    };
+
+    // Listen for like updates
+    const handleLikeUpdate = (data: any) => {
+      if (data?.peerLikes !== undefined) {
+        setPeer(prev => ({ ...prev, likes: data.peerLikes }));
+      }
+    };
+
+    // Import event system dynamically to avoid SSR issues
+    import("@/utils/events").then(({ on }) => {
+      const offMatch = on("match:update" as any, handleMatchUpdate);
+      const offLike = on("ui:likeUpdate", handleLikeUpdate);
+      
+      return () => {
+        offMatch();
+        offLike();
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (peerInfo) {
+      setPeer(peerInfo);
+    }
+  }, [peerInfo]);
 
   return (
     <div className="absolute top-3 left-3 z-30">

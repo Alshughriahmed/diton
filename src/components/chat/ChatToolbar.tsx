@@ -119,6 +119,15 @@ export default function ChatToolbar(){
               🚩
             </button>
 
+            {/* Messaging */}
+            <button 
+              onClick={() => emit("ui:openMessaging" as any)}
+              className="px-3 py-2 rounded-lg bg-purple-600 text-white text-sm border border-purple-700 hover:bg-purple-700 transition-colors" 
+              aria-label="Messages"
+            >
+              💬
+            </button>
+
             {/* Prev (VIP gate) */}
             <button 
               className={`px-3 py-2 rounded-lg text-white text-sm border transition-colors ${

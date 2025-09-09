@@ -14,6 +14,7 @@ import PeerMetadata from "@/components/chat/PeerMetadata";
 import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
 import ChatToolbar from "@/components/chat/ChatToolbar";
+import ChatMessaging from "@/components/chat/ChatMessaging";
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
@@ -36,6 +37,7 @@ export default function ChatClient(){
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const [isGuest, setIsGuest] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [showMessaging, setShowMessaging] = useState(false);
   const { profile } = useProfile();
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
@@ -65,17 +67,44 @@ export default function ChatClient(){
       }
     });
     let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
-    let off5=on("ui:like",(data)=>{ 
-      setLike(data?.isLiked || false); 
-      setMyLikes(data?.myLikes || 0);
-      
-      // Update LikeSystem component
-      emit("ui:likeUpdate", {
-        myLikes: data?.myLikes || 0,
-        peerLikes: peerLikes,
-        isLiked: data?.isLiked || false,
-        canLike: true
-      });
+    let off5=on("ui:like", async (data)=>{ 
+      try {
+        // Send like to backend
+        const response = await fetch('/api/likes/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ liked: data?.isLiked || true })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          setLike(data?.isLiked || false); 
+          setMyLikes(result.myLikes || data?.myLikes || 0);
+          
+          // Update LikeSystem component
+          emit("ui:likeUpdate", {
+            myLikes: result.myLikes || data?.myLikes || 0,
+            peerLikes: result.peerLikes || peerLikes,
+            isLiked: data?.isLiked || false,
+            canLike: true
+          });
+          
+          toast(`تم الإعجاب ${data?.isLiked ? '❤️' : '💔'}`);
+        } else {
+          toast('خطأ في إرسال الإعجاب');
+        }
+      } catch (error) {
+        console.warn('Like failed:', error);
+        // Fallback to local update
+        setLike(data?.isLiked || false); 
+        setMyLikes(data?.myLikes || 0);
+        emit("ui:likeUpdate", {
+          myLikes: data?.myLikes || 0,
+          peerLikes: peerLikes,
+          isLiked: data?.isLiked || false,
+          canLike: true
+        });
+      }
     });
     let off6=on("ui:report", async ()=>{ 
       try{ 
@@ -86,6 +115,8 @@ export default function ChatClient(){
     });
     let off7=on("ui:next",()=>{ nextMatch({gender, countries}); });
     let off8=on("ui:prev",()=>{ tryPrevOrRandom({gender, countries}); });
+    let offOpenMessaging=on("ui:openMessaging", ()=>{ setShowMessaging(true); });
+    let offCloseMessaging=on("ui:closeMessaging", ()=>{ setShowMessaging(false); });
     let offRemoteAudio=on("ui:toggleRemoteAudio", ()=>{
       const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
       if(v){ v.muted = !v.muted; toast(v.muted?'🔇 صمت الطرف الثاني':'🔈 سماع الطرف الثاني'); }
@@ -201,7 +232,7 @@ export default function ChatClient(){
     });
     return ()=>{ 
       off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
-      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilter();offGenderFilterUpdate();offCountryFilter();
+      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilterUpdate();offCountryFilter();offOpenMessaging();offCloseMessaging();
       unsubscribeMobile(); 
     };
   },[]);
@@ -314,6 +345,12 @@ export default function ChatClient(){
       
       {/* Upsell Modal */}
       <UpsellModal />
+      
+      {/* Chat Messaging */}
+      <ChatMessaging 
+        isVisible={showMessaging} 
+        onToggle={() => setShowMessaging(!showMessaging)} 
+      />
     </div>
   );
 }

@@ -38,14 +38,13 @@ export default function MyControls({ myLikes = 0, beautyEnabled = false }: MyCon
       const profile = useProfile.getState().profile;
       // Toggle camera facing preference
       const currentFacing = profile.preferences?.camera?.facing || 'user';
-      const newFacing = currentFacing === 'user' ? 'environment' : 'user';
+      const newFacing: 'user' | 'environment' = currentFacing === 'user' ? 'environment' : 'user';
       
       const updatedProfile = { 
         ...profile, 
         preferences: { 
           ...profile.preferences, 
           camera: {
-            ...profile.preferences?.camera,
             facing: newFacing
           }
         } 
