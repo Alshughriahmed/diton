@@ -10,6 +10,7 @@ import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import MessageSystem from "@/components/chat/MessageSystem";
+import RemoteTopRight from "@/components/chat/RemoteTopRight";
 import PeerInfoCard from "@/components/chat/PeerInfoCard";
 import PeerMetadata from "@/components/chat/PeerMetadata";
 import MyControls from "@/components/chat/MyControls";
@@ -324,8 +325,13 @@ export default function ChatClient(){
             age={peerInfo.age}
           />
           
-          {/* Like System - Top Right */}
-          <LikeSystem />
+          {/* Filters - Top Right */}
+          <RemoteTopRight />
+          
+          {/* Like System - Bottom Right */}
+          <div className="absolute bottom-4 right-4 z-30">
+            <LikeSystem />
+          </div>
           
           {/* Center remote area */}
           <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none">

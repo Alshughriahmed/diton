@@ -88,8 +88,8 @@ export default function UpsellModal({ isOpen: externalOpen, onClose }: UpsellMod
       />
       
       {/* Modal */}
-      <div className="fixed inset-0 flex items-center justify-center z-[101] p-4">
-        <div className="bg-gradient-to-br from-purple-900 via-pink-900 to-indigo-900 rounded-2xl border border-purple-500/30 shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+      <div className="fixed inset-x-0 bottom-0 max-h-[80vh] overflow-y-auto pb-[env(safe-area-inset-bottom)] z-[101] flex items-end justify-center">
+        <div className="bg-gradient-to-br from-purple-900 via-pink-900 to-indigo-900 rounded-t-2xl border border-purple-500/30 shadow-2xl max-w-md w-full overflow-hidden">
           {/* Header */}
           <div className="relative p-6 text-center">
             <button
@@ -146,7 +146,7 @@ export default function UpsellModal({ isOpen: externalOpen, onClose }: UpsellMod
                       </div>
                       <div className="text-right">
                         <div className="text-purple-400 font-bold text-lg">
-                          ${(plan.amount / 100).toFixed(2)}
+                          {new Intl.NumberFormat(undefined, {style: 'currency', currency: plan.currency}).format(plan.amount / 100)}
                         </div>
                         {plan.interval === 'year' && (
                           <div className="text-green-400 text-xs">أفضل قيمة!</div>
