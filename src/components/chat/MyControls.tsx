@@ -19,7 +19,7 @@ export default function MyControls() {
     const offLikes = on('ui:likeUpdate', (d: any) => {
       if (d?.myLikes !== undefined) setLikes(d.myLikes);
     });
-    const offPause = on('ui:playPause', (d: any) => setPaused(!!d?.paused));
+    const offPause = on('ui:playPause' as any, (d: any) => setPaused(!!d?.paused));
     const offBeauty = on('ui:toggleBeauty', (d: any) => setBeauty(!!d?.enabled));
     
     return () => {
@@ -33,12 +33,12 @@ export default function MyControls() {
   const onNext = useCallback(() => emit('ui:next'), []);
   const onPrev = useCallback(() => emit(isVip ? 'ui:prev' : 'ui:upsell', { feature: 'prev' }), [isVip]);
   const onTogglePeerAudio = useCallback(() => emit('ui:toggleRemoteAudio'), []);
-  const onToggleMic = useCallback(() => emit('ui:toggleMic'), []);
-  const onLike = useCallback(() => emit('ui:likeToggle'), []);
-  const onMasks = useCallback(() => emit(isVip ? 'ui:toggleMasks' : 'ui:upsell', { feature: 'masks' }), [isVip]);
-  const onSettings = useCallback(() => emit('ui:openSettings'), []);
-  const onPlayPause = useCallback(() => emit('ui:togglePlay'), []);
-  const onReport = useCallback(() => emit('ui:reportAndNext'), []);
+  const onToggleMic = useCallback(() => emit('ui:toggleMic' as any), []);
+  const onLike = useCallback(() => emit('ui:likeToggle' as any), []);
+  const onMasks = useCallback(() => emit(isVip ? 'ui:toggleMasks' as any : 'ui:upsell' as any, { feature: 'masks' }), [isVip]);
+  const onSettings = useCallback(() => emit('ui:openSettings' as any), []);
+  const onPlayPause = useCallback(() => emit('ui:togglePlay' as any), []);
+  const onReport = useCallback(() => emit('ui:reportAndNext' as any), []);
   const onBeauty = useCallback(() => {
     if (!isVip) {
       emit('ui:upsell', { feature: 'beauty' });
