@@ -50,13 +50,14 @@ export default function CountrySelect(){
   useEffect(()=>{ if(!isVip) setCountries(["ALL"]); }, [isVip, setCountries]);
 
   return (
-    <div className="relative">
-      <button onClick={()=>setOpen(v=>!v)}
-        className="px-2 py-1 rounded-md bg-neutral-800 text-white text-sm border border-neutral-700"
-        aria-haspopup="listbox" aria-expanded={open}>
-        Countries {countries.includes("ALL") ? "(All)" : `(${countries.length})`}
-      </button>
-      {!isVip && <span className="ml-2 text-[10px] opacity-60">VIP</span>}
+    <div className="absolute top-2 right-2 z-50">
+      <div className="relative">
+        <button onClick={()=>setOpen(v=>!v)}
+          className="px-2 py-1 rounded-md bg-neutral-800 text-white text-sm border border-neutral-700"
+          aria-haspopup="listbox" aria-expanded={open}>
+          Countries {countries.includes("ALL") ? "(All)" : `(${countries.length})`}
+        </button>
+        {!isVip && <span className="ml-2 text-[10px] opacity-60">VIP</span>}
       {open && (
         <div className="absolute right-0 mt-2 z-[40] w-[460px] max-h-[320px] overflow-auto p-3 rounded-xl bg-neutral-900 border border-neutral-700 shadow-lg">
           <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search countries..."
@@ -76,7 +77,8 @@ export default function CountrySelect(){
             ))}
           </div>
         </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
