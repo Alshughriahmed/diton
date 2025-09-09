@@ -16,7 +16,7 @@ import PeerMetadata from "@/components/chat/PeerMetadata";
 import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
 import ChatToolbar from "@/components/chat/ChatToolbar";
-import ChatMessaging from "@/components/chat/ChatMessaging";
+import ChatMessagingBar from "@/components/chat/ChatMessaging";
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
@@ -335,7 +335,7 @@ export default function ChatClient(){
           
           {/* Center remote area */}
           <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none">
-            Remote peer area (states: connecting/matched/…)
+            جارٍ العثور على شريك دردشة…
           </div>
         </section>
 
@@ -371,10 +371,7 @@ export default function ChatClient(){
       <UpsellModal />
       
       {/* Chat Messaging */}
-      <ChatMessaging 
-        isVisible={showMessaging} 
-        onToggle={() => setShowMessaging(!showMessaging)} 
-      />
+      <ChatMessagingBar />
     </div>
   );
 }

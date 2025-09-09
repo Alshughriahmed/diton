@@ -1,206 +1,100 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 "use client";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { emit } from "@/utils/events";
 
-import { useState, useEffect, useRef } from "react";
-import { emit, on } from "@/utils/events";
-import { useFilters } from "@/state/filters";
-import { toast } from "@/lib/ui/toast";
+type Msg = { id: string; me: boolean; txt: string; at: number };
 
-interface Message {
-  id: string;
-  text: string;
-  timestamp: number;
-  isOwn: boolean;
-  sender?: {
-    name: string;
-    isVip: boolean;
-  };
-}
+export default function ChatMessagingBar() {
+  const [list, setList] = useState<Msg[]>([]);
+  const [txt, setTxt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [vvBottom, setVvBottom] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-interface ChatMessagingProps {
-  isVisible?: boolean;
-  onToggle?: () => void;
-}
-
-export default function ChatMessaging({ isVisible = false, onToggle }: ChatMessagingProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [inputText, setInputText] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
-  const [messageCount, setMessageCount] = useState(0);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { isVip } = useFilters();
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
+  // تحريك الشريط مع لوحة المفاتيح على الجوال
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  useEffect(() => {
-    // Listen for incoming messages
-    const offMessage = on("chat:messageReceived" as any, (data: any) => {
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        text: data.text,
-        timestamp: Date.now(),
-        isOwn: false,
-        sender: data.sender
-      };
-      setMessages(prev => [...prev.slice(-2), newMessage]); // Keep only last 3 messages
-    });
-
-    // Listen for typing indicators
-    const offTyping = on("chat:typing" as any, (data: any) => {
-      setIsTyping(data.isTyping);
-    });
-
-    return () => {
-      offMessage();
-      offTyping();
+    const vv = (globalThis as any).visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      const off = Math.max(0, (window.innerHeight || 0) - (vv.height || 0));
+      setVvBottom(off);
     };
+    vv.addEventListener("resize", onResize);
+    onResize();
+    return () => vv.removeEventListener("resize", onResize);
   }, []);
 
-  const handleSendMessage = async () => {
-    if (!inputText.trim()) return;
+  const last3 = useMemo(() => list.slice(-3), [list]);
 
-    // Check guest limits
-    if (!isVip && messageCount >= 3) {
-      emit("ui:upsell", "messaging");
-      toast("🔒 الضيوف محدودون بـ 3 رسائل فقط");
-      return;
-    }
-
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      text: inputText,
-      timestamp: Date.now(),
-      isOwn: true
-    };
-
-    setMessages(prev => [...prev.slice(-2), newMessage]); // Keep only last 3 messages
-    setMessageCount(prev => prev + 1);
-    
+  const send = useCallback(async () => {
+    const val = txt.trim();
+    if (!val || busy) return;
+    setBusy(true);
     try {
-      // Send to backend
-      await fetch('/api/chat/message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: inputText })
+      const res = await fetch("/api/message", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // ملاحظة: نقطتنا الخلفية تستخدم الحقل "txt"
+        body: JSON.stringify({ txt: val }),
       });
-    } catch (error) {
-      console.warn('Message send failed:', error);
+      if (res.ok) {
+        setList((arr) =>
+          [...arr, { id: String(Date.now()), me: true, txt: val, at: Date.now() }].slice(-50)
+        );
+        setTxt("");
+      } else if (res.status === 429) {
+        emit("ui:upsell", "messages");
+        emit("ui:toast" as any, "بلغت حد الرسائل المجانية. اشترك VIP للمتابعة.");
+      } else {
+        emit("ui:toast" as any, "تعذّر إرسال الرسالة. حاول مجددًا.");
+      }
+    } catch {
+      emit("ui:toast" as any, "انقطاع مؤقت. يرجى المحاولة.");
+    } finally {
+      setBusy(false);
+      inputRef.current?.focus();
     }
-
-    setInputText("");
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
-
-  if (!isVisible) return null;
+  }, [txt, busy]);
 
   return (
-    <div className="absolute bottom-20 left-4 right-4 md:left-auto md:right-4 md:w-80 z-[40]">
-      <div className="bg-black/80 backdrop-blur-lg rounded-xl border border-white/20 shadow-xl">
-        {/* Header */}
-        <div className="flex items-center justify-between p-3 border-b border-white/10">
-          <div className="flex items-center gap-2">
-            <span className="text-white font-medium text-sm">💬 الرسائل</span>
-            {!isVip && (
-              <span className="text-xs text-orange-400">
-                {messageCount}/3
-              </span>
+    <div
+      className="mx-auto w-full max-w-5xl px-3"
+      style={{ marginBottom: vvBottom ? vvBottom + 8 : 0 }}
+      aria-label="chat-messaging-bar"
+    >
+      <div className="rounded-md bg-black/50 backdrop-blur-sm border border-white/10 p-2">
+        <div className="flex flex-col gap-1">
+          <div className="text-xs text-white/80 flex flex-col gap-0.5">
+            {last3.length === 0 ? (
+              <span className="opacity-80">جارٍ العثور على شريك دردشة…</span>
+            ) : (
+              last3.map((m) => (
+                <span key={m.id}>
+                  {m.me ? "أنت" : "الشريك"}: {m.txt}
+                </span>
+              ))
             )}
           </div>
-          <button
-            onClick={onToggle}
-            className="text-white/60 hover:text-white transition-colors"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* Messages */}
-        <div className="h-48 overflow-y-auto p-3 space-y-2">
-          {messages.length === 0 ? (
-            <div className="text-center text-white/50 text-sm py-8">
-              ابدأ محادثة...
-            </div>
-          ) : (
-            messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.isOwn ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[70%] rounded-lg px-3 py-2 text-sm ${
-                    message.isOwn
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white/10 text-white border border-white/20'
-                  }`}
-                >
-                  {!message.isOwn && message.sender && (
-                    <div className="text-xs opacity-70 mb-1">
-                      {message.sender.name}
-                      {message.sender.isVip && (
-                        <span className="ml-1 text-yellow-400">👑</span>
-                      )}
-                    </div>
-                  )}
-                  {message.text}
-                </div>
-              </div>
-            ))
-          )}
-          
-          {isTyping && (
-            <div className="flex justify-start">
-              <div className="bg-white/10 text-white rounded-lg px-3 py-2 text-sm border border-white/20">
-                <span className="animate-pulse">يكتب...</span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input */}
-        <div className="p-3 border-t border-white/10">
           <div className="flex gap-2">
             <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder={!isVip && messageCount >= 3 ? "🔒 اشترك في VIP للمزيد" : "اكتب رسالة..."}
-              disabled={!isVip && messageCount >= 3}
-              className="flex-1 bg-white/10 text-white rounded-lg px-3 py-2 text-sm border border-white/20 focus:border-blue-500 focus:outline-none placeholder-white/50 disabled:opacity-50"
-              maxLength={200}
+              ref={inputRef}
+              value={txt}
+              onChange={(e) => setTxt(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && send()}
+              placeholder="اكتب رسالة…"
+              className="flex-1 outline-none rounded bg-white/90 text-black px-3 py-2 text-sm"
+              aria-label="message-input"
             />
             <button
-              onClick={handleSendMessage}
-              disabled={!inputText.trim() || (!isVip && messageCount >= 3)}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+              onClick={send}
+              disabled={busy || !txt.trim()}
+              className="shrink-0 rounded bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white px-4 py-2 text-sm font-medium"
+              aria-label="send-message"
             >
               إرسال
             </button>
           </div>
-          
-          {!isVip && (
-            <div className="text-xs text-orange-400 mt-2 text-center">
-              الضيوف محدودون بـ 3 رسائل - 
-              <button 
-                onClick={() => emit("ui:upsell", "messaging")}
-                className="underline hover:text-orange-300 ml-1"
-              >
-                اشترك في VIP
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>

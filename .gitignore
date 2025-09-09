@@ -9,3 +9,4 @@ _ops/snapshots/
 _ops/artifacts/
 _ops/backups/
 _ops/**/*.tar.gz
+.vercel

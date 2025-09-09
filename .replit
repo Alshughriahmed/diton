@@ -84,5 +84,5 @@ waitForPort = 5000
 outputType = "webview"
 
 [nix]
-packages = ["jq", "dos2unix"]
+packages = ["jq", "dos2unix", "imagemagick_light"]
 channel = "stable-25_05"
