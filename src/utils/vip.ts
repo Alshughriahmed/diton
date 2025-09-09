@@ -6,7 +6,7 @@ export async function requireVip(): Promise<boolean> {
   if (process.env.FREE_FOR_ALL === "1") return true;
   // 1) كوكي HttpOnly vip=1 (الأسرع)
   try {
-    const c = cookies();
+    const c = await cookies();
     if (c.get("vip")?.value === "1") return true;
   } catch {}
   // 2) JWT/Session
