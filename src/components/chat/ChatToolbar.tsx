@@ -59,7 +59,14 @@ export default function ChatToolbar(){
               🚫
             </button>
             <button 
-              onClick={() => emit("ui:openSettings")}
+              onClick={() => {
+                try {
+                  // افتح صفحة الإعدادات مباشرة
+                  window.location.href = '/settings';
+                } catch(e){
+                  emit("ui:openSettings");
+                }
+              }}
               className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
               aria-label="Settings"
             >

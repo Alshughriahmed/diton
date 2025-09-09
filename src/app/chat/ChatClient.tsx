@@ -45,7 +45,7 @@ export default function ChatClient(){
         console.warn('Camera switch failed:', error);
       }
     });
-    let off4=on("ui:openSettings",()=>{ /* open settings modal placeholder */ });
+    let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
     let off5=on("ui:like",(data)=>{ 
       setLike(data.isLiked); 
       setMyLikes(data.myLikes);
