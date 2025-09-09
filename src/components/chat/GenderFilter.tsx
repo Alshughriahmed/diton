@@ -123,14 +123,15 @@ export default function GenderFilter() {
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-64 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 overflow-hidden">
+        <div className="absolute top-full left-0 mt-2 w-64 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-[90] overflow-hidden">
           {/* Gender Options */}
           <div className="p-2">
             {genderOptions.map((option) => {
               const isSelected = option.key === "all" 
                 ? selectedGenders.length === 0
                 : selectedGenders.includes(option.key);
-              const isDisabled = !isVip && option.key !== "all";
+              const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+              const isDisabled = !isVip && !FREE_FOR_ALL && option.key !== "all";
               
               return (
                 <button
@@ -165,10 +166,10 @@ export default function GenderFilter() {
           </div>
 
           {/* VIP Notice */}
-          {!isVip && (
+          {!isVip && !(globalThis as any).__vip?.FREE_FOR_ALL && (
             <div className="p-3 border-t border-gray-600 bg-gradient-to-r from-purple-600/20 to-blue-600/20">
               <p className="text-xs text-gray-300 text-center">
-                🔒 Upgrade to VIP to filter by specific genders (up to 2)
+                🔒 ترقية لـ VIP لفلترة الجنس (حتى خيارين)
               </p>
             </div>
           )}
@@ -195,7 +196,7 @@ export default function GenderFilter() {
       {/* Backdrop */}
       {isOpen && (
         <div 
-          className="fixed inset-0 z-40" 
+          className="fixed inset-0 z-[85]" 
           onClick={() => setIsOpen(false)}
         />
       )}

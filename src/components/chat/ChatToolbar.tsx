@@ -11,26 +11,35 @@ import FriendsView from "./FriendsView";
 export default function ChatToolbar(){
   const { isVip } = useFilters();
   const { next, prev } = useNextPrev();
+  
   return (
     <div className="absolute left-0 right-0 bottom-0 z-[35] px-4 pb-3 pt-2">
       <div className="mx-auto max-w-6xl rounded-2xl bg-black/50 backdrop-blur border border-white/10">
         <div className="flex items-center justify-between px-4 py-3 gap-3">
-          {/* Left: Media Controls */}
+          {/* Left: Filters */}
           <div className="flex items-center gap-2">
+            <CountryFilter />
+            <GenderFilter />
+          </div>
+          
+          {/* Center: Effects */}
+          <div className="flex items-center gap-2">
+            <BeautyControls />
+            <MaskStrip />
+          </div>
+
+          {/* Right: Main Toolbar (Right to Left as requested) */}
+          <div className="flex items-center gap-2">
+            {/* Next (أكبر زر) */}
             <button 
-              onClick={() => emit("ui:toggleCam")}
-              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
-              aria-label="Toggle Video"
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm border border-emerald-500 hover:bg-emerald-700 transition-colors font-medium" 
+              aria-label="Next" 
+              onClick={(e)=>{e.preventDefault(); emit("ui:next");}}
             >
-              📹
+              Next ⏭️
             </button>
-            <button 
-              onClick={() => emit("ui:toggleMic")}
-              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
-              aria-label="Mic"
-            >
-              🎙️
-            </button>
+
+            {/* كتم صوت الطرف الثاني */}
             <button 
               onClick={() => emit("ui:toggleRemoteAudio" as any)}
               className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
@@ -38,51 +47,49 @@ export default function ChatToolbar(){
             >
               🔈
             </button>
-            <button 
-              onClick={() => emit("ui:switchCamera")}
-              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
-              aria-label="Switch Camera"
-            >
-              🔄
-            </button>
-          </div>
-          
-          {/* Center: Filters & Effects */}
-          <div className="flex items-center gap-2">
-            <CountryFilter />
-            <GenderFilter />
-            <BeautyControls />
-            <MaskStrip />
-          </div>
 
-          {/* Center-Right: Actions */}
-          <div className="flex items-center gap-2">
-            <FriendsView />
+            {/* مايك */}
             <button 
-              onClick={() => emit("ui:toggleMasks" as any)}
+              onClick={() => emit("ui:toggleMic")}
               className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
+              aria-label="Mic"
+            >
+              🎙️
+            </button>
+
+            {/* Like */}
+            <button 
+              onClick={() => emit("ui:like", { isLiked: true })}
+              className="px-3 py-2 rounded-lg bg-pink-600 text-white text-sm border border-pink-700 hover:bg-pink-700 transition-colors" 
+              aria-label="Like"
+            >
+              ❤
+            </button>
+
+            {/* Masks (VIP gate) */}
+            <button 
+              onClick={() => {
+                if (!isVip) {
+                  emit("ui:upsell", "masks");
+                  return;
+                }
+                emit("ui:toggleMasks" as any);
+              }}
+              className={`px-3 py-2 rounded-lg text-white text-sm border transition-colors ${
+                !isVip 
+                  ? 'bg-neutral-800/60 border-neutral-700 opacity-60' 
+                  : 'bg-neutral-800 border-neutral-700 hover:bg-neutral-700'
+              }`}
               aria-label="Masks"
             >
               🤡
+              {!isVip && <span className="ml-1 text-xs">🔒</span>}
             </button>
-            <button 
-              onClick={() => emit("ui:togglePlay" as any)}
-              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
-              aria-label="Stop/Play"
-            >
-              ⏯️
-            </button>
-            <button 
-              onClick={() => emit("ui:report")}
-              className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm border border-red-700 hover:bg-red-700 transition-colors" 
-              aria-label="Report"
-            >
-              🚩
-            </button>
+
+            {/* Settings */}
             <button 
               onClick={() => {
                 try {
-                  // افتح صفحة الإعدادات مباشرة
                   window.location.href = '/settings';
                 } catch(e){
                   emit("ui:openSettings");
@@ -93,24 +100,44 @@ export default function ChatToolbar(){
             >
               ⚙️
             </button>
-          </div>
-          
-          {/* Right: Navigation */}
-          <div className="flex items-center gap-2">
+
+            {/* إيقاف/تشغيل */}
             <button 
-              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" 
+              onClick={() => emit("ui:togglePlay" as any)}
+              className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
+              aria-label="Stop/Play"
+            >
+              ⏯️
+            </button>
+
+            {/* Report */}
+            <button 
+              onClick={() => emit("ui:report")}
+              className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm border border-red-700 hover:bg-red-700 transition-colors" 
+              aria-label="Report"
+            >
+              🚩
+            </button>
+
+            {/* Prev (VIP gate) */}
+            <button 
+              className={`px-3 py-2 rounded-lg text-white text-sm border transition-colors ${
+                !isVip 
+                  ? 'bg-neutral-800/60 border-neutral-700 opacity-60' 
+                  : 'bg-neutral-800 border-neutral-700 hover:bg-neutral-700'
+              }`}
               aria-label="Prev" 
-              disabled={!isVip} 
-              onClick={(e)=>{e.preventDefault(); emit("ui:prev");}}
+              onClick={(e)=>{
+                e.preventDefault(); 
+                if (!isVip) {
+                  emit("ui:upsell", "prev");
+                  return;
+                }
+                emit("ui:prev");
+              }}
             >
               ⏮️ Prev
-            </button>
-            <button 
-              className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm border border-emerald-500 hover:bg-emerald-700 transition-colors" 
-              aria-label="Next" 
-              onClick={(e)=>{e.preventDefault(); emit("ui:next");}}
-            >
-              Next ⏭️
+              {!isVip && <span className="ml-1 text-xs">🔒</span>}
             </button>
           </div>
         </div>

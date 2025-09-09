@@ -10,6 +10,11 @@ import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import MessageSystem from "@/components/chat/MessageSystem";
+import PeerInfoCard from "@/components/chat/PeerInfoCard";
+import PeerMetadata from "@/components/chat/PeerMetadata";
+import MyControls from "@/components/chat/MyControls";
+import UpsellModal from "@/components/chat/UpsellModal";
+import ChatToolbar from "@/components/chat/ChatToolbar";
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
@@ -33,6 +38,16 @@ export default function ChatClient(){
   const [isGuest, setIsGuest] = useState(false);
   const [paused, setPaused] = useState(false);
   const { profile } = useProfile();
+  const [peerInfo, setPeerInfo] = useState({
+    name: "Anonymous",
+    isVip: Math.random() > 0.7,
+    likes: Math.floor(Math.random() * 500),
+    isOnline: true,
+    country: "US",
+    city: "New York", 
+    gender: "female",
+    age: 24
+  });
 
   useKeyboardShortcuts();
 
@@ -186,14 +201,25 @@ export default function ChatClient(){
     busyRef.current = false;
   }
 
-  // Pointer gesture swipe: يسار/يمين = Prev/Next
+  // Enhanced gesture swipe with feedback
   useEffect(()=>{
     let x0=0, y0=0, moved=false;
     const down=(e:PointerEvent)=>{ x0=e.clientX; y0=e.clientY; moved=false; };
     const up=(e:PointerEvent)=>{
       const dx=e.clientX-x0, dy=e.clientY-y0;
       if(Math.abs(dx) > 60 && Math.abs(dy) < 60){
-        if(dx<0) emit('ui:next'); else emit('ui:prev');
+        if(dx<0) {
+          toast('⏭️ سحب للمطابقة التالية');
+          emit('ui:next'); 
+        } else {
+          if (!vip) {
+            toast('🔒 العودة للسابق متاحة لـ VIP فقط');
+            emit('ui:upsell', 'prev');
+          } else {
+            toast('⏮️ محاولة العودة للمطابقة السابقة...');
+            emit('ui:prev');
+          }
+        }
       }
     };
     window.addEventListener('pointerdown',down);
@@ -202,7 +228,7 @@ export default function ChatClient(){
       window.removeEventListener('pointerdown',down);
       window.removeEventListener('pointerup',up);
     };
-  },[]);
+  },[vip]);
 
   function toggleCountry(code:string){ 
     const newCountries = countries.includes(code) ? countries.filter(c=>c!==code) : [...countries,code];
@@ -215,48 +241,17 @@ export default function ChatClient(){
       <div className="h-full grid grid-rows-2 gap-2 p-2">
         {/* ===== Top (peer) ===== */}
         <section className="relative rounded-2xl bg-black/30 overflow-hidden">
-          {/* Top-left: avatar + likes + VIP */}
-          <div className="absolute top-2 left-2 flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-500" aria-label="Peer avatar" />
-            <span className="px-2 py-0.5 rounded-full bg-rose-600/20 border border-rose-500 text-xs">♥ {peerLikes}</span>
-            {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
-          </div>
-          {/* Top-right: FilterBar (countries + gender) */}
-          <div className="absolute top-2 right-2 flex items-center gap-2">
-            <div className="relative">
-              <details className="group">
-                <summary className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs cursor-pointer">🌐 Countries ({countries.length||"0"})</summary>
-                <div className="absolute right-0 mt-2 w-64 max-h-64 overflow-auto rounded-xl bg-slate-900/95 border border-slate-700 p-2 space-y-1">
-                  <input placeholder="Search…" className="w-full mb-2 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-xs outline-none" onChange={(e)=>{
-                    const q=e.target.value.toLowerCase(); document.querySelectorAll<HTMLButtonElement>("[data-cc]").forEach(b=>{ b.style.display=b.dataset.cc!.includes(q)?"":"none"; });
-                  }}/>
-                  <div className="grid grid-cols-3 gap-1">
-                    {allCountries.map(c=>(
-                      <button key={c} data-cc={c.toLowerCase()} onClick={(e)=>{e.preventDefault(); toggleCountry(c);}}
-                        className={"text-xs px-2 py-1 rounded border "+(countries.includes(c)?"bg-emerald-700/40 border-emerald-500":"bg-slate-800 border-slate-700")}>{c}</button>
-                    ))}
-                  </div>
-                </div>
-              </details>
-            </div>
-            <div className="relative">
-              <details className="group">
-                <summary className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs cursor-pointer">Gender: {gender[0].toUpperCase()+gender.slice(1)}</summary>
-                <div className="absolute right-0 mt-2 w-40 rounded-xl bg-slate-900/95 border border-slate-700 p-1">
-                  {(["all","male","female","couple","lgbt"] as GenderOpt[]).map(g=>(
-                    <button key={g} className={"w-full text-left text-xs px-2 py-1 rounded "+(gender===g?"bg-emerald-700/40":"hover:bg-slate-800")}
-                      onClick={(e)=>{e.preventDefault(); setGender(g);}}>{g[0].toUpperCase()+g.slice(1)}</button>
-                  ))}
-                </div>
-              </details>
-            </div>
-          </div>
-          {/* Bottom-left: peer meta */}
-          <div className="absolute bottom-2 left-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{match?.countries?.[0]||"—"}</span>
-            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{/* city placeholder */}City</span>
-            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{(match?.gender||"all").toUpperCase()}</span>
-          </div>
+          {/* Peer Info Card - Top Left */}
+          <PeerInfoCard peerInfo={peerInfo} />
+          
+          {/* Peer Metadata - Bottom Left */}
+          <PeerMetadata 
+            country={peerInfo.country}
+            city={peerInfo.city}
+            gender={peerInfo.gender}
+            age={peerInfo.age}
+          />
+          
           {/* Like System - Top Right */}
           <LikeSystem />
           
@@ -272,14 +267,11 @@ export default function ChatClient(){
           <video data-local-video ref={localRef} className="w-full h-full object-cover" playsInline />
           {!ready && <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Requesting camera/mic…</div>}
 
-          {/* Top-right user controls */}
-          <div className="absolute top-2 right-2 flex items-center gap-2">
-            <button aria-label="Switch Camera" className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs"
-              onClick={async (e)=>{e.preventDefault(); const s=await switchCamera(); if(localRef.current&&s){localRef.current.srcObject=s; localRef.current.play().catch(()=>{});} }}>↺</button>
-            <button aria-label="Beauty" className={"px-3 py-1.5 rounded-full border text-xs "+(beauty?"bg-fuchsia-700/30 border-fuchsia-500":"bg-slate-800/80 border-slate-600")}
-              onClick={(e)=>{e.preventDefault(); setBeauty(v=>!v);}}>✨</button>
-            {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
-          </div>
+          {/* My Controls - Top Right */}
+          <MyControls 
+            myLikes={myLikes} 
+            beautyEnabled={beauty}
+          />
 
           {/* Enhanced Message System */}
           <div className="absolute inset-x-0 bottom-14">
@@ -292,29 +284,16 @@ export default function ChatClient(){
             />
           </div>
 
-          {/* Bottom toolbar: Prev | middle controls | Next */}
-          <div className="absolute inset-x-2 bottom-2" data-toolbar>
-            <div className="flex items-center justify-between gap-2">
-              <button aria-label="Prev" className="px-5 py-2 rounded-full bg-neutral-800 text-white text-sm border border-neutral-700"
-                onClick={(e)=>{e.preventDefault(); emit("ui:prev");}}>⏮️ Prev</button>
-              <div className="flex items-center gap-2">
-                <button aria-label="Mic" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:toggleMic");}}>🎙️</button>
-                <button aria-label="Camera" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:toggleCam");}}>📷</button>
-                <button aria-label="Speaker" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700">🔊</button>
-                <button aria-label="Settings" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:openSettings");}}>⚙️</button>
-                <button aria-label="Report" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:report");}}>🛡️</button>
-                <button aria-label="Like" className={"px-3 py-2 rounded-lg border "+(like?"bg-rose-600/40 border-rose-400":"bg-neutral-800 border-neutral-700")}
-                  onClick={(e)=>{e.preventDefault(); emit("ui:like");}}>♥ {myLikes}</button>
-              </div>
-              <button aria-label="Next" className="px-5 py-2 rounded-full bg-emerald-600 text-white text-sm border border-emerald-500"
-                onClick={(e)=>{e.preventDefault(); emit("ui:next");}}>Next ⏭️</button>
-            </div>
-          </div>
-
           {/* Gesture layer */}
           <div id="gesture-layer" className="absolute inset-0 -z-10" />
         </section>
       </div>
+      
+      {/* Chat Toolbar */}
+      <ChatToolbar />
+      
+      {/* Upsell Modal */}
+      <UpsellModal />
     </div>
   );
 }

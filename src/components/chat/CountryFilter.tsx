@@ -86,7 +86,7 @@ export default function CountryFilter() {
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 max-h-96 overflow-hidden">
+        <div className="absolute top-full left-0 mt-2 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-[90] max-h-96 overflow-hidden">
           {/* Search */}
           <div className="p-3 border-b border-gray-600">
             <input
@@ -119,7 +119,8 @@ export default function CountryFilter() {
             <div className="grid grid-cols-2 gap-1">
               {filteredCountries.map((country) => {
                 const isSelected = selectedCountries.includes(country.code);
-                const isDisabled = !isVip && selectedCountries.length === 0;
+                const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+                const isDisabled = !isVip && !FREE_FOR_ALL && !isSelected;
                 
                 return (
                   <button
@@ -145,10 +146,10 @@ export default function CountryFilter() {
           </div>
 
           {/* VIP Notice */}
-          {!isVip && (
+          {!isVip && !(globalThis as any).__vip?.FREE_FOR_ALL && (
             <div className="p-3 border-t border-gray-600 bg-gradient-to-r from-purple-600/20 to-blue-600/20">
               <p className="text-xs text-gray-300 text-center">
-                🔒 Upgrade to VIP to filter by specific countries (up to 15)
+                🔒 ترقية لـ VIP لفلترة الدول (حتى 15 دولة)
               </p>
             </div>
           )}
@@ -175,7 +176,7 @@ export default function CountryFilter() {
       {/* Backdrop */}
       {isOpen && (
         <div 
-          className="fixed inset-0 z-40" 
+          className="fixed inset-0 z-[85]" 
           onClick={() => setIsOpen(false)}
         />
       )}
