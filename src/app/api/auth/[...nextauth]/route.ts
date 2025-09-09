@@ -12,12 +12,24 @@ export const authOptions = {
   secret: process.env.NEXTAUTH_SECRET,
   session: { strategy: "jwt" as const },
   callbacks: {
-    async jwt({ token }: any) {
+    async jwt({ token, user }: any) {
+      if (token.vip === undefined) token.vip = false;
+      if (token.vipExp === undefined) token.vipExp = 0;
+      if (user?.email && token.email === undefined) token.email = user.email;
+      // Legacy support
       if (typeof token.isVip === "undefined") token.isVip = false;
       return token;
     },
     async session({ session, token }: any) {
-      session.isVip = token.isVip || false;
+      (session as any).vip = Boolean(token.vip);
+      (session as any).vipExp = Number(token.vipExp || 0);
+      // Legacy support
+      session.isVip = token.isVip || token.vip || false;
+      // تفضيل الكوكي للعرض فقط
+      try {
+        const { cookies } = await import("next/headers");
+        if (cookies().get("vip")?.value === "1") (session as any).vip = true;
+      } catch {}
       return session;
     },
   },

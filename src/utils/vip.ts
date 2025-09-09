@@ -1,9 +1,15 @@
+import { cookies } from "next/headers";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-// helper: Check if user has VIP access
-export async function requireVip() {
+export async function requireVip(): Promise<boolean> {
   if (process.env.FREE_FOR_ALL === "1") return true;
+  // 1) كوكي HttpOnly vip=1 (الأسرع)
+  try {
+    const c = cookies();
+    if (c.get("vip")?.value === "1") return true;
+  } catch {}
+  // 2) JWT/Session
   const session = await getServerSession(authOptions as any);
-  return !!(session as any)?.isVip;
+  return Boolean((session as any)?.vip || (session as any)?.isVip);
 }
