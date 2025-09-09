@@ -1,0 +1,144 @@
+دفعة أوامر: ضبط واجهة المحادثة + EUR + فحص شامل
+1) إصلاح خطأ Hooks في MyControls
+
+امنع استدعاء hooks بشروط. أبقِ جميع الـhooks في الأعلى، وضع الشروط داخل الـeffects/الاستدعاءات.
+
+هيكل موحّد:
+
+// src/components/chat/MyControls.tsx
+export default function MyControls(){ 
+  const [likes,setLikes]=useState(0);
+  const hydrated=useHydrated();                 // لا تُنشئ hooks داخل if
+  const store = useProfileStore();              // اجلب كل شيء هنا
+
+  useEffect(()=>{ if(!hydrated) return;
+    const offLikes = on("ui:likeUpdate",(d)=>{ if(d?.myLikes!=null) setLikes(d.myLikes); });
+    const offX = on("ui:smth", ()=>{/*...*/});
+    return ()=>{ offLikes(); offX(); };
+  },[hydrated]);
+
+  const onToggleBeauty = useCallback(()=> emit("ui:toggleBeauty"),[]);
+  // باقي callbacks هنا (دون شروط)
+  return ( /* JSX فقط */ );
+}
+
+2) ترتيب شريط الأدوات (سفلي) ومنع التكرار
+
+شريط واحد فقط في أسفل القسم السفلي.
+
+يمين: زر Next (أكبر قليلاً). يسار: زر Prev. بينهما بقية الأزرار بالترتيب:
+MutePeer 🔈 → Mic 🎙️ → Like ❤ → Masks 🤡 → Settings ⚙️ → Pause ⏯️ → Report 🚩 → Messages 💬.
+
+// src/components/chat/ChatToolbar.tsx
+<section className="pointer-events-auto fixed inset-x-4 bottom-6 z-40">
+  <div className="flex items-center gap-3">
+    <button id="prev" className="btn-secondary mr-auto" onClick={()=>emit("match:prev")}>Prev</button>
+    <div className="flex items-center gap-2">
+      <Btn id="mutePeer" onClick={()=>emit("ui:toggleRemoteAudio")} />
+      <Btn id="mic" onClick={()=>emit("ui:toggleMic")} />
+      <Btn id="like" onClick={()=>emit("ui:like")} />
+      <Btn id="masks" vip onClick={()=>emit("ui:toggleMasks")} />
+      <Btn id="settings" onClick={()=>router.push('/settings')} />
+      <Btn id="pause" onClick={()=>emit("ui:togglePlay")} />
+      <Btn id="report" onClick={()=>emit("ui:report")} />
+      <Btn id="messages" onClick={()=>emit("ui:openMessages")} />
+    </div>
+    <button id="next" className="btn-primary ml-auto" onClick={()=>emit("match:next")}>Next</button>
+  </div>
+</section>
+
+
+احذف أي Toolbar/Mini-toolbar مكرر (ابحث عن مكونات أخرى تُركّب toolbar وألغها).
+
+3) موضع الفلاتر (القسم العلوي – يمين)
+
+Country/Gender أعلى يمين القسم العلوي (منطقة الطرف الثاني)، z-50، منسدلان.
+
+غير VIP: يرى الكل مع 🔒، لكن لا يختار إلا (All) + بلدي.
+
+// src/components/chat/RemoteTopRight.tsx
+<div className="absolute top-4 right-4 z-50 flex gap-2">
+  <CountryFilter />
+  <GenderFilter />
+</div>
+
+4) موضع أدواتي (القسم السفلي – يمين)
+
+أعلى يمين الفيديو المحلي: تبديل الكاميرا + Beauty (حقيقي)، مع مؤشر “Beauty ON”.
+
+// src/components/chat/MyControlsDock.tsx
+<div className="absolute top-4 right-4 z-30 flex gap-2">
+  <IconBtn id="switchCam" onClick={()=>emit("media:switchCamera")} />
+  <IconBtn id="beauty" vip activeKey="beautyOn" onClick={()=>emit("ui:toggleBeauty")} />
+</div>
+
+5) قائمة الدول + “بلدي” تلقائيًا
+
+استخدم /api/geo لاكتشاف بلد المستخدم (لا تُقفل).
+
+ترتيب القائمة: All Countries، ثم My Country (XX)، ثم جميع الدول (كاملة).
+
+حدّ VIP: غير VIP = دولة واحدة فقط (All أو My Country).
+
+// src/components/filters/CountryFilter.tsx (منطقيًا)
+const geo = useSWR('/api/geo', fetcher);
+const my = geo?.countryCode;
+const options = useMemo(()=>[
+  {value:'ALL', label:'All Countries'},
+  my && {value:my, label:`My Country (${countryName(my)})`},
+  ...ALL_COUNTRIES
+].filter(Boolean),[my]);
+
+6) نافذة Upsell باليورو وعرض الخطط الأربع كاملة
+
+الأسعار: €1.49/day, €5.99/week, €16.99/month, €99.99/year.
+
+اجعل النافذة لا تُقصّ أسفل الشاشة:
+
+fixed inset-x-0 bottom-0 max-h-[80vh] overflow-y-auto pb-[env(safe-area-inset-bottom)] z-[100]
+
+إظهار كل الخطط بتنسيق العملة الوارد من الـAPI أو من fallback (EUR).
+
+// src/lib/plans.ts
+export const FALLBACK_PLANS = [
+  { id:'daily',   nickname:'Daily',   interval:'day',   amount:149,  currency:'eur' },
+  { id:'weekly',  nickname:'Weekly',  interval:'week',  amount:599,  currency:'eur' },
+  { id:'monthly', nickname:'Monthly', interval:'month', amount:1699, currency:'eur' },
+  { id:'yearly',  nickname:'Yearly',  interval:'year',  amount:9999, currency:'eur' },
+];
+// تنسيق:
+const fmt=(a:number,c:string)=> new Intl.NumberFormat(undefined,{style:'currency',currency:c}).format(a/100);
+
+7) شريط الرسائل (فحص سريع)
+
+تأكد: الإرسال/الإيموجي/آخر 3 رسائل/التفريغ عند تبدّل المطابقة، وعدم تغطية الكيبورد على الجوال (visualViewport + padding).
+
+8) فحص بصري + تراجع آمن
+
+لا تغييرات على الثيم/الألوان الحالية.
+
+لا حذف لأي ميزة موجودة.
+
+في حال أي تعديل يؤثر على موضع عنصر، طبّق تدرّج z-index: فلاتر z-50، Upsell z-100، توست z-110.
+
+التزام بعدم وجود أي تكرار لأشرطة التحكم.
+
+معايير القبول (يتحقق الوكيل منها):
+
+التموضع:
+
+فلاتر (الدول/الجنس) أعلى يمين القسم العلوي.
+
+زر Next يمين الشريط السفلي، Prev يسار الشريط، وباقي الأزرار بينهما.
+
+كاميرا+Beauty أعلى يمين القسم السفلي.
+
+الوظائف: كل أزرار الشريط تعمل (Next/Prev/…)، وBeauty فعّال، وMasks تفتح الشريط.
+
+الدول: القائمة كاملة + “My Country” ثاني خيار، متاحة لغير VIP، وحدّ الدولة الواحدة محترم خادميًا.
+
+الخطط: نافذة الترقية تعرض €1.49 / €5.99 / €16.99 / €99.99 (EUR)، والنافذة لا تُقصّ أسفل الشاشة.
+
+الرسائل: تعمل وفق المتطلبات ولا يغطيها الكيبورد على الجوال.
+
+الاستقرار: لا أخطاء Hooks، ولا Hydration/Console حمراء.
