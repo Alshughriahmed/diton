@@ -28,11 +28,12 @@ export async function POST(req: NextRequest) {
     const url = new URL(req.url);
     const origin = `${url.protocol}//${url.host}`;
 
-    const session = await stripe.checkout.sessions.create({
+    const base = process.env.NEXT_PUBLIC_BASE_URL || (new URL(req.url)).origin || "https://www.ditonachat.com";
+const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${origin}/api/vip/claim?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/plans`,
+      success_url: `${base}/api/vip/claim?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${base}/plans`,
     });
     return NextResponse.json({ url: session.url });
   } catch (e: any) {
