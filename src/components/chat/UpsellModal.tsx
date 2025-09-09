@@ -148,7 +148,7 @@ export default function UpsellModal({ isOpen: externalOpen, onClose }: UpsellMod
                         <div className="text-purple-400 font-bold text-lg">
                           ${(plan.amount / 100).toFixed(2)}
                         </div>
-                        {plan.interval === 'yearly' && (
+                        {plan.interval === 'year' && (
                           <div className="text-green-400 text-xs">أفضل قيمة!</div>
                         )}
                       </div>
