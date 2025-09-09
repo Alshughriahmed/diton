@@ -100,12 +100,13 @@ export default function ChatClient(){
     let offUpsell=on("ui:upsell", (feature)=>{
       toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
     });
-    let offGenderFilter=on("filters:gender", (value)=>{
-      setGender(value);
-      toast(`تم تحديد الجنس: ${value}`);
-    });
     let offCountryFilter=on("filters:country", (value)=>{
-      toast(`تم اختيار الدولة: ${value}`);
+      // Trigger new match with updated filters
+      doMatch();
+    });
+    let offGenderFilterUpdate=on("filters:gender", (value)=>{
+      // Trigger new match with updated filters  
+      doMatch();
     });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
@@ -152,18 +153,23 @@ export default function ChatClient(){
       const s=getLocalStream(); 
       if(localRef.current && s){ 
         // Initialize effects if VIP or beauty enabled
-        if (vip) {
+        if (vip && typeof window !== 'undefined') {
           try {
+            const { getVideoEffects } = await import("@/lib/effects");
             const effects = getVideoEffects();
-            const video = document.createElement('video');
-            video.srcObject = s;
-            video.play();
-            
-            const processedStream = await effects.initialize(video);
-            if (processedStream) {
-              setEffectsStream(processedStream);
-              localRef.current.srcObject = processedStream;
-              effects.start();
+            if (effects) {
+              const video = document.createElement('video');
+              video.srcObject = s;
+              video.play();
+              
+              const processedStream = await effects.initialize(video);
+              if (processedStream) {
+                setEffectsStream(processedStream);
+                localRef.current.srcObject = processedStream;
+                effects.start();
+              } else {
+                localRef.current.srcObject = s;
+              }
             } else {
               localRef.current.srcObject = s;
             }
@@ -195,7 +201,7 @@ export default function ChatClient(){
     });
     return ()=>{ 
       off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
-      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilter();offCountryFilter();
+      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilter();offGenderFilterUpdate();offCountryFilter();
       unsubscribeMobile(); 
     };
   },[]);

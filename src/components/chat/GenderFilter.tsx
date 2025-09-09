@@ -60,11 +60,29 @@ export default function GenderFilter() {
     gender === "all" ? [] : [gender]
   );
 
-  const handleGenderToggle = (genderKey: GenderOpt) => {
+  const handleGenderToggle = async (genderKey: GenderOpt) => {
     if (genderKey === "all") {
       setSelectedGenders([]);
       setGender("all");
       setIsOpen(false);
+      
+      // Save to profile store
+      try {
+        const { useProfile } = await import("@/state/profile");
+        const profile = useProfile.getState().profile;
+        const updatedProfile = { 
+          ...profile, 
+          preferences: { 
+            ...profile.preferences, 
+            gender: "all" 
+          } 
+        };
+        useProfile.getState().setProfile(updatedProfile);
+      } catch (error) {
+        console.warn('Failed to save gender preference:', error);
+      }
+      
+      emit('filters:gender', 'all');
       return;
     }
 
@@ -90,17 +108,39 @@ export default function GenderFilter() {
     setSelectedGenders(newSelected);
     
     // Update the main gender state
+    let primaryGender: GenderOpt = "all";
     if (newSelected.length === 0) {
-      setGender("all");
-      emit('filters:gender', 'all');
+      primaryGender = "all";
     } else if (newSelected.length === 1) {
-      setGender(newSelected[0]);
-      emit('filters:gender', newSelected[0]);
+      primaryGender = newSelected[0];
     } else {
       // For multiple selections, we keep the first one as primary
-      setGender(newSelected[0]);
-      emit('filters:gender', newSelected[0]);
+      primaryGender = newSelected[0];
     }
+    
+    setGender(primaryGender);
+    
+    // Save to profile store
+    try {
+      const { useProfile } = await import("@/state/profile");
+      const profile = useProfile.getState().profile;
+      const updatedProfile = { 
+        ...profile, 
+        preferences: { 
+          ...profile.preferences, 
+          gender: primaryGender,
+          genderSelections: newSelected
+        } 
+      };
+      useProfile.getState().setProfile(updatedProfile);
+    } catch (error) {
+      console.warn('Failed to save gender preference:', error);
+    }
+    
+    emit('filters:gender', primaryGender);
+    
+    const option = genderOptions.find(opt => opt.key === genderKey);
+    toast(`تم ${selectedGenders.includes(genderKey) ? 'إزالة' : 'إضافة'} ${option?.label || genderKey}`);
   };
 
   const currentOption = genderOptions.find(opt => opt.key === gender) || genderOptions[0];

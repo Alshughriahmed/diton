@@ -33,7 +33,7 @@ export default function CountryFilter() {
     );
   }, [countryOptions, search]);
 
-  const handleCountryToggle = (code: string) => {
+  const handleCountryToggle = async (code: string) => {
     const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
     if (!isVip && !FREE_FOR_ALL) {
       toast('🔒 ميزة تصفية الدول حصرية لـ VIP');
@@ -41,16 +41,37 @@ export default function CountryFilter() {
       return;
     }
 
+    let newSelection: string[];
     if (selectedCountries.includes(code)) {
-      setCountries(selectedCountries.filter(c => c !== code));
+      newSelection = selectedCountries.filter(c => c !== code);
     } else {
       if (selectedCountries.length >= 15) {
         toast("حد أقصى 15 دولة لمستخدمي VIP");
         return;
       }
-      setCountries([...selectedCountries, code]);
-      emit('filters:country', code);
+      newSelection = [...selectedCountries, code];
     }
+
+    setCountries(newSelection);
+    
+    // Save to profile store
+    try {
+      const { useProfile } = await import("@/state/profile");
+      const profile = useProfile.getState().profile;
+      const updatedProfile = { 
+        ...profile, 
+        preferences: { 
+          ...profile.preferences, 
+          countries: newSelection 
+        } 
+      };
+      useProfile.getState().setProfile(updatedProfile);
+    } catch (error) {
+      console.warn('Failed to save country preference:', error);
+    }
+    
+    emit('filters:country', code);
+    toast(`تم ${selectedCountries.includes(code) ? 'إزالة' : 'إضافة'} ${getCountryName(code)}`);
   };
 
   const handleSelectAll = () => {
