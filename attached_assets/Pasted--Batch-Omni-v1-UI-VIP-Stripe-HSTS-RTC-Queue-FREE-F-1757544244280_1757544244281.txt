@@ -1,0 +1,159 @@
+المهمة
+
+Batch-Omni v1: إصلاحات موبايل UI + توصيل VIP/Stripe/HSTS + تمهيد دورة RTC/Queue + ضبط FREE_FOR_ALL.
+
+الهدف
+
+واجهة موبايل سليمة. نجاح فحوص REST. ربط الاشتراك بـClaim. تفعيل HSTS. VIP يعمل بالكوكي الموقّع. طابور RTC ظاهر (ping/qlen). لا أقفال عند FREE_FOR_ALL=1.
+
+معايير القبول
+
+/api/stripe/prices يعيد 4 خطط EUR.
+
+success_url=/api/vip/claim?session_id={CHECKOUT_SESSION_ID} في الاشتراك.
+
+/chat يردّ HSTS وPermissions-Policy وCSP.
+
+واجهة الموبايل: الرسائل فوق الأدوات دائمًا. الفلاتر قابلة للنقر. لا VIP/Locks ولا [object Object] عندما FREE_FOR_ALL=1. أزرار Mic/Cam/Pause تُظهر حالة فورية.
+
+/api/message ضيف=200×10 ثم 429، ويتخطّى الحد عند FREE_FOR_ALL=1.
+
+/api/rtc/ping ⇒ {ok:true} و/api/rtc/qlen ⇒ {mode:"redis",len:n}.
+
+رشقة المطابقة: 200,200,200,429,429.
+
+ما تنفّذه الوكيل خطوةً بخطوة
+
+التحضير
+
+تأكد أن الفرع main مفعّل للنشر (Vercel).
+
+أنشئ فرع: feature/batch-omni-v1.
+
+أنشئ تقرير عمل: _ops/reports/batch_omni_v1.txt (املأه تباعًا).
+
+Mobile UI polish
+
+اجعل طبقات z-index: Messages=50 > Toolbar=40 > Video=10.
+
+أضف padding-bottom يحترم env(safe-area-inset-bottom) وارتفاع الأدوات.
+
+أصلح pointer-events حتى لا تحجب الفيديو الأزرار ولا العكس.
+
+الفلاتر (Gender/Countries): ارفع z-index واجعلها قابلة للنقر على الموبايل دائمًا.
+
+FREE_FOR_ALL=1: أخفِ كل أقفال/شارة VIP/نص Upsell. صحّح ظهور [object Object] إلى نص واضح.
+
+أزرار Mic/Cam/Pause: أضف aria-pressed وتبديل لون/أيقونة وToast خفيف.
+
+Messaging UX
+
+placeholder: Type a message….
+
+زر 😊 يسار يضيف الإيموجي إلى الإدخال.
+
+زر Send يمين.
+
+اعرض آخر 3 رسائل في يسار القسم السفلي مع تمرير للأقدم. لا تغطّي الأدوات.
+
+API الرسائل يقبل text أو message. حدّ الضيف=10 ثم 429. إن كانت FREE_FOR_ALL=1 فأعد 200 دائمًا.
+
+VIP/Stripe/HSTS
+
+ثبّت في الاشتراك: success_url=/api/vip/claim?session_id={CHECKOUT_SESSION_ID} وcancel_url=/plans.
+
+أبقِ VIP cookie-first في requireVip (تفضيل الكوكي ثم JWT).
+
+فعّل HSTS في next.config.(mjs|ts):
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload.
+
+RTC/Queue (أساس العمل)
+
+تحقّق من وجود متغيرات: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN.
+
+تأكد من عمل: /api/rtc/ping و/api/rtc/qlen.
+
+إن لزم: أصلح/أضف المنطق البسيط للطابور (Push عند الدخول/Next، وقراءة الطول).
+
+لا تغيّر منطق WebRTC العميق الآن؛ فقط أثبت جاهزية REST والفصل/الدفع للطابور من الواجهة.
+
+FREE_FOR_ALL
+
+على Production: لا Upsell ولا Locks بصريًا.
+
+على السيرفر: إذا FREE_FOR_ALL=1 فتجاوز VIP gates وحدّ الرسائل.
+
+التسليم
+
+نفّذ فحص القبول بالسكريبت أدناه.
+
+افتح PR من الفرع feature/batch-omni-v1.
+
+اكتب تقريرًا موجزًا في _ops/reports/batch_omni_v1.txt يشرح: ما عُدّل ولماذا، والملفات المتأثرة، ونقاط متابعة.
+
+أرفق لقطتي شاشة (موبايل/ديسكتوب) إن أمكن. إن تعذّر، اذكر السبب في التقرير.
+
+acc.sh (سكريبت قبول واحد)
+
+احفظه في جذر المشروع كـ acc.sh ثم شغّله بـ: bash ./acc.sh https://www.ditonachat.com
+
+#!/usr/bin/env bash
+BASE="${1:-https://www.ditonachat.com}"
+set -e
+
+echo "-- Acceptance --"
+
+# Auth/Stripe
+echo -n "AUTH_PROVIDERS_NONEMPTY="; curl -s "$BASE/api/auth/providers" | grep -q "google" && echo 1 || echo 0
+echo -n "STRIPE_PLANS_COUNT="; curl -s "$BASE/api/stripe/prices" | grep -o '"id":"' | wc -l
+
+# Headers
+HP=$(curl -sI "$BASE/chat")
+echo -n "PERMISSIONS_POLICY_HEADER_PRESENT="; echo "$HP" | grep -qi "permissions-policy:.*camera=(self), microphone=(self)" && echo 1 || echo 0
+echo -n "HSTS_HEADER_PRESENT="; echo "$HP" | grep -qi "^strict-transport-security:" && echo 1 || echo 0
+
+# Match burst
+codes=""; for i in {1..5}; do c=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/match/next"); codes+="$c,"; done
+echo "MATCH_BURST=$codes"
+
+# Guest message limit (production may be FREE_FOR_ALL=1 → skip)
+codes=""; for i in {1..12}; do c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/message" -H 'content-type: application/json' -d '{"text":"hi"}'); codes+="$c,"; done
+echo "GUEST_MSG_CODES=$codes"
+
+# RTC readiness
+echo -n "RTC_PING="; curl -s "$BASE/api/rtc/ping" | tr -d '\n' | sed 's/[[:space:]]//g'
+echo
+echo -n "RTC_QLEN="; curl -s "$BASE/api/rtc/qlen" | tr -d '\n' | sed 's/[[:space:]]//g'
+echo
+
+echo "-- End Acceptance --"
+
+أوامر الفرع وفتح PR
+
+git checkout -b feature/batch-omni-v1
+
+نفّذ التعديلات Minimal Diff.
+
+pnpm i --frozen-lockfile && pnpm build
+
+bash ./acc.sh https://www.ditonachat.com
+
+git add -A && git commit -m "batch-omni-v1: mobile UI + stripe claim + HSTS + rtc readiness"
+
+git push -u origin feature/batch-omni-v1
+
+افتح PR إلى main.
+
+تقرير مطلوب من الوكيل
+
+أنشئ الملف: _ops/reports/batch_omni_v1.txt يحوي:
+
+ملخص ما تغيّر (سطر/ملف).
+
+نتائج acc.sh كاملة.
+
+ملاحظات وأي فجوات بقيت.
+
+لقطتا شاشة (أو سبب عدم توفرهما).
+
+انتهى.
