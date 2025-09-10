@@ -59,6 +59,7 @@ export default function ChatMessagingBar() {
 
   return (
     <div
+      data-messaging-bar
       className="mx-auto w-full max-w-5xl px-3"
       style={{ marginBottom: vvBottom ? vvBottom + 8 : 0 }}
       aria-label="chat-messaging-bar"

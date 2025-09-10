@@ -30,7 +30,7 @@ export default function ChatToolbar(){
   };
   
   return (
-    <section className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 bottom-4 sm:bottom-6 z-40">
+    <section data-toolbar className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 bottom-4 sm:bottom-6 z-40">
       <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-center">
         {/* Prev - يسار */}
         <button 
