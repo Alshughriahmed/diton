@@ -45,4 +45,20 @@ const nextConfig = {
     ];
   },
 };
+
+/* __HSTS_INJECT__ */
+{
+  const _old = nextConfig.headers;
+  nextConfig.headers = async () => {
+    const arr = _old ? await _old() : [];
+    arr.push({
+      source: "/(.*)",
+      headers: [
+        { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains; preload" }
+      ],
+    });
+    return arr;
+  };
+}
+
 export default nextConfig;
