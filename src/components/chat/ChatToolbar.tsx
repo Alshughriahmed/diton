@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 export default function ChatToolbar(){
   const { isVip } = useFilters();
   const router = useRouter();
+  const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
   
   // Button states for ON/OFF visual feedback
   const [isMicOn, setIsMicOn] = useState(true);
@@ -35,22 +36,22 @@ export default function ChatToolbar(){
         {/* Prev - يسار */}
         <button 
           className={`px-3 sm:px-4 py-2 rounded-lg text-white text-xs sm:text-sm border transition-all duration-200 font-medium ${
-            !isVip 
+            !isVip && !freeForAll
               ? 'bg-black/20 border-white/20 opacity-60' 
               : 'bg-black/30 border-white/30 hover:bg-white/10'
           }`}
           aria-label="Previous" 
           onClick={(e)=>{
             e.preventDefault(); 
-            if (!isVip) {
-              emit("ui:upsell", { feature: "prev" });
+            if (!isVip && !freeForAll) {
+              emit("ui:upsell", "prev");
               return;
             }
             emit("ui:prev");
           }}
         >
           Prev
-          {!isVip && process.env.NEXT_PUBLIC_FREE_FOR_ALL !== "1" && <span className="ml-1 text-xs">🔒</span>}
+          {!isVip && !freeForAll && <span className="ml-1 text-xs">🔒</span>}
         </button>
         
         {/* الأزرار الوسطى */}
@@ -73,6 +74,7 @@ export default function ChatToolbar(){
                 : 'bg-red-600/30 border-red-400/40 hover:bg-red-500/40'
             }`}
             aria-label={isMicOn ? "Mute mic" : "Unmute mic"}
+            aria-pressed={!isMicOn}
           >
             {isMicOn ? '🎙️' : '🔇'}
           </button>
@@ -86,6 +88,7 @@ export default function ChatToolbar(){
                 : 'bg-red-600/30 border-red-400/40 hover:bg-red-500/40'
             }`}
             aria-label={isCamOn ? "Turn off camera" : "Turn on camera"}
+            aria-pressed={!isCamOn}
           >
             {isCamOn ? '📹' : '📷'}
           </button>
@@ -102,21 +105,21 @@ export default function ChatToolbar(){
           {/* Masks 🤡 (VIP gate) */}
           <button 
             onClick={() => {
-              if (!isVip) {
-                emit("ui:upsell", { feature: "masks" });
+              if (!isVip && !freeForAll) {
+                emit("ui:upsell", "masks");
                 return;
               }
               emit("ui:toggleMasks");
             }}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg backdrop-blur-sm text-white border transition-all duration-200 flex items-center justify-center relative text-sm sm:text-base ${
-              !isVip 
+              !isVip && !freeForAll
                 ? 'bg-black/10 border-white/10 opacity-60' 
                 : 'bg-black/20 border-white/20 hover:bg-white/10'
             }`}
             aria-label="Masks"
           >
             🤡
-            {!isVip && process.env.NEXT_PUBLIC_FREE_FOR_ALL !== "1" && <span className="absolute -top-1 -right-1 text-[10px]">🔒</span>}
+            {!isVip && !freeForAll && <span className="absolute -top-1 -right-1 text-[10px]">🔒</span>}
           </button>
 
           {/* Settings ⚙️ */}
@@ -137,6 +140,7 @@ export default function ChatToolbar(){
                 : 'bg-green-600/30 border-green-400/40 hover:bg-green-500/40'
             }`}
             aria-label={isPaused ? "Resume" : "Pause"}
+            aria-pressed={isPaused}
           >
             {isPaused ? '▶️' : '⏸️'}
           </button>

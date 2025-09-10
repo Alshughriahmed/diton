@@ -23,8 +23,20 @@
 /* ====== شريط الرسائل دائماً بالأسفل + جاهز للموبايل ====== */
 [data-messaging-bar]{
   position:fixed; left:.5rem; right:.5rem; bottom:calc(env(safe-area-inset-bottom) + .5rem);
-  display:flex; gap:.5rem; align-items:center; z-index:40;
+  display:flex; gap:.5rem; align-items:center; z-index:50;
 }
 [data-messaging-bar] input,[data-messaging-bar] textarea{
   flex:1; min-height:2.5rem;
+}
+
+/* ====== Video z-index أقل من الأدوات ====== */
+video[data-local-video], video[data-role="remote"]{
+  z-index:10;
+}
+
+/* ====== تحسين إمكانية النقر على الفلاتر ====== */
+[data-remote-top-right] select, [data-remote-top-right] button {
+  pointer-events: auto !important;
+  min-height: 44px; /* iOS touch target */
+  min-width: 44px;
 }
