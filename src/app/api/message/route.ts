@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     }
     
     // FREE_FOR_ALL mode bypasses guest limits
-    const freeForAll = process.env.FREE_FOR_ALL === "1";
+    const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
     if (freeForAll) {
       return NextResponse.json({ ok: true, n: 1, remaining: 999, freeMode: true });
     }
