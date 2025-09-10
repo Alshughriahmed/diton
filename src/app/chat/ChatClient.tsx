@@ -308,7 +308,7 @@ export default function ChatClient(){
               Loading...
             </div>
           </section>
-          <section className="relative rounded-2xl bg-black/20 overflow-hidden">
+          <section className="relative rounded-2xl bg-black/20 overflow-hidden pb-28 md:pb-24">
             <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">
               Initializing...
             </div>
