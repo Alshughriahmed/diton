@@ -58,6 +58,9 @@ export default function ChatClient(){
   useKeyboardShortcuts();
 
   useEffect(()=>{
+    // Enqueue on mount
+    fetch("/api/rtc/enqueue",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({anonId:typeof window!=="undefined"?localStorage.getItem("ditona_anon"):"" })}).catch(()=>{});
+    
     let off1=on("ui:toggleMic",()=>{ toggleMic(); });
     let off2=on("ui:toggleCam",()=>{ toggleCam(); });
     let off3=on("ui:switchCamera",async ()=>{ 
@@ -118,7 +121,10 @@ export default function ChatClient(){
       }catch{}
       nextMatch({gender, countries});
     });
-    let off7=on("ui:next",()=>{ nextMatch({gender, countries}); });
+    let off7=on("ui:next",()=>{ 
+      nextMatch({gender, countries});
+      fetch("/api/rtc/enqueue",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({anonId:typeof window!=="undefined"?localStorage.getItem("ditona_anon"):"" })}).catch(()=>{});
+    });
     let off8=on("ui:prev",()=>{ tryPrevOrRandom({gender, countries}); });
     let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
     let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });

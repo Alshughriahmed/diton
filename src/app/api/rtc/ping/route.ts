@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { setex, get } from "@/lib/redis";
+import { rSet, rGet } from "@/lib/redis";
 
 export const runtime = "nodejs";
 
@@ -11,9 +11,9 @@ export async function GET() {
   const k = "rtc:ping";
   const v = String(Date.now());
   try {
-    await setex(k, 10, v);
-    const back = await get(k);
-    return NextResponse.json({ ok: back === v, env: true });
+    await rSet(k, v, 10);
+    const back = await rGet(k);
+    return NextResponse.json({ ok: back.value === v, env: true });
   } catch (e:any) {
     return NextResponse.json({ ok: false, env: true, error: String(e?.message||e) }, { status: 200 });
   }

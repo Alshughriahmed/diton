@@ -1,38 +1,31 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+export const runtime = "nodejs";
 
-// In-memory storage for demo (replace with Redis/database)
-const COUNTS = new Map<string, number>();
+const FREE = process.env.FREE_FOR_ALL === "1";
+const MAX_GUEST = 10;
 
-export async function POST(req: NextRequest) {
-  try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "local";
-    const { txt } = await req.json();
-    
-    if (!txt || typeof txt !== "string") {
-      return NextResponse.json({ error: "Invalid message" }, { status: 400 });
-    }
-    
-    // FREE_FOR_ALL mode bypasses guest limits
-    const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
-    if (freeForAll) {
-      return NextResponse.json({ ok: true, n: 1, remaining: 999, freeMode: true });
-    }
-    
-    const n = (COUNTS.get(ip) || 0) + 1;
-    COUNTS.set(ip, n);
-    
-    if (n > 10) {
-      return NextResponse.json({ error: "guest limit" }, { status: 429 });
-    }
-    
-    return NextResponse.json({ ok: true, n, remaining: 10 - n });
-  } catch (error) {
-    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-  }
+// naive in-memory fallback (per process). ok for MVP/stateless functions reset per instance.
+const hits = new Map<string, { n:number; t:number }>();
+function keyFrom(req: Request) {
+  const f = (req.headers.get("x-forwarded-for")||"").split(",")[0].trim();
+  const ua = req.headers.get("user-agent")||"";
+  return `${f}|${ua.slice(0,24)}`;
 }
 
-export async function GET(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "local";
-  const count = COUNTS.get(ip) || 0;
-  return NextResponse.json({ count, remaining: Math.max(0, 10 - count) });
+export async function POST(req: Request) {
+  let body:any = {};
+  try { body = await req.json(); } catch {}
+  const msg = body?.text ?? body?.message ?? body?.txt ?? "";
+  if (typeof msg !== "string" || !msg.trim()) {
+    return NextResponse.json({ ok:false, error:"bad message" }, { status: 400 });
+  }
+  if (FREE) return NextResponse.json({ ok:true });
+
+  const k = keyFrom(req);
+  const now = Date.now();
+  const row = hits.get(k) || { n:0, t: now };
+  if (now - row.t > 60*60*1000) { row.n = 0; row.t = now; }
+  row.n += 1; hits.set(k, row);
+  if (row.n > MAX_GUEST) return NextResponse.json({ ok:false, error:"rate limit" }, { status: 429 });
+  return NextResponse.json({ ok:true });
 }

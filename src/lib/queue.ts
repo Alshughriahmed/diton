@@ -1,68 +1,43 @@
-const url = process.env.UPSTASH_REDIS_REST_URL;
-const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+import { rLPush, rLPop, rLLen } from "./redis";
 
-type Mode = "redis"|"memory";
-const hasRedis = Boolean(url && token);
-let mode: Mode = hasRedis ? "redis" : "memory";
-let redisConnectionFailed = false;
+const qKey = process.env.RTC_QUEUE_KEY || "rtc:queue:default";
+const mem: string[] = [];
+const useMem = !process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN;
 
-// in-memory fallback (يُحافظ على الحالة داخل نفس السيرفر)
-const g:any = globalThis as any;
-g.__ditonaQ = g.__ditonaQ || [];
-const memQ: string[] = g.__ditonaQ;
+export function queueMode() { return useMem ? "memory" : "redis"; }
 
-async function rest(cmd: string, ...args: (string|number)[]) {
-  if (!hasRedis) throw new Error("no redis");
-  const path = [cmd, ...args.map(a=>encodeURIComponent(String(a)))].join("/");
-  const res = await fetch(`${url}/${path}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  if (!res.ok) throw new Error(`redis ${cmd} ${res.status}`);
-  return res.json() as Promise<{ result: any }>;
-}
-
-export function queueMode(): Mode { 
-  return redisConnectionFailed ? "memory" : mode;
-}
-
-export async function qPush(v: string): Promise<void> {
-  if (mode === "redis") {
-    try {
-      await rest("lpush", "rtc:q", v);
-      return;
-    } catch (error) {
-      console.warn('Redis connection failed, falling back to memory mode:', error);
-      redisConnectionFailed = true;
-      // Fall back to memory mode
-    }
+export async function qLen() {
+  if (useMem) return { mode:"memory", len: mem.length };
+  try {
+    const { len } = await rLLen(qKey);
+    return { mode:"redis", len };
+  } catch {
+    return { mode:"memory-fallback", len: mem.length };
   }
-  memQ.push(v);
 }
-export async function qPop(): Promise<string|null> {
-  if (mode === "redis") {
-    try {
-      const r = await rest("rpop", "rtc:q");
-      return (r.result ?? null) as any;
-    } catch (error) {
-      console.warn('Redis connection failed, falling back to memory mode:', error);
-      redisConnectionFailed = true;
-      // Fall back to memory mode
-    }
+export async function qPush(id: string) {
+  if (!id) return await qLen();
+  if (useMem) { mem.push(id); return { mode:"memory", len: mem.length }; }
+  try {
+    await rLPush(qKey, id);
+    return await qLen();
+  } catch {
+    // Fallback to memory on Redis failure
+    mem.push(id);
+    return { mode:"memory-fallback", len: mem.length };
   }
-  return memQ.length ? memQ.shift()! : null;
 }
-export async function qLen(): Promise<number> {
-  if (mode === "redis") {
-    try {
-      const r = await rest("llen", "rtc:q");
-      return Number(r.result || 0);
-    } catch (error) {
-      console.warn('Redis connection failed, falling back to memory mode:', error);
-      redisConnectionFailed = true;
-      // Fall back to memory mode for this call
-      return memQ.length;
-    }
+export async function qPop2() {
+  if (useMem) {
+    const a = mem.shift()||null; const b = mem.shift()||null;
+    return { mode:"memory", pair: a && b ? [a,b] : null };
   }
-  return memQ.length;
+  try {
+    const a = (await rLPop(qKey)).value; const b = (await rLPop(qKey)).value;
+    return { mode:"redis", pair: (a && b) ? [a,b] : null };
+  } catch {
+    // Fallback to memory on Redis failure
+    const a = mem.shift()||null; const b = mem.shift()||null;
+    return { mode:"memory-fallback", pair: a && b ? [a,b] : null };
+  }
 }
