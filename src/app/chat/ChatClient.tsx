@@ -17,6 +17,7 @@ import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
 import ChatToolbar from "@/components/chat/ChatToolbar";
 import ChatMessagingBar from "@/components/chat/ChatMessaging";
+import QueueBadge from "@/components/chat/QueueBadge";
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
@@ -335,6 +336,10 @@ export default function ChatClient(){
           
           {/* Filters - Top Right */}
           <RemoteTopRight />
+          {/* Queue length badge - Top Right overlay */}
+          <div className="absolute top-2 right-2 z-40 pointer-events-none">
+            <QueueBadge />
+          </div>
           
           {/* Like System - Bottom Right */}
           <div className="absolute bottom-4 right-4 z-30">
