@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 export async function requireVip(): Promise<boolean> {
-  if (process.env.FREE_FOR_ALL === "1") return true;
+  if (process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1") return true;
   try {
     const c = (await cookies()).get("vip")?.value;
     if (verifySignedVip(c)) return true;     // signed cookie

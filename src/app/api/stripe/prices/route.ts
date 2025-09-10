@@ -8,10 +8,10 @@ export async function GET() {
   try {
     const key = process.env.STRIPE_SECRET_KEY;
     const ids = [
-      process.env.STRIPE_PRICE_DAILY,
-      process.env.STRIPE_PRICE_WEEKLY,
-      process.env.STRIPE_PRICE_MONTHLY,
-      process.env.STRIPE_PRICE_YEARLY,
+      process.env.STRIPE_PRICE_EUR_DAILY,
+      process.env.STRIPE_PRICE_EUR_WEEKLY,
+      process.env.STRIPE_PRICE_EUR_MONTHLY,
+      process.env.STRIPE_PRICE_EUR_YEARLY,
     ].filter(Boolean) as string[];
 
     if (!key || ids.length !== 4) {
@@ -26,7 +26,7 @@ export async function GET() {
       nickname: p.nickname ?? (p.recurring?.interval ?? 'plan'),
       interval: p.recurring?.interval ?? 'month',
       amount: p.unit_amount ?? 0,
-      currency: (p.currency ?? 'usd') as 'usd',
+      currency: p.currency ?? 'eur',
     }));
 
     // ترتيب: day, week, month, year
