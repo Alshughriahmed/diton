@@ -9,7 +9,7 @@ import GenderSelect from "../filters/GenderSelect";
  */
 export default function RemoteTopRight() {
   return (
-    <div className="absolute top-4 right-4 z-50 flex gap-2">
+    <div className="flex gap-2">
       <CountrySelect />
       <GenderSelect />
     </div>

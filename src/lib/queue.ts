@@ -3,7 +3,8 @@ const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
 type Mode = "redis"|"memory";
 const hasRedis = Boolean(url && token);
-const mode: Mode = hasRedis ? "redis" : "memory";
+let mode: Mode = hasRedis ? "redis" : "memory";
+let redisConnectionFailed = false;
 
 // in-memory fallback (يُحافظ على الحالة داخل نفس السيرفر)
 const g:any = globalThis as any;
@@ -21,23 +22,47 @@ async function rest(cmd: string, ...args: (string|number)[]) {
   return res.json() as Promise<{ result: any }>;
 }
 
-export function queueMode(): Mode { return mode; }
+export function queueMode(): Mode { 
+  return redisConnectionFailed ? "memory" : mode;
+}
 
 export async function qPush(v: string): Promise<void> {
-  if (mode === "redis") { await rest("lpush", "rtc:q", v); return; }
+  if (mode === "redis") {
+    try {
+      await rest("lpush", "rtc:q", v);
+      return;
+    } catch (error) {
+      console.warn('Redis connection failed, falling back to memory mode:', error);
+      redisConnectionFailed = true;
+      // Fall back to memory mode
+    }
+  }
   memQ.push(v);
 }
 export async function qPop(): Promise<string|null> {
   if (mode === "redis") {
-    const r = await rest("rpop", "rtc:q");
-    return (r.result ?? null) as any;
+    try {
+      const r = await rest("rpop", "rtc:q");
+      return (r.result ?? null) as any;
+    } catch (error) {
+      console.warn('Redis connection failed, falling back to memory mode:', error);
+      redisConnectionFailed = true;
+      // Fall back to memory mode
+    }
   }
   return memQ.length ? memQ.shift()! : null;
 }
 export async function qLen(): Promise<number> {
   if (mode === "redis") {
-    const r = await rest("llen", "rtc:q");
-    return Number(r.result || 0);
+    try {
+      const r = await rest("llen", "rtc:q");
+      return Number(r.result || 0);
+    } catch (error) {
+      console.warn('Redis connection failed, falling back to memory mode:', error);
+      redisConnectionFailed = true;
+      // Fall back to memory mode for this call
+      return memQ.length;
+    }
   }
   return memQ.length;
 }

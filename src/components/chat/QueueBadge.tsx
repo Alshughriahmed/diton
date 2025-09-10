@@ -6,7 +6,7 @@ export default function QueueBadge() {
   const { len, mode } = useQueueLen(5000);
   if (!hydrated) return null;
   return (
-    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30">
+    <div className="relative">
       <div className="bg-black/60 backdrop-blur-md rounded-full px-3 py-1 border border-white/10 text-xs text-white shadow">
         <span className="mr-2">Queue</span>
         <span className="font-semibold">{len}</span>

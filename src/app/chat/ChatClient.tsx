@@ -334,11 +334,14 @@ export default function ChatClient(){
             age={peerInfo.age}
           />
           
-          {/* Filters - Top Right */}
-          <RemoteTopRight />
           {/* Queue length badge - Top Right overlay */}
-          <div className="absolute top-2 right-2 z-40 pointer-events-none">
+          <div className="absolute top-2 right-2 z-50 pointer-events-none">
             <QueueBadge />
+          </div>
+          
+          {/* Filters - Top Right (below queue badge) */}
+          <div className="absolute top-12 right-2 z-40">
+            <RemoteTopRight />
           </div>
           
           {/* Like System - Bottom Right */}
