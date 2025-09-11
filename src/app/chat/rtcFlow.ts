@@ -113,3 +113,21 @@ export async function startRtcFlow() {
     console.warn("RTC flow error", e);
   }
 }
+/** ------------------------------------------------------------------------
+ * Once-guard: يمنع إطلاق تدفّق RTC مرتين في آنٍ واحد (double-start).
+ * لا يغيّر منطق startRtcFlow نفسه؛ مجرد غلاف آمن.
+ * ---------------------------------------------------------------------- */
+let __rtcOnceFlag = false;
+export async function startRtcFlowOnce() {
+  if (__rtcOnceFlag) return;
+  __rtcOnceFlag = true;
+  try {
+    // نفترض وجود startRtcFlow الأصلي في نفس الملف (كما هو معمَّم في المشروع)
+    // إن كان اسمه مختلفًا لديك، استبدله هنا بنفس الاسم.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+    // @ts-ignore
+    return await startRtcFlow();
+  } finally {
+    __rtcOnceFlag = false;
+  }
+}

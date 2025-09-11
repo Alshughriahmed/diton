@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
-import { startRtcFlow } from "./rtcFlow";
+import { startRtcFlowOnce } from "./rtcFlow";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useHydrated } from "@/hooks/useHydrated";
@@ -121,15 +121,15 @@ export default function ChatClient(){
         toast('🚩 تم إرسال البلاغ وجاري الانتقال'); 
       }catch{}
       // RTC bridge: use new flow
-      startRtcFlow();
+      startRtcFlowOnce();
     });
     let off7=on("ui:next",()=>{ 
       // RTC bridge: use new flow
-      startRtcFlow();
+      startRtcFlowOnce();
     });
     let off8=on("ui:prev",()=>{ 
       // RTC bridge: use new flow
-      startRtcFlow();
+      startRtcFlowOnce();
     });
     let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
     let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
@@ -156,11 +156,11 @@ export default function ChatClient(){
     });
     let offCountryFilter=on("filters:country", (value)=>{
       // Trigger new match with updated filters
-      startRtcFlow();
+      startRtcFlowOnce();
     });
     let offGenderFilterUpdate=on("filters:gender", (value)=>{
       // Trigger new match with updated filters  
-      startRtcFlow();
+      startRtcFlowOnce();
     });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
