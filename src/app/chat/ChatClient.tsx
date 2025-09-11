@@ -232,6 +232,25 @@ export default function ChatClient(){
         
         localRef.current.muted = true; 
         localRef.current.play().catch(()=>{}); 
+        
+        // Start RTC matchmaking after media is ready
+        (async () => {
+          try {
+            await enqueueOnce();
+            const pair = await pollPair();
+            if (pair && localRef.current?.srcObject) {
+              const pc = await startRTCWithEndpoints(localRef.current.srcObject as MediaStream);
+              pc.ontrack = (event) => {
+                const remoteVideo = document.getElementById('remoteVideo') as HTMLVideoElement;
+                if (remoteVideo && event.streams[0]) {
+                  remoteVideo.srcObject = event.streams[0];
+                }
+              };
+            }
+          } catch (error) {
+            console.warn('RTC setup failed:', error);
+          }
+        })();
       }
       setReady(true);
     }).catch(()=>{});
@@ -281,7 +300,8 @@ export default function ChatClient(){
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
         } else {
-          if (!vip) {
+          const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+          if (!vip && !freeForAll) {
             toast('🔒 العودة للسابق متاحة لـ VIP فقط');
             emit('ui:upsell', 'prev');
           } else {
@@ -354,14 +374,16 @@ export default function ChatClient(){
       await fetch("/api/rtc/offer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"caller",sdp:offer})});
       // poll answer
       for(let i=0;i<60;i++){
-        const r = await fetch(`/api/rtc/answer?pairId=${encodeURIComponent(pairId)}&role=caller`);
+        const anonId = await getAnonId();
+      const r = await fetch(`/api/rtc/answer?pairId=${encodeURIComponent(pairId)}&role=caller&anonId=${encodeURIComponent(anonId)}`);
         const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
         await new Promise(res=>setTimeout(res,1000));
       }
     }else{
       // callee path: wait for offer first
       for(let i=0;i<60;i++){
-        const r = await fetch(`/api/rtc/offer?pairId=${encodeURIComponent(pairId)}&role=callee`);
+        const anonId = await getAnonId();
+      const r = await fetch(`/api/rtc/offer?pairId=${encodeURIComponent(pairId)}&role=callee&anonId=${encodeURIComponent(anonId)}`);
         const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
         await new Promise(res=>setTimeout(res,1000));
       }
@@ -430,8 +452,17 @@ export default function ChatClient(){
             <LikeSystem />
           </div>
           
-          {/* Center remote area */}
-          <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none">
+          {/* Remote video */}
+          <video 
+            id="remoteVideo" 
+            data-role="remote" 
+            className="w-full h-full object-cover" 
+            playsInline 
+            autoPlay
+          />
+          
+          {/* Center remote area overlay */}
+          <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none pointer-events-none">
             جارٍ العثور على شريك دردشة…
           </div>
         </section>
