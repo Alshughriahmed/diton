@@ -1,0 +1,213 @@
+bash -lc '
+set -euo pipefail
+
+# -------- Config --------
+: "${REPO_REMOTE:=origin}"
+: "${TARGET_BRANCH:=main}"
+: "${BASE:=https://www.ditonachat.com}"
+
+ts(){ date +"%Y%m%d-%H%M%S"; }
+OUT="_ops/reports/fix_rtc_pairid_$(ts).txt"
+mkdir -p _ops/reports
+
+say(){ printf "\n== %s ==\n" "$*" | tee -a "$OUT"; }
+
+say "1) Git prep"
+git rev-parse --is-inside-work-tree >/dev/null || { echo "not a git repo" ; exit 1; }
+git fetch "$REPO_REMOTE" --prune
+git checkout "$TARGET_BRANCH"
+git pull --ff-only "$REPO_REMOTE" "$TARGET_BRANCH"
+
+# -------- Server: ensure canonical routes (contract: {pairId, role}) --------
+ensure_file(){ f="$1"; shift; mkdir -p "$(dirname "$f")"; cat >"$f" <<'TS'
+// AUTOGEN: canonical RTC route
+TS
+sed -i "1d" "$f" # drop placeholder line
+printf "%s\n" "$@" >>"$f"
+git add "$f"
+}
+
+say "2) Ensure anon cookie init route"
+ensure_file src/app/api/anon/init/route.ts "$(cat <<'TS'
+import { NextResponse } from "next/server";
+import { createHmac } from "crypto";
+export const runtime = "nodejs";
+function sign(v: string, sec: string) {
+  const b = Buffer.from(v, "utf8").toString("base64url");
+  const s = createHmac("sha256", sec).update(b).digest("hex");
+  return `${b}.${s}`;
+}
+export async function GET() {
+  const sec = process.env.ANON_SIGNING_SECRET || process.env.VIP_SIGNING_SECRET || "";
+  if (!sec) return NextResponse.json({ ok:false, error:"secret-missing" }, { status: 500 });
+  const id = (crypto as any).randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`;
+  const cookie = sign(id, sec);
+  const res = NextResponse.json({ ok:true, anonId:id });
+  res.cookies.set("anon", cookie, { httpOnly:true, secure:true, sameSite:"lax", path:"/", maxAge:60*60*24*180, domain:".ditonachat.com" });
+  return res;
+}
+TS
+)"
+
+say "3) Canonical /api/rtc/matchmake (returns {pairId, role})"
+ensure_file src/app/api/rtc/matchmake/route.ts "$(cat <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { matchmake, pairMapOf } from "@/lib/rtc/mm";
+export const runtime = "nodejs";
+export async function POST(_req: NextRequest) {
+  const anon = getAnonIdUnsafe();
+  if (!anon) return NextResponse.json({ error:"anon-required" }, { status:403 });
+  const mapped = await pairMapOf(anon);
+  if (mapped) return NextResponse.json({ pairId:mapped.pairId, role:mapped.role }, { status:200 });
+  const res = await matchmake(anon);
+  if (res.status === 200) return NextResponse.json(res.body, { status:200 });
+  if (res.status === 204) return new NextResponse(null, { status:204 });
+  return NextResponse.json(res.body || { error:"mm-fail" }, { status: res.status || 500 });
+}
+TS
+)"
+
+say "4) Ensure offer/answer/ice routes enforce pair map + TTL"
+ensure_file src/app/api/rtc/offer/route.ts "$(cat <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, setNxPx, expire } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+async function auth(anon: string, pairId: string){ const map = await get(`rtc:pair:map:${anon}`); if (!map) return null; const [pid, role] = String(map).split("|"); return pid===pairId ? role : null; }
+export async function POST(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const { pairId, sdp } = await req.json().catch(()=>({})); if (!pairId || !sdp) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (role!=="caller") return NextResponse.json({ error:"only-caller" },{status:403});
+  const ok = await setNxPx(`rtc:pair:${pairId}:offer`, String(sdp), 120_000); if (!ok) return NextResponse.json({ error:"exists" },{status:409});
+  await expire(`rtc:pair:${pairId}`, 150); return new NextResponse(null,{status:204});
+}
+export async function GET(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const pairId = String(new URL(req.url).searchParams.get("pairId")||""); if (!pairId) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (role!=="callee") return NextResponse.json({ error:"only-callee" },{status:403});
+  const sdp = await get(`rtc:pair:${pairId}:offer`); if (!sdp) return new NextResponse(null,{status:204});
+  await expire(`rtc:pair:${pairId}`, 150); return NextResponse.json({ sdp:String(sdp) },{status:200});
+}
+TS
+)"
+ensure_file src/app/api/rtc/answer/route.ts "$(cat <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, setNxPx, expire } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+async function auth(anon: string, pairId: string){ const map = await get(`rtc:pair:map:${anon}`); if (!map) return null; const [pid, role] = String(map).split("|"); return pid===pairId ? role : null; }
+export async function POST(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const { pairId, sdp } = await req.json().catch(()=>({})); if (!pairId || !sdp) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (role!=="callee") return NextResponse.json({ error:"only-callee" },{status:403});
+  const ok = await setNxPx(`rtc:pair:${pairId}:answer`, String(sdp), 120_000); if (!ok) return NextResponse.json({ error:"exists" },{status:409});
+  await expire(`rtc:pair:${pairId}`, 150); return new NextResponse(null,{status:204});
+}
+export async function GET(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const pairId = String(new URL(req.url).searchParams.get("pairId")||""); if (!pairId) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (role!=="caller") return NextResponse.json({ error:"only-caller" },{status:403});
+  const sdp = await get(`rtc:pair:${pairId}:answer`); if (!sdp) return new NextResponse(null,{status:204});
+  await expire(`rtc:pair:${pairId}`, 150); return NextResponse.json({ sdp:String(sdp) },{status:200});
+}
+TS
+)"
+ensure_file src/app/api/rtc/ice/route.ts "$(cat <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, lpush, lrange, ltrim, expire } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+async function auth(anon: string, pairId: string){
+  const map = await get(`rtc:pair:map:${anon}`); if (!map) return null;
+  const [pid, role] = String(map).split("|"); if (pid!==pairId) return null;
+  return role as "caller"|"callee";
+}
+export async function POST(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const { pairId, candidate } = await req.json().catch(()=>({})); if (!pairId || !candidate) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (!role) return NextResponse.json({ error:"forbidden" },{status:403});
+  const dest = role==="caller" ? "b" : "a";
+  const key = `rtc:pair:${pairId}:ice:${dest}`;
+  await lpush(key, JSON.stringify({ from: role==="caller" ? "a":"b", cand: candidate }));
+  await expire(key, 150); await expire(`rtc:pair:${pairId}`, 150);
+  return new NextResponse(null,{status:204});
+}
+export async function GET(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const pairId = String(new URL(req.url).searchParams.get("pairId")||""); if (!pairId) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (!role) return NextResponse.json({ error:"forbidden" },{status:403});
+  const me = role==="caller" ? "a":"b";
+  const key = `rtc:pair:${pairId}:ice:${me}`;
+  const items = await lrange(key, 0, 49);
+  if (!items || items.length===0) return new NextResponse(null,{status:204});
+  await ltrim(key, items.length, -1); await expire(`rtc:pair:${pairId}`, 150);
+  return NextResponse.json(items.map(s=>JSON.parse(s)),{status:200});
+}
+TS
+)"
+
+say "5) qlen & ping (cleanup + TTL renew)"
+ensure_file src/app/api/rtc/qlen/route.ts "$(cat <<'TS'
+import { NextResponse } from "next/server";
+import { zcard, zremrangebyscore } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+export async function GET(){
+  const cutoff = Date.now() - 60_000;
+  await Promise.all([ zremrangebyscore(`rtc:q`, "-inf", `(${cutoff}`) ]);
+  const len = await zcard(`rtc:q`);
+  return NextResponse.json({ mode:"redis", len:Number(len||0) },{status:200});
+}
+TS
+)"
+ensure_file src/app/api/rtc/ping/route.ts "$(cat <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { hgetall, expire } from "@/lib/rtc/upstash";
+import { touchQueue } from "@/lib/rtc/mm";
+export const runtime = "nodejs";
+export async function GET(_req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ ok:false },{status:403});
+  const attr = await hgetall(`rtc:attrs:${anon}`);
+  if (attr?.gender && attr?.country) {
+    await touchQueue(anon, { gender: attr.gender, country: attr.country });
+    await Promise.all([ expire(`rtc:attrs:${anon}`,120), expire(`rtc:filters:${anon}`,120) ]);
+  }
+  return NextResponse.json({ ok:true },{status:200});
+}
+TS
+)"
+
+# -------- Client: fix GET offers & undefined pairId --------
+say "6) Client patch: enforce POST for offer/answer and guard on pairId"
+
+# Convert any GET with query -> POST body {pairId,sdp}
+grep -RIl --exclude-dir=node_modules "/api/rtc/offer?pairId=" src || true
+sed -i -E "s#fetch\\(\\s*['\"]/api/rtc/offer\\?pairId=\\$\\{?([^}&]+)\\}?[^)]*\\)#fetch('/api/rtc/offer',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pairId:\\1,sdp: (typeof sdp!=='undefined'?sdp:localDescription?.sdp||'v=0')})})#g" $(grep -RIl --exclude-dir=node_modules "/api/rtc/offer?pairId=" src || echo "")
+grep -RIl --exclude-dir=node_modules "/api/rtc/answer?pairId=" src || true
+sed -i -E "s#fetch\\(\\s*['\"]/api/rtc/answer\\?pairId=\\$\\{?([^}&]+)\\}?[^)]*\\)#fetch('/api/rtc/answer',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pairId:\\1,sdp: (typeof sdp!=='undefined'?sdp:localDescription?.sdp||'v=0')})})#g" $(grep -RIl --exclude-dir=node_modules "/api/rtc/answer?pairId=" src || echo "")
+
+# Guard: do not call offer/answer if pairId falsy
+add_guard(){ file="$1"; [ -f "$file" ] || return 0;
+  perl -0777 -pe "s/(const\\s+pairId\\s*=\\s*[^;]+;\\s*)(\\n|.){0,200}?fetch\\(\\s*['\\\"]\\/api\\/rtc\\/(offer|answer)/\$1 if(!pairId){console.warn('RTC: no pairId, abort offer/answer'); return;} \nfetch('/api/rtc/\$3/g" -i "$file" || true
+}
+for f in $(grep -RIl --exclude-dir=node_modules "api/rtc/(offer|answer)" src || true); do add_guard "$f"; done
+
+# -------- Build & quick checks --------
+say "7) Install & build"
+pnpm i --frozen-lockfile
+pnpm build
+
+say "8) Lightweight API smoke"
+curl -sS "$BASE/api/rtc/qlen" | tee -a "$OUT"
+echo >>"$OUT"
+curl -sS "$BASE/api/rtc/ping"  | tee -a "$OUT" || true
+echo >>"$OUT"
+
+say "9) Commit & push"
+git add -A
+git commit -m "RTC: fix pairId/role contract, POST offer/answer, ICE auth, ping TTL, qlen cleanup, anon init" || true
+git push "$REPO_REMOTE" "$TARGET_BRANCH"
+
+say "DONE. Report: $OUT"
+'

@@ -1,104 +1,39 @@
-// Upstash Redis helpers
-const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
-const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+// "use server";
+const URL = process.env.UPSTASH_REDIS_REST_URL!;
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
+if (!URL || !TOKEN) console.warn("[upstash] Missing UPSTASH envs");
 
-interface UpstashResponse {
-  result: any;
-}
-
-async function cmd(command: string[]): Promise<any> {
-  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
-    throw new Error("Missing Upstash credentials");
-  }
-  
-  const res = await fetch(UPSTASH_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${UPSTASH_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(command),
+type Cmd = (string|number)[];
+async function pipe(commands: Cmd[]): Promise<any[]>{
+  const r = await fetch(`${URL}/pipeline`, {
+    method:"POST", headers:{ "content-type":"application/json", authorization:`Bearer ${TOKEN}`},
+    body: JSON.stringify({ commands }), cache:"no-store"
   });
-  
-  if (!res.ok) {
-    throw new Error(`Upstash error: ${res.status}`);
-  }
-  
-  const data: UpstashResponse = await res.json();
-  return data.result;
+  if(!r.ok){ throw new Error(`[upstash] ${r.status} ${await r.text()}`); }
+  const json = await r.json(); return json.map((e:any)=>e.result);
 }
-
-export async function pipe(commands: string[][]): Promise<any[]> {
-  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
-    throw new Error("Missing Upstash credentials");
-  }
-  
-  const res = await fetch(`${UPSTASH_URL}/pipeline`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${UPSTASH_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(commands),
-  });
-  
-  if (!res.ok) {
-    throw new Error(`Upstash pipeline error: ${res.status}`);
-  }
-  
-  const data = await res.json();
-  return data.map((item: UpstashResponse) => item.result);
-}
-
-export async function zadd(key: string, score: number, member: string) {
-  return cmd(["ZADD", key, score.toString(), member]);
-}
-
-export async function zrem(key: string, member: string) {
-  return cmd(["ZREM", key, member]);
-}
-
-export async function zremrangebyscore(key: string, min: string, max: string) {
-  return cmd(["ZREMRANGEBYSCORE", key, min, max]);
-}
-
-export async function zrangebyscore(key: string, min: string, max: string, limit?: number) {
-  const args = ["ZRANGEBYSCORE", key, min, max];
-  if (limit) {
-    args.push("LIMIT", "0", limit.toString());
-  }
-  return cmd(args);
-}
-
-export async function hget(key: string, field: string) {
-  return cmd(["HGET", key, field]);
-}
-
-export async function hset(key: string, field: string, value: string) {
-  return cmd(["HSET", key, field, value]);
-}
-
-export async function hdel(key: string, ...fields: string[]) {
-  return cmd(["HDEL", key, ...fields]);
-}
-
-export async function expire(key: string, seconds: number) {
-  return cmd(["EXPIRE", key, seconds.toString()]);
-}
-
-export async function del(key: string) {
-  return cmd(["DEL", key]);
-}
-
-export async function lrange(key: string, start = 0, stop = 49) {
-  const [res] = await pipe([["LRANGE", key, start.toString(), stop.toString()]]);
-  return Array.isArray(res) ? res : [];
-}
-
-export async function lpush(key: string, ...values: string[]) {
-  return cmd(["LPUSH", key, ...values]);
-}
-
-export async function lpop(key: string) {
-  return cmd(["LPOP", key]);
+export async function setNxPx(k:string,v:string,px:number){ const [res]=await pipe([["SET",k,v,"NX","PX",px]]); return res==="OK"; }
+export async function setPx(k:string,v:string,px:number){ const [res]=await pipe([["SET",k,v,"PX",px]]); return res==="OK"; }
+export async function set(k:string,v:string){ const [res]=await pipe([["SET",k,v]]); return res==="OK"; }
+export async function get(k:string){ const [res]=await pipe([["GET",k]]); return res??null; }
+export async function del(k:string){ await pipe([["DEL",k]]); }
+export async function expire(k:string,s:number){ await pipe([["EXPIRE",k,s]]); }
+export async function exists(k:string){ const [n]=await pipe([["EXISTS",k]]); return n===1; }
+export async function hset(k:string,o:Record<string,string|number>){ const flat:(string|number)[]=[]; Object.entries(o).forEach(([k,v])=>flat.push(k,String(v))); await pipe([["HSET",k,...flat]]); }
+export async function hgetall(k:string){ const [arr]=await pipe([["HGETALL",k]]); const out:Record<string,string>={}; if(Array.isArray(arr)){ for(let i=0;i<arr.length;i+=2) out[arr[i]]=arr[i+1]; } return out; }
+export async function sadd(k:string,m:string){ await pipe([["SADD",k,m]]); }
+export async function sismember(k:string,m:string){ const [n]=await pipe([["SISMEMBER",k,m]]); return n===1; }
+export async function zadd(k:string,score:number,m:string){ await pipe([["ZADD",k,score,m]]); }
+export async function zrem(k:string,m:string){ await pipe([["ZREM",k,m]]); }
+export async function zcard(k:string){ const [n]=await pipe([["ZCARD",k]]); return Number(n||0); }
+export async function zrange(k:string,s=0,e=49){ const [res]=await pipe([["ZRANGE",k,s,e]]); return Array.isArray(res)?res:[]; }
+export async function zremrangebyscore(k:string,min:string,max:string){ await pipe([["ZREMRANGEBYSCORE",k,min,max]]); }
+export async function lpush(k:string,v:string){ await pipe([["LPUSH",k,v]]); }
+export async function lrange(k:string,start=0,stop=49){ const [res]=await pipe([["LRANGE",k,start,stop]]); return Array.isArray(res)?res:[]; }
+export async function ltrim(k:string,start:number,stop:number){ await pipe([["LTRIM",k,start,stop]]); }
+/* simple rate limit: limit per windowSec */
+export async function rateLimit(key:string, limit:number, windowSec:number){
+  const bucket=`rl:${key}:${Math.floor(Date.now()/(windowSec*1000))}`;
+  const [count]=await pipe([["INCR",bucket],["EXPIRE",bucket,windowSec]]);
+  return Number(count||0) <= limit;
 }

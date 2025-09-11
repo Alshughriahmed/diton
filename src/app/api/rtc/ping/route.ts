@@ -1,24 +1,14 @@
-import { NextResponse } from "next/server";
-import { rSet, rGet } from "@/lib/redis";
-
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { hgetall, expire } from "@/lib/rtc/upstash";
+import { touchQueue } from "@/lib/rtc/mm";
 export const runtime = "nodejs";
-
-export async function GET(req: Request) {
-  const haveEnv = Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
-  if (!haveEnv) {
-    return NextResponse.json({ ok: false, env: false, note: "Set UPSTASH_REDIS_REST_URL/TOKEN on Vercel" }, { status: 200 });
+export async function GET(_req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ ok:false },{status:403});
+  const attr = await hgetall(`rtc:attrs:${anon}`);
+  if (attr?.gender && attr?.country) {
+    await touchQueue(anon, { gender: attr.gender, country: attr.country });
+    await Promise.all([ expire(`rtc:attrs:${anon}`,120), expire(`rtc:filters:${anon}`,120) ]);
   }
-  
-  const k = "rtc:ping";
-  const v = String(Date.now());
-  try {
-    await rSet(k, v, 10);
-    const back = await rGet(k);
-    
-    // TTL renewal would go here in production with proper Redis setup
-    
-    return NextResponse.json({ ok: back.value === v, env: true });
-  } catch (e:any) {
-    return NextResponse.json({ ok: false, env: true, error: String(e?.message||e) }, { status: 200 });
-  }
+  return NextResponse.json({ ok:true },{status:200});
 }

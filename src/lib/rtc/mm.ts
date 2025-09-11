@@ -1,66 +1,96 @@
-// Matchmaker logic for WebRTC
-import { zadd, zrem, zrangebyscore, zremrangebyscore, hget, hset, expire } from "./upstash";
+import {
+  setNxPx,setPx,get,del,expire,exists,hset,hgetall,sadd,sismember,
+  zadd,zrem,zcard,zrange,zremrangebyscore,lpush,lrange,ltrim,rateLimit
+} from "./upstash";
+import { ulid, pairLockKey } from "./ids";
 
-interface MatchCandidate {
-  id: string;
-  score: number;
-  attrs?: Record<string, any>;
+export type Attrs={ gender:string; country:string; };
+export type Filters={ genders?:string; countries?:string; };
+
+export function intersectOk(f:Filters,a:Attrs){
+  const gs=(f.genders||"all").toLowerCase(); const cs=(f.countries||"ALL").toUpperCase();
+  const gOk= gs==="all" || gs.split(",").includes(a.gender.toLowerCase());
+  const cOk= cs==="ALL" || cs.split(",").includes(a.country.toUpperCase());
+  return gOk && cOk;
+}
+export async function enqueue(anonId:string, attr:Attrs, filt:Filters){
+  await Promise.all([
+    hset(`rtc:attrs:${anonId}`,{gender:attr.gender,country:attr.country}), expire(`rtc:attrs:${anonId}`,120),
+    hset(`rtc:filters:${anonId}`,{genders:(filt.genders||"all"),countries:(filt.countries||"ALL")}), expire(`rtc:filters:${anonId}`,120),
+    zadd(`rtc:q`,Date.now(),anonId),
+    zadd(`rtc:q:gender:${attr.gender.toLowerCase()}`,Date.now(),anonId),
+    zadd(`rtc:q:country:${attr.country.toUpperCase()}`,Date.now(),anonId),
+  ]);
+}
+export async function touchQueue(anonId:string, attr:Attrs){
+  await Promise.all([
+    zadd(`rtc:q`,Date.now(),anonId),
+    zadd(`rtc:q:gender:${attr.gender.toLowerCase()}`,Date.now(),anonId),
+    zadd(`rtc:q:country:${attr.country.toUpperCase()}`,Date.now(),anonId),
+  ]);
+}
+export async function cleanStaleQueue(){ const cutoff=Date.now()-60_000; await zremrangebyscore(`rtc:q`,"-inf",`(${cutoff}`); }
+
+async function candidatePool(selfAttr:Attrs, selfFilt:Filters){
+  const wantedC=(selfFilt.countries||"ALL").toUpperCase(); const wantedG=(selfFilt.genders||"all").toLowerCase();
+  const sets:string[][]=[];
+  if(wantedC!=="ALL"){ for(const cc of wantedC.split(",").slice(0,6)){ sets.push(await zrange(`rtc:q:country:${cc}`,0,19)); } }
+  if(wantedG!=="all"){ for(const g of wantedG.split(",").slice(0,2)){ sets.push(await zrange(`rtc:q:gender:${g}`,0,19)); } }
+  sets.push(await zrange(`rtc:q`,0,49));
+  const seen=new Set<string>(); const out:string[]=[];
+  for(const arr of sets){ for(const id of arr){ if(!seen.has(id)){ seen.add(id); out.push(id); } } }
+  return out;
 }
 
-export async function touchQueue(anonId: string) {
-  const now = Date.now();
-  await zadd("rtc:q", now, anonId);
-  return now;
-}
+export async function matchmake(self:string){
+  const rlOk=await rateLimit(`mm:${self}`,8,5); if(!rlOk) return {status:429 as const, body:{error:"rate"}};
+  const selfLock=await setNxPx(`rtc:matching:${self}`,"1",5000); if(!selfLock) return {status:204 as const};
+  try{
+    const [selfAttrRaw,selfFiltRaw]=await Promise.all([hgetall(`rtc:attrs:${self}`),hgetall(`rtc:filters:${self}`)]);
+    if(!selfAttrRaw?.gender||!selfAttrRaw?.country){ return {status:400 as const, body:{error:"missing-attrs"}}; }
+    const selfAttr: Attrs = {gender: selfAttrRaw.gender, country: selfAttrRaw.country};
+    const selfFilt: Filters = {genders: selfFiltRaw?.genders, countries: selfFiltRaw?.countries};
+    const pool=await candidatePool(selfAttr,selfFilt);
+    for(const cand of pool){
+      if(cand===self) continue;
+      if(await sismember(`rtc:seen:${self}`,cand)) continue;
 
-export async function findMatch(anonId: string): Promise<{ pairId: string; role: "caller" | "callee"; peer?: string } | null> {
-  const now = Date.now();
-  const cutoff = now - 60000; // 60 seconds timeout
-  
-  // Get candidates from queue, excluding self
-  const candidates = await zrangebyscore("rtc:q", cutoff.toString(), "+inf", 50);
-  
-  for (const cand of candidates) {
-    if (cand === anonId) continue;
-    
-    // Check if candidate is still alive
-    const alive = await hget(`rtc:attrs:${cand}`, "ts");
-    if (!alive || parseInt(alive) < cutoff) {
-      await zrem("rtc:q", cand);
-      continue;
+      const alive=await exists(`rtc:attrs:${cand}`);
+      if(!alive){ await zrem(`rtc:q`,cand); continue; }
+
+      if(!(await setNxPx(`rtc:claim:${cand}`,self,6000))) continue;
+      const pairLock=pairLockKey(self,cand);
+      if(!(await setNxPx(pairLock,"1",6000))){ await del(`rtc:claim:${cand}`); continue; }
+
+      const [candMap,candAttrRaw,candFiltRaw]=await Promise.all([get(`rtc:pair:map:${cand}`),hgetall(`rtc:attrs:${cand}`),hgetall(`rtc:filters:${cand}`)]);
+      if(candMap){ await del(`rtc:claim:${cand}`); await del(pairLock); continue; }
+
+      const candAttr: Attrs = {gender: candAttrRaw.gender || "", country: candAttrRaw.country || ""};
+      const candFilt: Filters = {genders: candFiltRaw?.genders, countries: candFiltRaw?.countries};
+      const okA=intersectOk(selfFilt,candAttr); const okB=intersectOk(candFilt,selfAttr);
+      if(!okA||!okB){ await del(`rtc:claim:${cand}`); await del(pairLock); continue; }
+
+      const pairId=ulid();
+      await Promise.all([
+        hset(`rtc:pair:${pairId}`,{a:self,b:cand,role_a:"caller",role_b:"callee",created:Date.now()}),
+        expire(`rtc:pair:${pairId}`,150),
+        setPx(`rtc:pair:map:${self}`,`${pairId}|caller`,150_000),
+        setPx(`rtc:pair:map:${cand}`,`${pairId}|callee`,150_000),
+        zrem(`rtc:q`,self), zrem(`rtc:q`,cand),
+        zrem(`rtc:q:gender:${selfAttr.gender.toLowerCase()}`,self),
+        zrem(`rtc:q:gender:${candAttr.gender?.toLowerCase?.()||""}`,cand),
+        zrem(`rtc:q:country:${selfAttr.country.toUpperCase()}`,self),
+        zrem(`rtc:q:country:${candAttr.country?.toUpperCase?.()||""}`,cand),
+        sadd(`rtc:seen:${self}`,cand), expire(`rtc:seen:${self}`,300),
+        sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
+        del(`rtc:claim:${cand}`), del(pairLock),
+      ]);
+      return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
     }
-    
-    // Found a match, create pair
-    const pairId = `pair-${now}-${Math.random().toString(36).slice(2, 8)}`;
-    
-    // Remove both from queue
-    await Promise.all([
-      zrem("rtc:q", anonId),
-      zrem("rtc:q", cand)
-    ]);
-    
-    // Assign roles (first one becomes caller)
-    const role = "caller";
-    const peerRole = "callee";
-    
-    // Store pair mapping
-    await Promise.all([
-      hset(`rtc:who:${anonId}`, "pairId", pairId),
-      hset(`rtc:who:${anonId}`, "role", role),
-      hset(`rtc:who:${cand}`, "pairId", pairId),
-      hset(`rtc:who:${cand}`, "role", peerRole),
-      expire(`rtc:pair:${pairId}`, 150),
-      expire(`rtc:who:${anonId}`, 150),
-      expire(`rtc:who:${cand}`, 150)
-    ]);
-    
-    return { pairId, role, peer: cand };
-  }
-  
-  return null;
+    return {status:204 as const};
+  }catch(e:any){
+    return {status:500 as const, body:{error:"mm-fail", info:String(e?.message||e).slice(0,140)}};
+  }finally{ await del(`rtc:matching:${self}`); }
 }
 
-export async function cleanupExpired() {
-  const cutoff = Date.now() - 60000;
-  await zremrangebyscore("rtc:q", "-inf", `(${cutoff}`);
-}
+export async function pairMapOf(anonId:string){ const map=await get(`rtc:pair:map:${anonId}`); if(!map) return null; const [pairId,role]=String(map).split("|"); return {pairId, role}; }

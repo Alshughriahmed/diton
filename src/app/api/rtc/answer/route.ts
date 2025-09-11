@@ -1,62 +1,19 @@
-import { NextResponse } from "next/server";
-import { rSet, rGet } from "@/lib/redis";
-import { expire } from "@/lib/rtc/upstash";
-
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, setNxPx, expire } from "@/lib/rtc/upstash";
 export const runtime = "nodejs";
-
-function key(pairId: string, role: string) { return `rtc:sdp:${pairId}:${role}`; }
-function other(role: string) { return role === "caller" ? "callee" : "caller"; }
-
-export async function OPTIONS() { return NextResponse.json({ ok: true }); }
-
-export async function POST(req: Request) {
-  const b: any = await req.json().catch(() => ({}));
-  const { pairId, role, sdp, anonId } = b || {};
-  if (!pairId || !role || !sdp || !anonId) return NextResponse.json({ ok: false, error: "missing params" }, { status: 400 });
-  
-  // Verify anonId is authorized for this pairId/role
-  const whoCheck = await rGet(`rtc:who:${anonId}`);
-  if (!whoCheck.value) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-  
-  try {
-    const whoData = JSON.parse(whoCheck.value);
-    if (whoData.pairId !== pairId || whoData.role !== role) {
-      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ ok: false, error: "invalid auth" }, { status: 403 });
-  }
-  
-  await rSet(key(pairId, role), JSON.stringify({ sdp, ts: Date.now() }), 3600);
-  await expire(`rtc:pair:${pairId}`, 150);
-  return NextResponse.json({ ok: true });
+async function auth(anon: string, pairId: string){ const map = await get(`rtc:pair:map:${anon}`); if (!map) return null; const [pid, role] = String(map).split("|"); return pid===pairId ? role : null; }
+export async function POST(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const { pairId, sdp } = await req.json().catch(()=>({})); if (!pairId || !sdp) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (role!=="callee") return NextResponse.json({ error:"only-callee" },{status:403});
+  const ok = await setNxPx(`rtc:pair:${pairId}:answer`, String(sdp), 120_000); if (!ok) return NextResponse.json({ error:"exists" },{status:409});
+  await expire(`rtc:pair:${pairId}`, 150); return new NextResponse(null,{status:204});
 }
-
-export async function GET(req: Request) {
-  const u = new URL(req.url);
-  const pairId = u.searchParams.get("pairId");
-  const role = u.searchParams.get("role");
-  const anonId = u.searchParams.get("anonId");
-  if (!pairId || !role || !anonId) return NextResponse.json({ ok: false, error: "missing params" }, { status: 400 });
-  
-  // Verify anonId is authorized for this pairId/role
-  const whoCheck = await rGet(`rtc:who:${anonId}`);
-  if (!whoCheck.value) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-  
-  try {
-    const whoData = JSON.parse(whoCheck.value);
-    if (whoData.pairId !== pairId || whoData.role !== role) {
-      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-    }
-  } catch {
-    return NextResponse.json({ ok: false, error: "invalid auth" }, { status: 403 });
-  }
-  
-  const r = await rGet(key(pairId, other(role)));
-  if (!r.value) return NextResponse.json({ ok: true, ready: false });
-  
-  // Extend TTL when SDP is fetched
-  await expire(`rtc:pair:${pairId}`, 150);
-  
-  return NextResponse.json({ ok: true, ready: true, ...JSON.parse(r.value) });
+export async function GET(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const pairId = String(new URL(req.url).searchParams.get("pairId")||""); if (!pairId) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (role!=="caller") return NextResponse.json({ error:"only-caller" },{status:403});
+  const sdp = await get(`rtc:pair:${pairId}:answer`); if (!sdp) return new NextResponse(null,{status:204});
+  await expire(`rtc:pair:${pairId}`, 150); return NextResponse.json({ sdp:String(sdp) },{status:200});
 }

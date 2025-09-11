@@ -1,77 +1,30 @@
-import { NextResponse } from "next/server";
-import { rLPush, rLPop, rGet } from "@/lib/redis";
-import { expire } from "@/lib/rtc/upstash";
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, lpush, lrange, ltrim, expire } from "@/lib/rtc/upstash";
 export const runtime = "nodejs";
-
-function key(pid:string, role:string) { return `rtc:ice:${pid}:${role}`; }
-function otherRole(role:string) { return role === "caller" ? "callee" : "caller"; }
-
-export async function OPTIONS() { return NextResponse.json({ ok:true }); }
-
-export async function POST(req: Request) {
-  try {
-    const b:any = await req.json();
-    const { pairId, candidate, anonId } = b || {};
-    if (!pairId || !candidate || !anonId) return NextResponse.json({ ok:false, error:"missing params" }, { status: 400 });
-    
-    // Verify anonId is authorized for this pairId and get role
-    const whoCheck = await rGet(`rtc:who:${anonId}`);
-    if (!whoCheck.value) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-    
-    let myRole;
-    try {
-      const whoData = JSON.parse(whoCheck.value);
-      if (whoData.pairId !== pairId) {
-        return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-      }
-      myRole = whoData.role;
-    } catch {
-      return NextResponse.json({ ok: false, error: "invalid auth" }, { status: 403 });
-    }
-    
-    try {
-      // Store candidate in my role queue so the other peer can read it
-      await rLPush(key(pairId, myRole), JSON.stringify(candidate));
-      await expire(`rtc:pair:${pairId}`, 150);
-      return NextResponse.json({ ok:true });
-    } catch {
-      // Redis unavailable, return error so client can retry
-      return NextResponse.json({ ok:false, error:"redis unavailable" }, { status: 503 });
-    }
-  } catch {
-    return NextResponse.json({ ok:false }, { status: 400 });
-  }
+async function auth(anon: string, pairId: string){
+  const map = await get(`rtc:pair:map:${anon}`); if (!map) return null;
+  const [pid, role] = String(map).split("|"); if (pid!==pairId) return null;
+  return role as "caller"|"callee";
 }
-
-export async function GET(req: Request) {
-  const u = new URL(req.url);
-  const pairId = u.searchParams.get("pairId");
-  const anonId = u.searchParams.get("anonId");
-  if (!pairId || !anonId) return NextResponse.json({ ok:false, error:"missing params" }, { status: 400 });
-  
-  // Verify anonId is authorized for this pairId and get role
-  const whoCheck = await rGet(`rtc:who:${anonId}`);
-  if (!whoCheck.value) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-  
-  let myRole;
-  try {
-    const whoData = JSON.parse(whoCheck.value);
-    if (whoData.pairId !== pairId) {
-      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 403 });
-    }
-    myRole = whoData.role;
-  } catch {
-    return NextResponse.json({ ok: false, error: "invalid auth" }, { status: 403 });
-  }
-  
-  try {
-    // Read from the other peer's queue to get their candidates
-    const r = await rLPop(key(pairId, otherRole(myRole)));
-    const cand = r.value ? JSON.parse(r.value) : null;
-    if (cand) await expire(`rtc:pair:${pairId}`, 150);
-    return NextResponse.json({ ok:true, candidate: cand });
-  } catch {
-    // Redis unavailable, return error so client knows to retry
-    return NextResponse.json({ ok:false, error:"redis unavailable" }, { status: 503 });
-  }
+export async function POST(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const { pairId, candidate } = await req.json().catch(()=>({})); if (!pairId || !candidate) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (!role) return NextResponse.json({ error:"forbidden" },{status:403});
+  const dest = role==="caller" ? "b" : "a";
+  const key = `rtc:pair:${pairId}:ice:${dest}`;
+  await lpush(key, JSON.stringify({ from: role==="caller" ? "a":"b", cand: candidate }));
+  await expire(key, 150); await expire(`rtc:pair:${pairId}`, 150);
+  return new NextResponse(null,{status:204});
+}
+export async function GET(req: NextRequest){
+  const anon = getAnonIdUnsafe(); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
+  const pairId = String(new URL(req.url).searchParams.get("pairId")||""); if (!pairId) return NextResponse.json({ error:"bad-input" },{status:400});
+  const role = await auth(anon, pairId); if (!role) return NextResponse.json({ error:"forbidden" },{status:403});
+  const me = role==="caller" ? "a":"b";
+  const key = `rtc:pair:${pairId}:ice:${me}`;
+  const items = await lrange(key, 0, 49);
+  if (!items || items.length===0) return new NextResponse(null,{status:204});
+  await ltrim(key, items.length, -1); await expire(`rtc:pair:${pairId}`, 150);
+  return NextResponse.json(items.map(s=>JSON.parse(s)),{status:200});
 }
