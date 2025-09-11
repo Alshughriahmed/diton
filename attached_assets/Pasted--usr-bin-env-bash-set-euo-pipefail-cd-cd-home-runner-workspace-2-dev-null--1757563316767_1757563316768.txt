@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# cd إلى جذر العمل
+cd /home/runner/workspace 2>/dev/null || cd ~/workspace 2>/dev/null || true
+mkdir -p _ops/reports
+ts="$(date +%Y%m%d-%H%M%S)"
+REPORT="_ops/reports/batch_rtc_final_${ts}.txt"
+
+# 1) إصلاح /api/rtc/qlen ليُرجع len رقميًا
+QLEN_FILE="src/app/api/rtc/qlen/route.ts"
+if [ -f "$QLEN_FILE" ]; then
+  cp "$QLEN_FILE" "${QLEN_FILE}.bak.${ts}"
+  cat >"$QLEN_FILE" <<'TS'
+import { NextResponse } from "next/server";
+import { qLen } from "@/lib/queue";
+export const runtime = "nodejs";
+export const revalidate = 0;
+export async function GET() {
+  const q: any = await qLen();
+  const len = typeof q?.len === "number" ? q.len : (q?.len?.len ?? 0);
+  const mode = q?.mode ?? "memory";
+  return NextResponse.json({ mode, len });
+}
+TS
+fi
+
+# 2) مطابقة حدث فتح الرسائل: openMessages -> openMessaging
+TBAR="src/components/chat/ChatToolbar.tsx"
+if [ -f "$TBAR" ]; then
+  cp "$TBAR" "${TBAR}.bak.${ts}"
+  sed -i 's/emit("ui:openMessages"/emit("ui:openMessaging"/g' "$TBAR" || true
+fi
+
+# 3) توسيع CSP على /chat ليشمل بروتوكولات WebRTC (stun/turn/turns)
+CFG="next.config.mjs"
+if [ -f "$CFG" ]; then
+  cp "$CFG" "${CFG}.bak.${ts}"
+  # حاول إدراج البروتوكولات في connect-src إن لم تكن موجودة
+  if ! grep -qiE 'connect-src[^"]*stun:' "$CFG"; then
+    # إدراج آمن داخل أول ظهور لـ connect-src في ملف /chat
+    sed -i -E 's/(connect-src[^"]*)"/\1 stun: turn: turns:"/I' "$CFG" || true
+  fi
+fi
+
+# 4) بناء
+pnpm install --frozen-lockfile || pnpm install
+pnpm build
+
+# 5) فحص قبول مختصر على الإنتاج
+BASE="${BASE:-https://www.ditonachat.com}"
+{
+  echo "-- Diagnostics --"
+  echo "BASE=$BASE"
+  echo "-- Acceptance --"
+  curl -s "$BASE/api/auth/providers" | grep -q "google" && echo "AUTH_PROVIDERS_NONEMPTY=1" || echo "AUTH_PROVIDERS_NONEMPTY=0"
+  echo -n "RTC_PING="; curl -s "$BASE/api/rtc/ping"
+  QL="$(curl -s "$BASE/api/rtc/qlen")"
+  echo "RTC_QLEN_RAW=$QL"
+  LEN_NUM="$(printf '%s' "$QL" | sed -n 's/.*"len":\([0-9][0-9]*\).*/\1/p')"
+  [ -n "$LEN_NUM" ] && echo "RTC_QLEN_NUMERIC=1" || echo "RTC_QLEN_NUMERIC=0"
+  echo -n "PERMISSIONS_POLICY_HEADER_PRESENT="; curl -sI "$BASE/chat" | grep -qi "permissions-policy:.*camera=(self), microphone=(self)" && echo 1 || echo 0
+  echo -n "HSTS_HEADER_PRESENT="; curl -sI "$BASE/chat" | grep -qi "strict-transport-security" && echo 1 || echo 0
+  echo "-- End Acceptance --"
+  echo "REPORT=$REPORT"
+} | tee "$REPORT"
+
+echo "Saved: $REPORT"

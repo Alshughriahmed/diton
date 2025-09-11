@@ -156,7 +156,7 @@ export default function ChatToolbar(){
 
           {/* Messages 💬 */}
           <button 
-            onClick={() => emit("ui:openMessages" as any)}
+            onClick={() => emit("ui:openMessaging" as any)}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-purple-600/30 backdrop-blur-sm text-white border border-purple-400/40 hover:bg-purple-500/40 transition-all duration-200 flex items-center justify-center text-sm sm:text-base" 
             aria-label="Messages"
           >

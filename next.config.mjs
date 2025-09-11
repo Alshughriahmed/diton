@@ -20,7 +20,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'", // Tailwind requires unsafe-inline
               "img-src 'self' data: blob:",
               "media-src 'self' blob:",
-              "connect-src 'self' wss: https://js.stripe.com https://api.stripe.com https://hcaptcha.com", // WebRTC signaling + Stripe + hCaptcha
+              "connect-src 'self' wss: stun: turn: turns: https://js.stripe.com https://api.stripe.com https://hcaptcha.com", // WebRTC signaling + Stripe + hCaptcha
               "frame-src 'self' https://js.stripe.com https://hcaptcha.com",
               "worker-src 'self' blob:",
               "object-src 'none'",
