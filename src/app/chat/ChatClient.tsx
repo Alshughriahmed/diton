@@ -239,13 +239,7 @@ export default function ChatClient(){
             await enqueueOnce();
             const pair = await pollPair();
             if (pair && localRef.current?.srcObject) {
-              const pc = await startRTCWithEndpoints(localRef.current.srcObject as MediaStream);
-              pc.ontrack = (event) => {
-                const remoteVideo = document.getElementById('remoteVideo') as HTMLVideoElement;
-                if (remoteVideo && event.streams[0]) {
-                  remoteVideo.srcObject = event.streams[0];
-                }
-              };
+              await startRTCWithEndpoints(localRef.current.srcObject as MediaStream);
             }
           } catch (error) {
             console.warn('RTC setup failed:', error);
@@ -350,18 +344,30 @@ export default function ChatClient(){
   async function startRTCWithEndpoints(stream: MediaStream){
     const pairId = localStorage.getItem("ditona_pair")||"";
     const role = localStorage.getItem("ditona_role")||"caller";
+    const anonId = await getAnonId();
     const iceServers = (typeof process!=="undefined" && process.env.NEXT_PUBLIC_TURN_URL)
       ? [{urls: process.env.NEXT_PUBLIC_TURN_URL as string, username: process.env.NEXT_PUBLIC_TURN_USER as string|undefined, credential: process.env.NEXT_PUBLIC_TURN_PASS as string|undefined}]
       : [{urls:"stun:stun.l.google.com:19302"}];
 
     const pc = new RTCPeerConnection({iceServers});
     stream.getTracks().forEach(t=>pc.addTrack(t, stream));
-    pc.onicecandidate = async (e)=>{ if(e.candidate){ try{ await fetch("/api/rtc/ice",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,candidate:e.candidate})}); }catch{} } };
+    
+    // Set up remote video handler BEFORE any SDP operations
+    pc.ontrack = (event) => {
+      const remoteVideo = document.getElementById('remoteVideo') as HTMLVideoElement;
+      if (remoteVideo && event.streams[0]) {
+        remoteVideo.srcObject = event.streams[0];
+        remoteVideo.muted = true; // Start muted for autoplay compatibility
+        remoteVideo.play().catch(() => {});
+      }
+    };
+    
+    pc.onicecandidate = async (e)=>{ if(e.candidate){ try{ await fetch("/api/rtc/ice",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,candidate:e.candidate,anonId})}); }catch{} } };
 
     async function pollICE(){
       for(let i=0;i<200;i++){
         try{
-          const r = await fetch(`/api/rtc/ice?pairId=${encodeURIComponent(pairId)}`);
+          const r = await fetch(`/api/rtc/ice?pairId=${encodeURIComponent(pairId)}&anonId=${encodeURIComponent(anonId)}`);
           const j = await r.json(); if(j?.candidate){ try{ await pc.addIceCandidate(j.candidate); }catch{} }
         }catch{}
         await new Promise(r=>setTimeout(r,500));
@@ -371,7 +377,7 @@ export default function ChatClient(){
     if(role==="caller"){
       const offer = await pc.createOffer({offerToReceiveAudio:true, offerToReceiveVideo:true});
       await pc.setLocalDescription(offer);
-      await fetch("/api/rtc/offer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"caller",sdp:offer})});
+      await fetch("/api/rtc/offer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"caller",sdp:offer,anonId})});
       // poll answer
       for(let i=0;i<60;i++){
         const anonId = await getAnonId();
@@ -389,7 +395,7 @@ export default function ChatClient(){
       }
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      await fetch("/api/rtc/answer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"callee",sdp:answer})});
+      await fetch("/api/rtc/answer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"callee",sdp:answer,anonId})});
     }
     pollICE().catch(()=>{});
     (window as any).ditonaPC = pc; // debug
@@ -459,6 +465,7 @@ export default function ChatClient(){
             className="w-full h-full object-cover" 
             playsInline 
             autoPlay
+            muted
           />
           
           {/* Center remote area overlay */}
