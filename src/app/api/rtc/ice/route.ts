@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { rLPush, rLPop, rGet } from "@/lib/redis";
+import { expire } from "@/lib/rtc/upstash";
 export const runtime = "nodejs";
 
 function key(pid:string, role:string) { return `rtc:ice:${pid}:${role}`; }
@@ -31,6 +32,7 @@ export async function POST(req: Request) {
     try {
       // Store candidate in my role queue so the other peer can read it
       await rLPush(key(pairId, myRole), JSON.stringify(candidate));
+      await expire(`rtc:pair:${pairId}`, 150);
       return NextResponse.json({ ok:true });
     } catch {
       // Redis unavailable, return error so client can retry
@@ -66,6 +68,7 @@ export async function GET(req: Request) {
     // Read from the other peer's queue to get their candidates
     const r = await rLPop(key(pairId, otherRole(myRole)));
     const cand = r.value ? JSON.parse(r.value) : null;
+    if (cand) await expire(`rtc:pair:${pairId}`, 150);
     return NextResponse.json({ ok:true, candidate: cand });
   } catch {
     // Redis unavailable, return error so client knows to retry

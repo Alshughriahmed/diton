@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { rSet, rGet } from "@/lib/redis";
+import { expire } from "@/lib/rtc/upstash";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,7 @@ export async function POST(req: Request) {
   }
   
   await rSet(key(pairId, role), JSON.stringify({ sdp, ts: Date.now() }), 3600);
+  await expire(`rtc:pair:${pairId}`, 150);
   return NextResponse.json({ ok: true });
 }
 
@@ -52,6 +54,9 @@ export async function GET(req: Request) {
   
   const r = await rGet(key(pairId, other(role)));
   if (!r.value) return NextResponse.json({ ok: true, ready: false });
+  
+  // Extend TTL when SDP is fetched
+  await expire(`rtc:pair:${pairId}`, 150);
   
   return NextResponse.json({ ok: true, ready: true, ...JSON.parse(r.value) });
 }
