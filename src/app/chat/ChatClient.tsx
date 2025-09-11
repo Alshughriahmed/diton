@@ -299,6 +299,81 @@ export default function ChatClient(){
     };
   },[vip]);
 
+  // === Ditona RTC helpers (injected) ===
+  async function getAnonId(){
+    let id = typeof window!=="undefined" ? localStorage.getItem("ditona_anon") : null;
+    if(!id && typeof window!=="undefined"){ id = `anon-${Date.now().toString(36)}-${Math.floor(Math.random()*1e6).toString(36)}`; localStorage.setItem("ditona_anon", id); }
+    return id||"";
+  }
+  async function enqueueOnce(){
+    const anonId = await getAnonId();
+    try{ await fetch("/api/rtc/enqueue",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({anonId})}); }catch{}
+  }
+  async function pollPair(ms=1000){
+    const anonId = await getAnonId();
+    for(let i=0;i<60;i++){
+      try{
+        const r = await fetch(`/api/rtc/matchmake?anonId=${encodeURIComponent(anonId)}`);
+        const j = await r.json();
+        if(j?.found && j?.pairId){
+          localStorage.setItem("ditona_pair", j.pairId);
+          localStorage.setItem("ditona_role", j.role);
+          return j;
+        }
+      }catch{}
+      await new Promise(res=>setTimeout(res, ms));
+      // try to progress pairing from server
+      try{ await fetch("/api/rtc/matchmake",{method:"POST"}); }catch{}
+    }
+    return null;
+  }
+  async function startRTCWithEndpoints(stream: MediaStream){
+    const pairId = localStorage.getItem("ditona_pair")||"";
+    const role = localStorage.getItem("ditona_role")||"caller";
+    const iceServers = (typeof process!=="undefined" && process.env.NEXT_PUBLIC_TURN_URL)
+      ? [{urls: process.env.NEXT_PUBLIC_TURN_URL as string, username: process.env.NEXT_PUBLIC_TURN_USER as string|undefined, credential: process.env.NEXT_PUBLIC_TURN_PASS as string|undefined}]
+      : [{urls:"stun:stun.l.google.com:19302"}];
+
+    const pc = new RTCPeerConnection({iceServers});
+    stream.getTracks().forEach(t=>pc.addTrack(t, stream));
+    pc.onicecandidate = async (e)=>{ if(e.candidate){ try{ await fetch("/api/rtc/ice",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,candidate:e.candidate})}); }catch{} } };
+
+    async function pollICE(){
+      for(let i=0;i<200;i++){
+        try{
+          const r = await fetch(`/api/rtc/ice?pairId=${encodeURIComponent(pairId)}`);
+          const j = await r.json(); if(j?.candidate){ try{ await pc.addIceCandidate(j.candidate); }catch{} }
+        }catch{}
+        await new Promise(r=>setTimeout(r,500));
+      }
+    }
+
+    if(role==="caller"){
+      const offer = await pc.createOffer({offerToReceiveAudio:true, offerToReceiveVideo:true});
+      await pc.setLocalDescription(offer);
+      await fetch("/api/rtc/offer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"caller",sdp:offer})});
+      // poll answer
+      for(let i=0;i<60;i++){
+        const r = await fetch(`/api/rtc/answer?pairId=${encodeURIComponent(pairId)}&role=caller`);
+        const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
+        await new Promise(res=>setTimeout(res,1000));
+      }
+    }else{
+      // callee path: wait for offer first
+      for(let i=0;i<60;i++){
+        const r = await fetch(`/api/rtc/offer?pairId=${encodeURIComponent(pairId)}&role=callee`);
+        const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
+        await new Promise(res=>setTimeout(res,1000));
+      }
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await fetch("/api/rtc/answer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"callee",sdp:answer})});
+    }
+    pollICE().catch(()=>{});
+    (window as any).ditonaPC = pc; // debug
+    return pc;
+  }
+
   function toggleCountry(code:string){ 
     const newCountries = countries.includes(code) ? countries.filter(c=>c!==code) : [...countries,code];
     setCountries(newCountries);

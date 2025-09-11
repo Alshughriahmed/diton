@@ -6,6 +6,7 @@ const EMOJIS = ["😋","😜","🤗","😊","😏","🤭","😬","😳","😍","
 export default function ChatMessagingBar({ onSend }: { onSend?: (m: string) => void }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<Array<{id: number, me: boolean, text: string}>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -14,11 +15,33 @@ export default function ChatMessagingBar({ onSend }: { onSend?: (m: string) => v
     return () => window.removeEventListener("scroll", close);
   }, []);
 
-  function send() {
+  async function send() {
     const v = text.trim();
     if (!v) return;
+    
+    // Send to API and show local echo on success
+    try {
+      const response = await fetch('/api/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: v })
+      });
+      
+      if (response.ok) {
+        // Show local echo
+        appendLocalAfterSend(setMessages, v);
+      }
+    } catch (error) {
+      console.warn('Message send failed:', error);
+    }
+    
     onSend?.(v);
     setText("");
+  }
+
+  /* ensure local echo after successful POST */
+  function appendLocalAfterSend(listSetter: any, text: string) {
+    listSetter((prev: any[]) => [...prev.slice(-2), { id: Date.now(), me: true, text }]);
   }
 
   return (
@@ -56,6 +79,24 @@ export default function ChatMessagingBar({ onSend }: { onSend?: (m: string) => v
           Send
         </button>
       </div>
+
+      {/* Messages display (last 3) */}
+      {messages.length > 0 && (
+        <div className="absolute bottom-full mb-2 right-0 max-w-xs space-y-1">
+          {messages.slice(-3).map((msg) => (
+            <div
+              key={msg.id}
+              className={`px-3 py-2 rounded-lg text-sm backdrop-blur-sm border ${
+                msg.me 
+                  ? 'bg-emerald-600/80 border-emerald-500/50 text-white ml-8' 
+                  : 'bg-slate-700/80 border-slate-600/50 text-slate-100 mr-8'
+              }`}
+            >
+              {msg.text}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
