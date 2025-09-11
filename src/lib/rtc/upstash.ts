@@ -2,8 +2,8 @@
 import { NextResponse } from "next/server";
 
 /** Upstash REST config (switch to in-memory if missing) */
-const URL = process.env.UPSTASH_REDIS_REST_URL || "";
-const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+const URL = (process.env.UPSTASH_REDIS_REST_URL || "").trim();
+const TOKEN = (process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
 export const MODE: "redis" | "memory" = (URL && TOKEN) ? "redis" : "memory";
 
 /* -------- In-memory fallback -------- */
@@ -40,6 +40,19 @@ async function pipe(commands: Cmd[]) {
   }
   const json = await r.json();
   return json.map((e: any) => e.result);
+}
+
+/** تشخيص اتصال Upstash: يعيد PONG عند النجاح */
+export async function pingRedis(): Promise<{ ok:boolean; pong?:string; err?:string }> {
+  if (MODE !== "redis") return { ok:false, err:"mode!=redis" };
+  try {
+    // أمر PING بسيط عبر pipeline
+    const res = await pipe([["PING"]]);
+    const pong = Array.isArray(res) ? String(res[0]) : String(res);
+    return { ok: pong === "PONG", pong };
+  } catch (e:any) {
+    return { ok:false, err: String(e?.message||e).slice(0,200) };
+  }
 }
 
 /* -------- Helpers exported (redis | memory) -------- */
