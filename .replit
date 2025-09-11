@@ -8,10 +8,6 @@ externalPort = 3000
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 41345
-externalPort = 3001
-
 [agent]
 expertMode = true
 
@@ -37,7 +33,7 @@ args = "Phase2 Test Server"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Settings Test Server"
+args = "DitonaChat Production Server"
 
 [[workflows.workflow]]
 name = "DitonaChat Server"
@@ -76,12 +72,12 @@ waitForPort = 3000
 outputType = "console"
 
 [[workflows.workflow]]
-name = "Settings Test Server"
+name = "DitonaChat Production Server"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/workspace && PORT=5000 pnpm dev"
+args = "PORT=5000 pnpm start"
 waitForPort = 5000
 
 [workflows.workflow.metadata]

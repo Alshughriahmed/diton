@@ -11,9 +11,11 @@ function verifySigned(raw: string, secret: string) {
 // Simplified version that works with API routes via request headers/cookies
 export function extractAnonId(req: Request): string | null {
   try {
-    // Check for x-anon-id header first (for testing)
-    const anonHeader = req.headers.get("x-anon-id");
-    if (anonHeader) return anonHeader;
+    // Check for x-anon-id header ONLY in non-production environments
+    if (process.env.NODE_ENV !== 'production') {
+      const anonHeader = req.headers.get("x-anon-id");
+      if (anonHeader) return anonHeader;
+    }
     
     // Check for anon cookie
     const cookieHeader = req.headers.get("cookie");
@@ -26,7 +28,7 @@ export function extractAnonId(req: Request): string | null {
     const raw = cookies.anon;
     if (!raw) return null;
     
-    const sec = process.env.ANON_SIGNING_SECRET || process.env.VIP_SIGNING_SECRET || "fallback-dev-secret-not-for-production"; 
+    const sec = process.env.ANON_SIGNING_SECRET || process.env.VIP_SIGNING_SECRET; 
     if (!sec) return null;
     
     return verifySigned(decodeURIComponent(raw), sec);
