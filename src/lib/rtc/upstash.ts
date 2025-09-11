@@ -31,7 +31,7 @@ async function pipe(commands: Cmd[]) {
   const r = await fetch(`${URL}/pipeline`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ commands }),
+    body: JSON.stringify(commands),
     cache: "no-store",
   });
   if (!r.ok) {
