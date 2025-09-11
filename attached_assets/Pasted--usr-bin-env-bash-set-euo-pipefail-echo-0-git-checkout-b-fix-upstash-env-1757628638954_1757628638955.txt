@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== 0) فرع آمن ==="
+git checkout -b fix/upstash-env-verify || git checkout fix/upstash-env-verify || true
+mkdir -p _ops/backup || true
+
+echo "=== 1) نسخ احتياطي ==="
+cp -f src/lib/rtc/upstash.ts _ops/backup/upstash.ts.bak 2>/dev/null || true
+
+echo "=== 2) Patch: تقوية قراءة متغيرات البيئة (trim) + ping() تشخيصي ==="
+applypatch() {
+cat > /tmp/patch_upstash_env.diff <<'PATCH'
+*** Begin Patch
+*** Update File: src/lib/rtc/upstash.ts
+@@
+-const URL = process.env.UPSTASH_REDIS_REST_URL || "";
+-const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
++const URL = (process.env.UPSTASH_REDIS_REST_URL || "").trim();
++const TOKEN = (process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
+ export const MODE: "redis" | "memory" = (URL && TOKEN) ? "redis" : "memory";
+@@
+ async function pipe(commands: Cmd[]) {
+   if (MODE === "memory") throw new Error("MEMORY_MODE");
+   // Upstash REST /pipeline يتوقع مصفوفة ثنائية الأبعاد مباشرة، لا كائن {commands:[]}
+   const r = await fetch(`${URL}/pipeline`, {
+     method: "POST",
+     headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+     body: JSON.stringify(commands),
+     cache: "no-store",
+   });
+   if (!r.ok) {
+     const text = await r.text();
+     throw new Error(`[upstash] ${r.status} ${text}`);
+   }
+   const json = await r.json();
+   return json.map((e: any) => e.result);
+ }
++
++/** تشخيص اتصال Upstash: يعيد PONG عند النجاح */
++export async function pingRedis(): Promise<{ ok:boolean; pong?:string; err?:string }> {
++  if (MODE !== "redis") return { ok:false, err:"mode!=redis" };
++  try {
++    // أمر PING بسيط عبر pipeline
++    const res = await pipe([["PING"]]);
++    const pong = Array.isArray(res) ? String(res[0]) : String(res);
++    return { ok: pong === "PONG", pong };
++  } catch (e:any) {
++    return { ok:false, err: String(e?.message||e).slice(0,200) };
++  }
++}
+*** End Patch
+PATCH
+git apply --index --reject --whitespace=fix /tmp/patch_upstash_env.diff
+}
+applypatch || { echo "Patch failed; سأحاول تعديل السطور مباشرة."; sed -i 's/UPSTASH_REDIS_REST_URL || ""/UPSTASH_REDIS_REST_URL || ""/; s/|| ""/|| ""/;' src/lib/rtc/upstash.ts; git add src/lib/rtc/upstash.ts; }
+
+echo "=== 3) Route تشخيص آمن: /api/rtc/env ==="
+mkdir -p src/app/api/rtc/env
+cat > src/app/api/rtc/env/route.ts <<'TS'
+import { NextResponse } from "next/server";
+import { MODE, /* URL, TOKEN not exported */, pingRedis } from "@/lib/rtc/upstash";
+
+const url = (process.env.UPSTASH_REDIS_REST_URL || "").trim();
+const token = (process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
+
+export const runtime = "nodejs";
+export async function GET() {
+  const urlOk = /^https?:\/\/.+upstash\.io/i.test(url);
+  const tokenPresent = token.length > 10;
+  const ping = await pingRedis().catch(()=>({ok:false}));
+  // لا نكشف القيم؛ فقط مؤشرات صحة
+  return NextResponse.json({
+    mode: MODE,
+    url_ok: urlOk,
+    token_present: tokenPresent,
+    ping_ok: !!ping.ok,
+    ping_err: ping.ok ? undefined : ping.err
+  }, { status: 200 });
+}
+TS
+
+echo "=== 4) Build ==="
+pnpm install
+pnpm build
+
+echo "=== 5) نشر (إجراءك المعتاد)، ثم تشخيص الإنتاج ==="
+echo "curl -s https://www.ditonachat.com/api/rtc/env | jq ."
+echo "curl -s https://www.ditonachat.com/api/rtc/qlen | jq ."
+
+echo "=== 6) تشغيل القبول بعد التأكد من mode=redis & ping_ok=true ==="
+# نفس سكربت القبول لديك
+bash _ops/acc_rtc.sh https://www.ditonachat.com || (echo 'ACCEPTANCE FAILED' && exit 1)
+
+echo "=== 7) Commit ==="
+git add -A
+git commit -m "chore: Upstash env trim + /api/rtc/env diagnostic route"
+echo "DONE. افتح PR الى main مع نتائج /api/rtc/env و acc_rtc.sh."
