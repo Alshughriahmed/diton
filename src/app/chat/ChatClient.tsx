@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
+import { startRtcFlow } from "./rtcFlow";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useHydrated } from "@/hooks/useHydrated";
@@ -119,13 +120,17 @@ export default function ChatClient(){
         await fetch('/api/moderation/report',{method:'POST'}); 
         toast('🚩 تم إرسال البلاغ وجاري الانتقال'); 
       }catch{}
-      nextMatch({gender, countries});
+      // RTC bridge: use new flow
+      startRtcFlow();
     });
     let off7=on("ui:next",()=>{ 
-      nextMatch({gender, countries});
-      fetch("/api/rtc/enqueue",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({anonId:typeof window!=="undefined"?localStorage.getItem("ditona_anon"):"" })}).catch(()=>{});
+      // RTC bridge: use new flow
+      startRtcFlow();
     });
-    let off8=on("ui:prev",()=>{ tryPrevOrRandom({gender, countries}); });
+    let off8=on("ui:prev",()=>{ 
+      // RTC bridge: use new flow
+      startRtcFlow();
+    });
     let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
     let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
     let offRemoteAudio=on("ui:toggleRemoteAudio", ()=>{
@@ -151,11 +156,11 @@ export default function ChatClient(){
     });
     let offCountryFilter=on("filters:country", (value)=>{
       // Trigger new match with updated filters
-      doMatch();
+      startRtcFlow();
     });
     let offGenderFilterUpdate=on("filters:gender", (value)=>{
       // Trigger new match with updated filters  
-      doMatch();
+      startRtcFlow();
     });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
@@ -270,6 +275,8 @@ export default function ChatClient(){
 
 
   async function doMatch(backward=false){
+    // RTC bridge: disable legacy matcher
+    return;
     const now = Date.now();
     if (busyRef.current) return;
     if (now - lastTsRef.current < 700) return;
