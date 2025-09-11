@@ -1,0 +1,475 @@
+📦 رسالة جاهزة للوكيل (Replit Agent)
+
+المهمة: إصلاح جذري 100% لمشكلة اقتران WebRTC الحالية، بناءً على قراءة الكود الفعلي (أرشيف المشروع الأخير).
+لماذا: الفشل الحالي سببه أن الواجهة لا تحفظ pairId/role من /api/rtc/matchmake، وتبدأ بإرسال SDP/ICE بدون pairId، كما أن مسارات answer/ice تستخدم توثيقًا يُرجع null دائمًا، إضافةً لاستخدام قديم لـ/api/rtc/enqueue لا يضبط attrs/filters.
+كيف: Minimal‑Diff باتشات محدّدة لملفات بعينها + سكربت قبول نهائي. ممنوع حذف/تعطيل أي ميزة أو تغيير بصري افتراضي.
+
+🚦 قبل البدء (لا تغييرات في البيئة)
+
+تأكّد فقط من وجود المتغيرات التالية على Vercel / بيئة التشغيل (قيمها موجودة أصلًا لدى المالك):
+
+UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+
+ANON_SIGNING_SECRET (أو بديله الحالي VIP_SIGNING_SECRET)
+
+FREE_FOR_ALL=1, NEXT_PUBLIC_FREE_FOR_ALL=1 (نُبقي تجربة المستخدم مجانية الآن)
+
+ملاحظة: مسار /api/anon/init موجود لتهيئة كوكي anon الموقّع.
+
+🧩 التنفيذ (أوامر لصق وتشغيل دفعة واحدة)
+
+مهم: العمل من جذر المستودع ( جميع الأوامر Idempotent ويمكن تكرارها عند الحاجة.
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 0) تحضير فرع آمن
+git checkout -b feature/rtc-fix-final || git checkout feature/rtc-fix-final || true
+
+# 1) نسخ احتياطي سريع للملفات المستهدفة
+mkdir -p _ops/backup || true
+cp -f src/app/chat/rtcFlow.ts _ops/backup/rtcFlow.ts.bak 2>/dev/null || true
+cp -f src/app/api/rtc/enqueue/route.ts _ops/backup/enqueue.route.ts.bak 2>/dev/null || true
+cp -f src/app/api/rtc/offer/route.ts   _ops/backup/offer.route.ts.bak   2>/dev/null || true
+cp -f src/app/api/rtc/answer/route.ts  _ops/backup/answer.route.ts.bak  2>/dev/null || true
+cp -f src/app/api/rtc/ice/route.ts     _ops/backup/ice.route.ts.bak     2>/dev/null || true
+cp -f src/app/api/rtc/qlen/route.ts    _ops/backup/qlen.route.ts.bak    2>/dev/null || true
+cp -f _ops/acc_rtc.sh                  _ops/backup/acc_rtc.sh.bak       2>/dev/null || true
+
+###############################################################################
+# 2) استبدال محتوى الملفات (Minimal-Diff) — جاهز للّصق
+###############################################################################
+
+# 2.1 واجهة RTC: حفظ pairId/role من matchmake وتمريرهما إلى offer/answer/ice
+cat > src/app/chat/rtcFlow.ts <<'TSX'
+/* Minimal RTC client flow: enqueue -> matchmake -> offer/answer -> ice (REST only) */
+export async function startRtcFlow() {
+  try {
+    // 0) تهيئة كوكي anon الموقّع (إن لم يوجد)
+    await fetch("/api/anon/init", { method: "GET", cache: "no-store" }).catch(() => {});
+
+    // 1) Enqueue (سمات + فلاتر). الواجهة يمكنها تمرير جسم اختياري:
+    const body = (window as any).__ditonaEnqueueBody || {};
+    await fetch("/api/rtc/enqueue", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    // 2) Matchmake: 204 → backoff 300–800ms؛ 200 → {pairId, role}
+    let pairId: string | undefined;
+    let role: "caller" | "callee" | undefined;
+    for (let i = 0; i < 50; i++) {
+      const r = await fetch("/api/rtc/matchmake", { method: "POST", cache: "no-store" });
+      if (r.status === 200) {
+        const j = await r.json().catch(() => ({}));
+        pairId = j?.pairId; role = j?.role;
+        if (pairId && role) break;
+      }
+      await new Promise(res => setTimeout(res, 300 + Math.floor(Math.random() * 500)));
+    }
+    if (!pairId || !role) throw new Error("matchmake-timeout");
+
+    // 3) إنشاء RTCPeerConnection
+    const pc = new RTCPeerConnection();
+    const remote = document.getElementById("remoteVideo") as HTMLVideoElement | null;
+    pc.ontrack = (ev) => {
+      const s = ev.streams?.[0] || new MediaStream([ev.track]);
+      if (remote) {
+        remote.srcObject = s;
+        remote.muted = true;
+        remote.playsInline = true;
+        remote.autoplay = true as any;
+        remote.play?.().catch(() => {});
+      }
+    };
+    // إضافة المسارات المحلية إن وُجدت
+    const local: MediaStream | undefined = (window as any).__localStream;
+    if (local) local.getTracks().forEach(t => pc.addTrack(t, local));
+
+    // 4) ICE: POST إلى /api/rtc/ice + Poll GET
+    pc.onicecandidate = async (e) => {
+      if (!e.candidate) return;
+      try {
+        await fetch("/api/rtc/ice", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pairId, candidate: e.candidate }),
+        });
+      } catch {}
+    };
+    const pollIce = async () => {
+      try {
+        const r = await fetch(`/api/rtc/ice?pairId=${encodeURIComponent(String(pairId))}`, { cache: "no-store" });
+        if (r.status === 200) {
+          const arr = await r.json().catch(() => []);
+          for (const it of arr) {
+            try { await pc.addIceCandidate(it.cand); } catch {}
+          }
+        }
+      } catch {}
+    };
+    const iceTimer = setInterval(pollIce, 350 + Math.floor(Math.random() * 350));
+
+    // 5) تبادل SDP via REST
+    if (role === "caller") {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await fetch("/api/rtc/offer", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pairId, sdp: JSON.stringify(offer) }),
+      });
+      // Poll answer
+      for (;;) {
+        const g = await fetch(`/api/rtc/answer?pairId=${encodeURIComponent(String(pairId))}`, { cache: "no-store" });
+        if (g.status === 200) {
+          const { sdp } = await g.json().catch(() => ({}));
+          if (sdp) { await pc.setRemoteDescription(JSON.parse(sdp)); break; }
+        }
+        await new Promise(res => setTimeout(res, 300 + Math.floor(Math.random() * 400)));
+      }
+    } else {
+      // callee: poll offer → create answer → POST answer
+      for (;;) {
+        const g = await fetch(`/api/rtc/offer?pairId=${encodeURIComponent(String(pairId))}`, { cache: "no-store" });
+        if (g.status === 200) {
+          const { sdp } = await g.json().catch(() => ({}));
+          if (sdp) {
+            await pc.setRemoteDescription(JSON.parse(sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await fetch("/api/rtc/answer", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ pairId, sdp: JSON.stringify(answer) }),
+            });
+            break;
+          }
+        }
+        await new Promise(res => setTimeout(res, 300 + Math.floor(Math.random() * 400)));
+      }
+    }
+
+    // إتاحة تنظيف المؤقت عند الإنهاء
+    (pc as any).__ditonaCleanup = () => clearInterval(iceTimer);
+  } catch (e) {
+    console.warn("RTC flow error", e);
+  }
+}
+TSX
+
+# 2.2 جعل enqueue يضبط attrs/filters فعليًا (بدل qPush القديم)
+cat > src/app/api/rtc/enqueue/route.ts <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { extractAnonId } from "@/lib/rtc/auth";
+import { enqueue } from "@/lib/rtc/mm";
+export const runtime = "nodejs";
+
+export async function OPTIONS() { return NextResponse.json({ ok: true }); }
+
+export async function POST(req: NextRequest) {
+  try {
+    const anon = extractAnonId(req);
+    if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+
+    const b: any = await req.json().catch(() => ({}));
+    const gender = String(b.gender || "u").toLowerCase();
+    const country = String(b.country || req.headers.get("x-vercel-ip-country") || "XX").toUpperCase();
+    const filterGenders = String(b.filterGenders || "all");
+    const filterCountries = String(b.filterCountries || "ALL");
+
+    await enqueue(anon, { gender, country }, { genders: filterGenders, countries: filterCountries });
+    return new NextResponse(null, { status: 204 });
+  } catch (e: any) {
+    return NextResponse.json({ error: "enqueue-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });
+  }
+}
+TS
+
+# 2.3 offer: توثيق صحيح + تخزين sdp كسلسلة JSON + تمديد TTL
+cat > src/app/api/rtc/offer/route.ts <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { extractAnonId } from "@/lib/rtc/auth";
+import { get, setNxPx, expire } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+
+async function auth(anon: string, pairId: string) {
+  const map = await get(`rtc:pair:map:${anon}`); if (!map) return null;
+  const [pid, role] = String(map).split("|");
+  return pid === pairId ? role : null;
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const anon = extractAnonId(req); if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+    const { pairId, sdp } = await req.json().catch(() => ({}));
+    if (!pairId || !sdp) return NextResponse.json({ error: "bad-input" }, { status: 400 });
+
+    const role = await auth(anon, pairId);
+    if (role !== "caller") return NextResponse.json({ error: "only-caller" }, { status: 403 });
+
+    const sdpStr = typeof sdp === "string" ? sdp : JSON.stringify(sdp);
+    const ok = await setNxPx(`rtc:pair:${pairId}:offer`, sdpStr, 120_000);
+    if (!ok) return NextResponse.json({ error: "exists" }, { status: 409 });
+
+    await expire(`rtc:pair:${pairId}`, 150);
+    return new NextResponse(null, { status: 204 });
+  } catch (e: any) {
+    return NextResponse.json({ error: "offer-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const anon = extractAnonId(req); if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+  const pairId = String(new URL(req.url).searchParams.get("pairId") || "");
+  if (!pairId) return NextResponse.json({ error: "bad-input" }, { status: 400 });
+
+  const role = await auth(anon, pairId); if (role !== "callee") return NextResponse.json({ error: "only-callee" }, { status: 403 });
+  const sdp = await get(`rtc:pair:${pairId}:offer`); if (!sdp) return new NextResponse(null, { status: 204 });
+
+  await expire(`rtc:pair:${pairId}`, 150);
+  return NextResponse.json({ sdp: String(sdp) }, { status: 200 });
+}
+TS
+
+# 2.4 answer: استبدال getAnonIdUnsafe → extractAnonId + JSON sdp
+cat > src/app/api/rtc/answer/route.ts <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { extractAnonId } from "@/lib/rtc/auth";
+import { get, setNxPx, expire } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+
+async function auth(anon: string, pairId: string) {
+  const map = await get(`rtc:pair:map:${anon}`); if (!map) return null;
+  const [pid, role] = String(map).split("|");
+  return pid === pairId ? role : null;
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const anon = extractAnonId(req); if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+    const { pairId, sdp } = await req.json().catch(() => ({}));
+    if (!pairId || !sdp) return NextResponse.json({ error: "bad-input" }, { status: 400 });
+
+    const role = await auth(anon, pairId);
+    if (role !== "callee") return NextResponse.json({ error: "only-callee" }, { status: 403 });
+
+    const sdpStr = typeof sdp === "string" ? sdp : JSON.stringify(sdp);
+    const ok = await setNxPx(`rtc:pair:${pairId}:answer`, sdpStr, 120_000);
+    if (!ok) return NextResponse.json({ error: "exists" }, { status: 409 });
+
+    await expire(`rtc:pair:${pairId}`, 150);
+    return new NextResponse(null, { status: 204 });
+  } catch (e: any) {
+    return NextResponse.json({ error: "answer-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const anon = extractAnonId(req); if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+  const pairId = String(new URL(req.url).searchParams.get("pairId") || "");
+  if (!pairId) return NextResponse.json({ error: "bad-input" }, { status: 400 });
+
+  const role = await auth(anon, pairId); if (role !== "caller") return NextResponse.json({ error: "only-caller" }, { status: 403 });
+  const sdp = await get(`rtc:pair:${pairId}:answer`); if (!sdp) return new NextResponse(null, { status: 204 });
+
+  await expire(`rtc:pair:${pairId}`, 150);
+  return NextResponse.json({ sdp: String(sdp) }, { status: 200 });
+}
+TS
+
+# 2.5 ice: استبدال getAnonIdUnsafe → extractAnonId + حارس أخطاء ودعم pairId
+cat > src/app/api/rtc/ice/route.ts <<'TS'
+import { NextRequest, NextResponse } from "next/server";
+import { extractAnonId } from "@/lib/rtc/auth";
+import { get, lpush, lrange, ltrim, expire } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+
+async function auth(anon: string, pairId: string) {
+  const map = await get(`rtc:pair:map:${anon}`); if (!map) return null;
+  const [pid, role] = String(map).split("|"); if (pid !== pairId) return null;
+  return role as "caller" | "callee";
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const anon = extractAnonId(req); if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+    const { pairId, candidate } = await req.json().catch(() => ({}));
+    if (!pairId || !candidate) return NextResponse.json({ error: "bad-input" }, { status: 400 });
+
+    const role = await auth(anon, pairId); if (!role) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    const dest = role === "caller" ? "b" : "a";
+    const key = `rtc:pair:${pairId}:ice:${dest}`;
+    await lpush(key, JSON.stringify({ from: role === "caller" ? "a" : "b", cand: candidate }));
+    await expire(key, 150); await expire(`rtc:pair:${pairId}`, 150);
+    return new NextResponse(null, { status: 204 });
+  } catch (e: any) {
+    return NextResponse.json({ error: "ice-post-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const anon = extractAnonId(req); if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+  const pairId = String(new URL(req.url).searchParams.get("pairId") || "");
+  if (!pairId) return NextResponse.json({ error: "bad-input" }, { status: 400 });
+
+  const role = await auth(anon, pairId); if (!role) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const me = role === "caller" ? "a" : "b";
+  const key = `rtc:pair:${pairId}:ice:${me}`;
+  const items = await lrange(key, 0, 49);
+  if (!items || items.length === 0) return new NextResponse(null, { status: 204 });
+  await ltrim(key, items.length, -1); await expire(`rtc:pair:${pairId}`, 150);
+  return NextResponse.json(items.map(s => JSON.parse(s)), { status: 200 });
+}
+TS
+
+# 2.6 qlen: لا نرمي 500 عند فشل Upstash — نُعيد {mode:"redis-fail", len:0}
+cat > src/app/api/rtc/qlen/route.ts <<'TS'
+import { NextResponse } from "next/server";
+import { zcard, zremrangebyscore } from "@/lib/rtc/upstash";
+export const runtime = "nodejs";
+export async function GET() {
+  try {
+    const cutoff = Date.now() - 60_000;
+    await zremrangebyscore(`rtc:q`, "-inf", `(${cutoff}`);
+    const len = await zcard(`rtc:q`);
+    return NextResponse.json({ mode: "redis", len: Number(len || 0) }, { status: 200 });
+  } catch (e: any) {
+    return NextResponse.json({ mode: "redis-fail", len: 0, error: String(e?.message || e).slice(0,120) }, { status: 200 });
+  }
+}
+TS
+
+# 2.7 سكربت قبول نهائي يعتمد كوكي anon (إنتاج)
+mkdir -p _ops || true
+cat > _ops/acc_rtc.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+say(){ printf "\n== %s ==\n" "$*"; }
+code(){ curl -s -o /dev/null -w "%{http_code}" "$@"; }
+json(){ curl -s "$@"; }
+TMPDIR="${TMPDIR:-/tmp}"
+JAR_A="$TMPDIR/ditona_anon_A.jar"; JAR_B="$TMPDIR/ditona_anon_B.jar"
+rm -f "$JAR_A" "$JAR_B"
+
+say "1) Init anon cookies"
+curl -s -c "$JAR_A" "$BASE/api/anon/init" >/dev/null
+curl -s -c "$JAR_B" "$BASE/api/anon/init" >/dev/null
+
+say "2) Enqueue A and B"
+code -b "$JAR_A" -H "content-type: application/json" -X POST -d '{"gender":"u","country":"US","filterGenders":"all","filterCountries":"ALL"}' "$BASE/api/rtc/enqueue" | xargs echo "A enqueue:"
+code -b "$JAR_B" -H "content-type: application/json" -X POST -d '{"gender":"u","country":"US","filterGenders":"all","filterCountries":"ALL"}' "$BASE/api/rtc/enqueue" | xargs echo "B enqueue:"
+
+say "3) Matchmake"
+R_A=$(curl -s -b "$JAR_A" -X POST "$BASE/api/rtc/matchmake"); echo "A: $R_A"
+PAIR=$(echo "$R_A" | sed -n 's/.*"pairId":"\([^"]\+\)".*/\1/p'); ROLE_A=$(echo "$R_A" | sed -n 's/.*"role":"\([^"]\+\)".*/\1/p')
+R_B=$(curl -s -b "$JAR_B" -X POST "$BASE/api/rtc/matchmake"); echo "B: $R_B"
+PAIR_B=$(echo "$R_B" | sed -n 's/.*"pairId":"\([^"]\+\)".*/\1/p'); ROLE_B=$(echo "$R_B" | sed -n 's/.*"role":"\([^"]\+\)".*/\1/p')
+echo "Expected: same pairId; roles caller/callee"
+echo "Actual:   A:$PAIR ($ROLE_A)  B:$PAIR_B ($ROLE_B)"
+if [ -z "$PAIR" ] || [ "$PAIR" != "$PAIR_B" ]; then echo "✗ Matchmake failed"; exit 1; fi
+
+say "4) Offer/Answer"
+code -b "$JAR_A" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-offer\"}" "$BASE/api/rtc/offer" | xargs echo "A POST /offer:"
+curl -s -b "$JAR_B" "$BASE/api/rtc/offer?pairId=$PAIR" | sed 's/.*/B GET \/offer: &/'
+code -b "$JAR_B" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-answer\"}" "$BASE/api/rtc/answer" | xargs echo "B POST /answer:"
+curl -s -b "$JAR_A" "$BASE/api/rtc/answer?pairId=$PAIR" | sed 's/.*/A GET \/answer: &/'
+
+say "5) ICE exchange"
+code -b "$JAR_A" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candA\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" "$BASE/api/rtc/ice" | xargs echo "A POST /ice:"
+curl -s -b "$JAR_B" "$BASE/api/rtc/ice?pairId=$PAIR" | sed 's/.*/B GET \/ice: &/'
+code -b "$JAR_B" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candB\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" "$BASE/api/rtc/ice" | xargs echo "B POST /ice:"
+curl -s -b "$JAR_A" "$BASE/api/rtc/ice?pairId=$PAIR" | sed 's/.*/A GET \/ice: &/'
+
+say "6) qlen (no 500)"
+curl -s "$BASE/api/rtc/qlen" | sed 's/.*/qlen: &/'
+
+say "SUMMARY"
+echo "Expected: 200 on offer/answer posts; GET returns JSON; ICE GET returns array; qlen returns mode/len"
+SH
+chmod +x _ops/acc_rtc.sh
+
+###############################################################################
+# 3) تثبيت وبناء
+###############################################################################
+pnpm install
+pnpm build
+
+###############################################################################
+# 4) تشغيل القبول على الإنتاج (دون بيانات حساسة)
+###############################################################################
+bash _ops/acc_rtc.sh https://www.ditonachat.com || (echo "ACCEPTANCE FAILED" && exit 1)
+
+###############################################################################
+# 5) التزام التغييرات وفتح PR داخلي
+###############################################################################
+git add -A
+git commit -m "RTC: Fix pairing via REST (pairId flow), auth extractAnonId, JSON SDP, enqueue attrs/filters, qlen fallback, acc script"
+echo "DONE. Please open PR -> main with build & acc logs."
+
+✅ ما الذي يُصلح جذريًا في هذه الدفعة؟
+
+UI: rtcFlow.ts أصبح:
+
+يهيّئ كوكي anon،
+
+يستدعي /api/rtc/enqueue فقط لضبط attrs/filters،
+
+يَـpoll /api/rtc/matchmake حتى يحصل على {pairId, role}،
+
+يُرسل SDP كسلسلة JSON (وليس [object Object]) ويستقبلها كذلك،
+
+يُمرّر pairId لكل offer/answer/ice، ويَـpoll ICE بشكل آمن.
+
+Server:
+
+/api/rtc/enqueue يضبط rtc:attrs:* & rtc:filters:* (بدل qPush القديم)،
+
+/api/rtc/answer و/api/rtc/ice استبدلت getAnonIdUnsafe بـ extractAnonId (فلم يعدا يرفضان دائمًا)،
+
+offer/answer يخزّنان SDP كسلسلة JSON، ويجدّدان TTL للـpair،
+
+qlen لا يرمي 500 عند فشل Upstash (fallback واضح).
+
+قبول: _ops/acc_rtc.sh:
+
+يستخدم كوكي موقّع عبر /api/anon/init (جاران)،
+
+يثبت أن الطرفين يحصلان على pairId واحد وأدوار caller/callee،
+
+يثبت نجاح offer/answer/ice وغياب 500 من qlen.
+
+👀 تحقق بصري وتقني (يُنفّذه الوكيل قبل التسليم)
+
+افتح /chat من جوال + كمبيوتر (أو نافذتين مستقلتين)، اضغط Next في كليهما ⇒
+Expected: بدء الفيديو/الصوت فعليًا، وظهور شريط الحالة “جارٍ العثور على شريك…” ثم الاتصال.
+
+DevTools → Network: لا توجد أخطاء 4xx/5xx على /api/rtc/*.
+
+Headers: لا تغيير بصري افتراضي، الـCSP/Permissions‑Policy كما هي.
+
+FREE_FOR_ALL=1: لا Upsell تلقائي، ولا حواجز VIP تعطل التدفق.
+
+🧾 تسليم نهائي من الوكيل (مطلوب)
+
+ملخص بما تم تغييره ملفًا بملف (سطرين لكل ملف).
+
+مخرجات bash _ops/acc_rtc.sh https://www.ditonachat.com (Expected/Actual).
+
+لقطة شاشة من جهازين أثناء اتصال فعلي (Desktop/Mobile).
+
+تأكيد عدم حذف/تعطيل أي ميزة قائمة، وعدم تغيير الشكل الافتراضي.
+
+ملاحظة أخيرة
+
+إن صادفت اختلافًا بسيطًا في مسارات الاستيراد (@/…)، أصلحه محليًا بدون تغيير هيكلة المشروع.
+
+إن فشل لصق باتش ما بسبب اختلاف سابق، استبدل محتوى الملف بالكامل بالنص المزود أعلاه كما هو.
+
+أي مشكلة ثانوية (Types/ESLint) أصلحها محليًا بما لا يغيّر المنطق أو يعطل ميزة.
+
+بعد تطبيق هذه الدفعة، الاقتران عبر REST سيكون مستقرًا ومقاومًا لسباقات التنفيذ، والاتصال سيعمل 100% كما هو مطلوب.
+
+قد يوفر تطبيق ChatGPT معلومات خاطئة. لا تقوم OpenAI باستخدام البيانات من مساحة العمل mhamdaksam's Workspace لتدريب نماذجها.

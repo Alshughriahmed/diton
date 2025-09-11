@@ -1,73 +1,44 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+say(){ printf "\n== %s ==\n" "$*"; }
+code(){ curl -s -o /dev/null -w "%{http_code}" "$@"; }
+json(){ curl -s "$@"; }
+TMPDIR="${TMPDIR:-/tmp}"
+JAR_A="$TMPDIR/ditona_anon_A.jar"; JAR_B="$TMPDIR/ditona_anon_B.jar"
+rm -f "$JAR_A" "$JAR_B"
 
-BASE="${1:-http://localhost:5000}"
-echo "Testing RTC endpoints at: $BASE"
+say "1) Init anon cookies"
+curl -s -c "$JAR_A" "$BASE/api/anon/init" >/dev/null
+curl -s -c "$JAR_B" "$BASE/api/anon/init" >/dev/null
 
-# Test basic connectivity
-echo "1. Testing ping..."
-PING_RESULT=$(curl -s "$BASE/api/rtc/ping")
-echo "Ping: $PING_RESULT"
+say "2) Enqueue A and B"
+code -b "$JAR_A" -H "content-type: application/json" -X POST -d '{"gender":"u","country":"US","filterGenders":"all","filterCountries":"ALL"}' "$BASE/api/rtc/enqueue" | xargs echo "A enqueue:"
+code -b "$JAR_B" -H "content-type: application/json" -X POST -d '{"gender":"u","country":"US","filterGenders":"all","filterCountries":"ALL"}' "$BASE/api/rtc/enqueue" | xargs echo "B enqueue:"
 
-# Test queue length
-echo "2. Testing queue length..."
-QLEN_RESULT=$(curl -s "$BASE/api/rtc/qlen")
-echo "Queue length: $QLEN_RESULT"
+say "3) Matchmake"
+R_A=$(curl -s -b "$JAR_A" -X POST "$BASE/api/rtc/matchmake"); echo "A: $R_A"
+PAIR=$(echo "$R_A" | sed -n 's/.*"pairId":"\([^"]\+\)".*/\1/p'); ROLE_A=$(echo "$R_A" | sed -n 's/.*"role":"\([^"]\+\)".*/\1/p')
+R_B=$(curl -s -b "$JAR_B" -X POST "$BASE/api/rtc/matchmake"); echo "B: $R_B"
+PAIR_B=$(echo "$R_B" | sed -n 's/.*"pairId":"\([^"]\+\)".*/\1/p'); ROLE_B=$(echo "$R_B" | sed -n 's/.*"role":"\([^"]\+\)".*/\1/p')
+echo "Expected: same pairId; roles caller/callee"
+echo "Actual:   A:$PAIR ($ROLE_A)  B:$PAIR_B ($ROLE_B)"
+if [ -z "$PAIR" ] || [ "$PAIR" != "$PAIR_B" ]; then echo "✗ Matchmake failed"; exit 1; fi
 
-# Generate test anon IDs
-A="test-anon-a-$(date +%s)"
-B="test-anon-b-$(date +%s)"
+say "4) Offer/Answer"
+code -b "$JAR_A" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-offer\"}" "$BASE/api/rtc/offer" | xargs echo "A POST /offer:"
+curl -s -b "$JAR_B" "$BASE/api/rtc/offer?pairId=$PAIR" | sed 's/.*/B GET \/offer: &/'
+code -b "$JAR_B" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-answer\"}" "$BASE/api/rtc/answer" | xargs echo "B POST /answer:"
+curl -s -b "$JAR_A" "$BASE/api/rtc/answer?pairId=$PAIR" | sed 's/.*/A GET \/answer: &/'
 
-echo "3. Testing enqueue..."
-# Enqueue A
-A_ENQUEUE=$(curl -s -X POST -H "content-type: application/json" \
-  -d "{\"anonId\":\"$A\"}" "$BASE/api/rtc/enqueue")
-echo "A enqueue: $A_ENQUEUE"
+say "5) ICE exchange"
+code -b "$JAR_A" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candA\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" "$BASE/api/rtc/ice" | xargs echo "A POST /ice:"
+curl -s -b "$JAR_B" "$BASE/api/rtc/ice?pairId=$PAIR" | sed 's/.*/B GET \/ice: &/'
+code -b "$JAR_B" -H "content-type: application/json" -X POST -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candB\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" "$BASE/api/rtc/ice" | xargs echo "B POST /ice:"
+curl -s -b "$JAR_A" "$BASE/api/rtc/ice?pairId=$PAIR" | sed 's/.*/A GET \/ice: &/'
 
-# Enqueue B  
-B_ENQUEUE=$(curl -s -X POST -H "content-type: application/json" \
-  -d "{\"anonId\":\"$B\"}" "$BASE/api/rtc/enqueue")
-echo "B enqueue: $B_ENQUEUE"
+say "6) qlen (no 500)"
+curl -s "$BASE/api/rtc/qlen" | sed 's/.*/qlen: &/'
 
-echo "4. Testing matchmake..."
-# Try to matchmake A
-A_MATCH=$(curl -s -X POST -H "x-anon-id: $A" "$BASE/api/rtc/matchmake")
-echo "A matchmake: $A_MATCH"
-
-# Extract pairId if successful
-if echo "$A_MATCH" | grep -q '"pairId"'; then
-  PAIR=$(echo "$A_MATCH" | sed -n 's/.*"pairId":"\([^"]*\)".*/\1/p')
-  echo "Found pair: $PAIR"
-  
-  echo "5. Testing SDP exchange..."
-  # A posts offer
-  OFFER_POST=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "x-anon-id: $A" -H "content-type: application/json" \
-    -X POST -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-offer\"}" "$BASE/api/rtc/offer")
-  echo "Offer POST status: $OFFER_POST"
-  
-  # B posts answer  
-  ANSWER_POST=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "x-anon-id: $B" -H "content-type: application/json" \
-    -X POST -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-answer\"}" "$BASE/api/rtc/answer")
-  echo "Answer POST status: $ANSWER_POST"
-  
-  echo "6. Testing ICE exchange..."
-  # Test ICE candidate exchange
-  ICE_POST=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "content-type: application/json" \
-    -X POST -d "{\"pairId\":\"$PAIR\",\"anonId\":\"$A\",\"candidate\":{\"candidate\":\"test\"}}" "$BASE/api/rtc/ice")
-  echo "ICE POST status: $ICE_POST"
-  
-  ICE_GET=$(curl -s "$BASE/api/rtc/ice?pairId=$PAIR&anonId=$B")
-  echo "ICE GET result: $ICE_GET"
-  
-else
-  echo "Matchmake failed - no pair created"
-fi
-
-echo "7. Final queue length..."
-FINAL_QLEN=$(curl -s "$BASE/api/rtc/qlen")  
-echo "Final queue length: $FINAL_QLEN"
-
-echo "Test complete!"
+say "SUMMARY"
+echo "Expected: 200 on offer/answer posts; GET returns JSON; ICE GET returns array; qlen returns mode/len"

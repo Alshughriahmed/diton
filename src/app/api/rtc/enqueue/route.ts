@@ -1,18 +1,24 @@
-import { NextResponse } from "next/server";
-import { qPush, qLen } from "@/lib/queue";
+import { NextRequest, NextResponse } from "next/server";
+import { extractAnonId } from "@/lib/rtc/auth";
+import { enqueue } from "@/lib/rtc/mm";
 export const runtime = "nodejs";
 
-export async function OPTIONS() { return NextResponse.json({ ok:true }); }
+export async function OPTIONS() { return NextResponse.json({ ok: true }); }
 
-export async function POST(req: Request) {
-  let anon = "";
-  try { const b:any = await req.json(); anon = b?.anonId || b?.id || b?.user || ""; } catch {}
-  if (!anon) {
-    // generate lightweight anon id
-    const ip = (req.headers.get("x-forwarded-for")||"").split(",")[0].trim();
-    anon = `anon-${Date.now().toString(36)}-${Math.floor(Math.random()*1e6).toString(36)}-${(ip||"x").replace(/[^a-zA-Z0-9]/g,"").slice(0,8)}`;
+export async function POST(req: NextRequest) {
+  try {
+    const anon = extractAnonId(req);
+    if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+
+    const b: any = await req.json().catch(() => ({}));
+    const gender = String(b.gender || "u").toLowerCase();
+    const country = String(b.country || req.headers.get("x-vercel-ip-country") || "XX").toUpperCase();
+    const filterGenders = String(b.filterGenders || "all");
+    const filterCountries = String(b.filterCountries || "ALL");
+
+    await enqueue(anon, { gender, country }, { genders: filterGenders, countries: filterCountries });
+    return new NextResponse(null, { status: 204 });
+  } catch (e: any) {
+    return NextResponse.json({ error: "enqueue-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });
   }
-  await qPush(anon);
-  const s = await qLen();
-  return NextResponse.json({ ok:true, anonId: anon, ...s });
 }

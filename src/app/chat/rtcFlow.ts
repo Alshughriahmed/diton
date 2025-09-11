@@ -1,87 +1,114 @@
-/* Minimal RTC client flow: enqueue → offer/answer → ice */
+/* Minimal RTC client flow: enqueue -> matchmake -> offer/answer -> ice (REST only) */
 export async function startRtcFlow() {
   try {
-    const enq = await fetch("/api/rtc/enqueue", { method: "POST" });
-    if (!enq.ok) throw new Error("enqueue failed");
-    const { pairId, role, anonId } = await enq.json();
+    // 0) تهيئة كوكي anon الموقّع (إن لم يوجد)
+    await fetch("/api/anon/init", { method: "GET", cache: "no-store" }).catch(() => {});
 
+    // 1) Enqueue (سمات + فلاتر). الواجهة يمكنها تمرير جسم اختياري:
+    const body = (window as any).__ditonaEnqueueBody || {};
+    await fetch("/api/rtc/enqueue", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    // 2) Matchmake: 204 → backoff 300–800ms؛ 200 → {pairId, role}
+    let pairId: string | undefined;
+    let role: "caller" | "callee" | undefined;
+    for (let i = 0; i < 50; i++) {
+      const r = await fetch("/api/rtc/matchmake", { method: "POST", cache: "no-store" });
+      if (r.status === 200) {
+        const j = await r.json().catch(() => ({}));
+        pairId = j?.pairId; role = j?.role;
+        if (pairId && role) break;
+      }
+      await new Promise(res => setTimeout(res, 300 + Math.floor(Math.random() * 500)));
+    }
+    if (!pairId || !role) throw new Error("matchmake-timeout");
+
+    // 3) إنشاء RTCPeerConnection
     const pc = new RTCPeerConnection();
-    // ربط الفيديو إن وجد
     const remote = document.getElementById("remoteVideo") as HTMLVideoElement | null;
     pc.ontrack = (ev) => {
       const s = ev.streams?.[0] || new MediaStream([ev.track]);
-      if (remote) { remote.srcObject = s; remote.muted = true; remote.playsInline = true; remote.play().catch(()=>{}); }
+      if (remote) {
+        remote.srcObject = s;
+        remote.muted = true;
+        remote.playsInline = true;
+        remote.autoplay = true as any;
+        remote.play?.().catch(() => {});
+      }
     };
-    // أضف المسارات المحليّة إن وُجدت
-    const local = (window as any).__localStream as MediaStream | undefined;
+    // إضافة المسارات المحلية إن وُجدت
+    const local: MediaStream | undefined = (window as any).__localStream;
     if (local) local.getTracks().forEach(t => pc.addTrack(t, local));
 
-    // إرسال ICE للخارج
+    // 4) ICE: POST إلى /api/rtc/ice + Poll GET
     pc.onicecandidate = async (e) => {
       if (!e.candidate) return;
-      await fetch("/api/rtc/ice", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pairId, anonId, candidate: e.candidate })
-      }).catch(()=>{});
+      try {
+        await fetch("/api/rtc/ice", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pairId, candidate: e.candidate }),
+        });
+      } catch {}
     };
-
-    async function poll(path: string) {
-      const u = new URL(path, location.origin);
-      u.searchParams.set("pairId", pairId);
-      u.searchParams.set("anonId", anonId);
-      const r = await fetch(u.toString());
-      if (r.ok) return r.json();
-      return null;
-    }
-
-    if (role === "caller") {
-      const off = await pc.createOffer();
-      await pc.setLocalDescription(off);
-      await fetch("/api/rtc/offer", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pairId, anonId, role: "caller", sdp: off })
-      });
-      // انتظر الإجابة
-      for (let i=0;i<40;i++) {
-        const ans = await poll("/api/rtc/answer");
-        if (ans?.ready && ans?.sdp) { await pc.setRemoteDescription(ans.sdp); break; }
-        await new Promise(r=>setTimeout(r,700));
-      }
-    } else {
-      // callee: انتظر العرض
-      for (let i=0;i<40;i++) {
-        const off = await poll("/api/rtc/offer");
-        if (off?.ready && off?.sdp) {
-          await pc.setRemoteDescription(off.sdp);
-          const ans = await pc.createAnswer();
-          await pc.setLocalDescription(ans);
-          await fetch("/api/rtc/answer", {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ pairId, anonId, role: "callee", sdp: ans })
-          });
-          break;
-        }
-        await new Promise(r=>setTimeout(r,700));
-      }
-    }
-
-    // سحب ICE الواردة
-    (async function pullIce(){
-      for (let i=0;i<120;i++) {
-        const u = new URL("/api/rtc/ice", location.origin);
-        u.searchParams.set("pairId", pairId);
-        u.searchParams.set("anonId", anonId);
-        const r = await fetch(u.toString());
-        if (r.ok) {
-          const j = await r.json();
-          if (j?.candidate) {
-            try { await pc.addIceCandidate(j.candidate); } catch {}
+    const pollIce = async () => {
+      try {
+        const r = await fetch(`/api/rtc/ice?pairId=${encodeURIComponent(String(pairId))}`, { cache: "no-store" });
+        if (r.status === 200) {
+          const arr = await r.json().catch(() => []);
+          for (const it of arr) {
+            try { await pc.addIceCandidate(it.cand); } catch {}
           }
         }
-        await new Promise(r=>setTimeout(r,700));
+      } catch {}
+    };
+    const iceTimer = setInterval(pollIce, 350 + Math.floor(Math.random() * 350));
+
+    // 5) تبادل SDP via REST
+    if (role === "caller") {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await fetch("/api/rtc/offer", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pairId, sdp: JSON.stringify(offer) }),
+      });
+      // Poll answer
+      for (;;) {
+        const g = await fetch(`/api/rtc/answer?pairId=${encodeURIComponent(String(pairId))}`, { cache: "no-store" });
+        if (g.status === 200) {
+          const { sdp } = await g.json().catch(() => ({}));
+          if (sdp) { await pc.setRemoteDescription(JSON.parse(sdp)); break; }
+        }
+        await new Promise(res => setTimeout(res, 300 + Math.floor(Math.random() * 400)));
       }
-    })();
+    } else {
+      // callee: poll offer → create answer → POST answer
+      for (;;) {
+        const g = await fetch(`/api/rtc/offer?pairId=${encodeURIComponent(String(pairId))}`, { cache: "no-store" });
+        if (g.status === 200) {
+          const { sdp } = await g.json().catch(() => ({}));
+          if (sdp) {
+            await pc.setRemoteDescription(JSON.parse(sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await fetch("/api/rtc/answer", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ pairId, sdp: JSON.stringify(answer) }),
+            });
+            break;
+          }
+        }
+        await new Promise(res => setTimeout(res, 300 + Math.floor(Math.random() * 400)));
+      }
+    }
+
+    // إتاحة تنظيف المؤقت عند الإنهاء
+    (pc as any).__ditonaCleanup = () => clearInterval(iceTimer);
   } catch (e) {
     console.warn("RTC flow error", e);
   }
