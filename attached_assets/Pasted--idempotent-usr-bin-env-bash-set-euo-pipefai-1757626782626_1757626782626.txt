@@ -1,0 +1,160 @@
+تعمل من جذر المشروع. الدفعة آمنة ومتكررة التنفيذ (idempotent).
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== 0) فرع آمن ==="
+git checkout -b fix/upstash-pipeline || git checkout fix/upstash-pipeline || true
+mkdir -p _ops/backup || true
+cp -f src/lib/rtc/upstash.ts _ops/backup/upstash.ts.bak 2>/dev/null || true
+cp -f _ops/acc_rtc.sh _ops/backup/acc_rtc.sh.bak 2>/dev/null || true
+
+echo "=== 1) Patch: تصحيح شكل /pipeline (JSON array وليس {commands}) ==="
+applypatch() {
+cat > /tmp/patch_upstash_pipeline.diff <<'PATCH'
+*** Begin Patch
+*** Update File: src/lib/rtc/upstash.ts
+@@
+-async function pipe(commands: Cmd[]) {
+-  if (MODE === "memory") throw new Error("MEMORY_MODE");
+-  const r = await fetch(`${URL}/pipeline`, {
+-    method: "POST",
+-    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+-    body: JSON.stringify({ commands }),
+-    cache: "no-store",
+-  });
++async function pipe(commands: Cmd[]) {
++  if (MODE === "memory") throw new Error("MEMORY_MODE");
++  // Upstash REST /pipeline يتوقع مصفوفة ثنائية الأبعاد مباشرة، لا كائن {commands:[]}
++  const r = await fetch(`${URL}/pipeline`, {
++    method: "POST",
++    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
++    body: JSON.stringify(commands),
++    cache: "no-store",
++  });
+*** End Patch
+PATCH
+git apply --index --reject --whitespace=fix /tmp/patch_upstash_pipeline.diff
+}
+applypatch || { echo "Patch failed; سأنسخ الملف يدوياً."; }
+
+# (لو فشل patch بسبب اختلافات بسيطة، نفّذ استبدال سطر-بسطر:)
+if git diff --cached --quiet; then
+  sed -i 's/JSON.stringify({ commands })/JSON.stringify(commands)/' src/lib/rtc/upstash.ts || true
+  git add src/lib/rtc/upstash.ts
+fi
+
+echo "=== 2) Build ==="
+pnpm install
+pnpm build
+
+echo "=== 3) قبول سريع قبل/بعد (إنتاج) ==="
+# يطبع وضع الطابور ويجري تدفق REST الكامل
+cat > _ops/acc_rtc.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+say(){ printf "\n== %s ==\n" "$*"; }
+code(){ curl -s -o /dev/null -w "%{http_code}" "$@"; }
+
+TMPDIR="${TMPDIR:-/tmp}"
+JAR_A="$TMPDIR/ditona_anon_A.jar"; JAR_B="$TMPDIR/ditona_anon_B.jar"
+rm -f "$JAR_A" "$JAR_B"
+
+say "1) Init anon cookies"
+curl -s -c "$JAR_A" "$BASE/api/anon/init" >/dev/null
+curl -s -c "$JAR_B" "$BASE/api/anon/init" >/dev/null
+
+say "2) Queue mode"
+curl -s "$BASE/api/rtc/qlen" | sed 's/.*/qlen: &/'
+
+say "3) Enqueue A/B"
+code -b "$JAR_A" -H "content-type: application/json" -X POST \
+  -d '{"gender":"u","country":"US","filterGenders":"all","filterCountries":"ALL"}' \
+  "$BASE/api/rtc/enqueue" | xargs echo "A enqueue:"
+code -b "$JAR_B" -H "content-type: application/json" -X POST \
+  -d '{"gender":"u","country":"US","filterGenders":"all","filterCountries":"ALL"}' \
+  "$BASE/api/rtc/enqueue" | xargs echo "B enqueue:"
+
+say "4) Matchmake"
+R_A=$(curl -s -b "$JAR_A" -X POST "$BASE/api/rtc/matchmake"); echo "A: $R_A"
+PAIR=$(echo "$R_A" | sed -n 's/.*"pairId":"\([^"]\+\)".*/\1/p')
+ROLE_A=$(echo "$R_A" | sed -n 's/.*"role":"\([^"]\+\)".*/\1/p')
+R_B=$(curl -s -b "$JAR_B" -X POST "$BASE/api/rtc/matchmake"); echo "B: $R_B"
+PAIR_B=$(echo "$R_B" | sed -n 's/.*"pairId":"\([^"]\+\)".*/\1/p')
+ROLE_B=$(echo "$R_B" | sed -n 's/.*"role":"\([^"]\+\)".*/\1/p')
+echo "Expected: same pairId; roles caller/callee"
+echo "Actual:   A:$PAIR ($ROLE_A)  B:$PAIR_B ($ROLE_B)"
+test -n "$PAIR" && [ "$PAIR" = "$PAIR_B" ] || { echo "✗ Matchmake failed"; exit 1; }
+
+say "5) Offer/Answer"
+code -b "$JAR_A" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-offer\"}" \
+  "$BASE/api/rtc/offer" | xargs echo "A POST /offer:"
+curl -s -b "$JAR_B" "$BASE/api/rtc/offer?pairId=$PAIR" | sed 's/.*/B GET \/offer: &/'
+code -b "$JAR_B" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-answer\"}" \
+  "$BASE/api/rtc/answer" | xargs echo "B POST /answer:"
+curl -s -b "$JAR_A" "$BASE/api/rtc/answer?pairId=$PAIR" | sed 's/.*/A GET \/answer: &/'
+
+say "6) ICE exchange"
+code -b "$JAR_A" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candA\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" \
+  "$BASE/api/rtc/ice" | xargs echo "A POST /ice:"
+curl -s -b "$JAR_B" "$BASE/api/rtc/ice?pairId=$PAIR" | sed 's/.*/B GET \/ice: &/'
+code -b "$JAR_B" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candB\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" \
+  "$BASE/api/rtc/ice" | xargs echo "B POST /ice:"
+curl -s -b "$JAR_A" "$BASE/api/rtc/ice?pairId=$PAIR" | sed 's/.*/A GET \/ice: &/'
+
+say "SUMMARY"
+echo "Expected: qlen.mode=redis, match OK, offer/answer 204/409, ice GET arrays."
+SH
+chmod +x _ops/acc_rtc.sh
+
+echo "=== 4) Commit & Push ==="
+git add -A
+git commit -m "fix(upstash): pipeline body as JSON array; unblock Redis REST"
+git push origin HEAD
+
+echo "=== 5) بعد نشر Vercel، شغّل القبول على الإنتاج ==="
+bash _ops/acc_rtc.sh https://www.ditonachat.com || (echo "ACCEPTANCE FAILED" && exit 1)
+
+echo "=== DONE ==="
+
+✅ معايير القبول (Expected/Actual)
+
+qlen قبل الإصلاح: {"mode":"redis-fail","len":0,"error":"... parse pipeline ..."}.
+
+qlen بعد الإصلاح: {"mode":"redis","len":<عدد>=0 أو >0} بدون error.
+
+enqueue و matchmake تتوقف عن 500.
+
+acc_rtc.sh: يظهر pairId واحد للطرفين (caller/callee)، ونجاح offer/answer/ice.
+
+بصريًا من جهازين: الضغط Next في كليهما يُطلق اتصال فعلي خلال ≤10 ثواني.
+
+🧪 لماذا كان الفشل يظهر بهذا الشكل؟
+
+عند كل استدعاء لدالة Redis مركّبة (مثل enqueue()/matchmake())، يستدعي الكود pipe([...]).
+
+جسم الطلب أُرسِل كـ { "commands":[...] } → Upstash يُرجع 400 “failed to parse pipeline request” → التابع يرمي استثناء → 500 في مساراتك.
+
+هذا يتطابق 1:1 مع التوثيق الرسمي لـ Upstash: /pipeline يَستقبل مصفوفة JSON ثنائية مباشرة. 
+Upstash: Serverless Data Platform
+
+ملاحظة: رأيت في صورك أن /api/anon/init يضبط الكوكي بنجاح وqlen فقط هو الذي يُظهر (redis-fail)، وهذا ما أكد التشخيص.
+
+ℹ️ إن ظهر أي تعارض طفيف عند تطبيق الباتش
+
+نفّذتُ سطر بديل بـ sed داخل السكربت لاستبدال JSON.stringify({ commands }) بـ JSON.stringify(commands) مباشرةً.
+
+إن كانت لديك نسخة memory fallback في upstash.ts فهي ستبقى كما هي؛ الإصلاح فقط يغيّر شكل الجسم عند وضع redis.
+
+📋 ما نحتاجه منك بعد التنفيذ
+
+انسخ لي سطر /api/rtc/qlen بعد النشر (JSON كامل).
+
+وأرسل خرج bash _ops/acc_rtc.sh https://www.ditonachat.com (Expected/Actual).
+
+لقطة واحدة من تبويب Network تُظهر: enqueue=204, matchmake=200 {pairId,…}, ثم /offer|answer و/ice ناجحة.
