@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/runner/workspace
+TS="$(date -u +%Y%m%d-%H%M%S)"
+ART="_ops/reports/fix_import_${TS}"; BAK="_ops/backups/fix_import_${TS}"
+mkdir -p "$ART" "$BAK"
+
+# نسخ احتياطي
+cp -a src/app/chat/ChatClient.tsx "$BAK/ChatClient.tsx.bak" 2>/dev/null || true
+cp -a src/app/chat/rtcFlow.ts "$BAK/rtcFlow.ts.bak" 2>/dev/null || true
+
+# تأكيد وجود الدوال المصدّرة في rtcFlow.ts (إن غابت نلحق الكتلة)
+grep -q 'export function stopRtcSession' src/app/chat/rtcFlow.ts || cat >> src/app/chat/rtcFlow.ts <<'TSX'
+
+/** Guards + cleanup for RTC */
+let __rtcOnceFlag = false;
+let __abortCtrl: AbortController | null = null;
+let __pcCur: RTCPeerConnection | null = null;
+let __localCur: MediaStream | null = null;
+
+export function stopRtcSession(reason: string = "user") {
+  try { __abortCtrl?.abort(); } catch {}
+  __abortCtrl = null;
+  try { if (__pcCur) { try { __pcCur.getSenders?.().forEach(s=>{try{s.track&&s.track.stop()}catch{}}) } catch {} try { __pcCur.close() } catch {} } } catch {}
+  __pcCur = null;
+  try { __localCur?.getTracks?.().forEach(t=>{try{t.stop()}catch{}}) } catch {}
+  __localCur = null;
+}
+
+export function attachPeer(pc?: RTCPeerConnection, local?: MediaStream, abortCtrl?: AbortController) {
+  if (pc) __pcCur = pc;
+  if (local) __localCur = local;
+  if (abortCtrl) __abortCtrl = abortCtrl;
+}
+
+export async function startRtcFlowOnce() {
+  if (__rtcOnceFlag) return;
+  __rtcOnceFlag = true;
+  try {
+    stopRtcSession("restart");
+    // @ts-ignore
+    return await startRtcFlow();
+  } finally {
+    __rtcOnceFlag = false;
+  }
+}
+TSX
+
+# حقن/تصحيح الاستيراد في ChatClient.tsx
+node --input-type=module <<'JS'
+import fs from 'fs';
+const f='src/app/chat/ChatClient.tsx';
+let s=fs.readFileSync(f,'utf8');
+const hasImport = /from\s+['"]\.\/rtcFlow['"]/.test(s);
+const needStart = !/\bstartRtcFlowOnce\b/.test(s);
+const needStop  = !/\bstopRtcSession\b/.test(s);
+
+if (!hasImport) {
+  const imp = `import { startRtcFlowOnce, stopRtcSession } from "./rtcFlow";\n`;
+  s = imp + s;
+} else {
+  s = s.replace(/import\s+\{([^}]*)\}\s+from\s+['"]\.\/rtcFlow['"]\s*;?/,
+    (m,names)=>{
+      const set = new Set(names.split(',').map(v=>v.trim()).filter(Boolean));
+      if (needStart) set.add('startRtcFlowOnce');
+      if (needStop)  set.add('stopRtcSession');
+      return `import { ${Array.from(set).join(', ')} } from "./rtcFlow";`;
+    });
+  // لو كان الاستيراد بشكل آخر:
+  if (!/\bstartRtcFlowOnce\b.*from\s+['"]\.\/rtcFlow['"]/.test(s) ||
+      !/\bstopRtcSession\b.*from\s+['"]\.\/rtcFlow['"]/.test(s)) {
+    s = `import { startRtcFlowOnce, stopRtcSession } from "./rtcFlow";\n` + s;
+  }
+}
+fs.writeFileSync(f,s);
+console.log("import_patch_done");
+JS
+
+# بناء
+set +e
+pnpm build | tee "$ART/build.txt"
+BUILD_RC=${PIPESTATUS[0]}
+set -e
+
+# دفع
+git add -A
+git commit -m "fix(rtc): ensure imports for startRtcFlowOnce/stopRtcSession in ChatClient" || true
+git push origin main
+
+echo
+echo "-- Acceptance --"
+echo "BUILD_RC=$BUILD_RC"
+echo "ARTIFACTS_DIR=$ART"
+echo "BACKUP_DIR=$BAK"
+echo "-- End Acceptance --"

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
-import { startRtcFlowOnce } from "./rtcFlow";
+import { startRtcFlowOnce, stopRtcSession } from "./rtcFlow";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useHydrated } from "@/hooks/useHydrated";

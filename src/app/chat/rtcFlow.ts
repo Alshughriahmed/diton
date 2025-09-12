@@ -115,13 +115,33 @@ export async function startRtcFlow() {
 }
 /** ------------------------------------------------------------------------
  * Once-guard: يمنع إطلاق تدفّق RTC مرتين في آنٍ واحد (double-start).
- * لا يغيّر منطق startRtcFlow نفسه؛ مجرد غلاف آمن.
+ * Guards + cleanup for RTC sessions.
  * ---------------------------------------------------------------------- */
 let __rtcOnceFlag = false;
+let __abortCtrl: AbortController | null = null;
+let __pcCur: RTCPeerConnection | null = null;
+let __localCur: MediaStream | null = null;
+
+export function stopRtcSession(reason: string = "user") {
+  try { __abortCtrl?.abort(); } catch {}
+  __abortCtrl = null;
+  try { if (__pcCur) { try { __pcCur.getSenders?.().forEach(s=>{try{s.track&&s.track.stop()}catch{}}) } catch {} try { __pcCur.close() } catch {} } } catch {}
+  __pcCur = null;
+  try { __localCur?.getTracks?.().forEach(t=>{try{t.stop()}catch{}}) } catch {}
+  __localCur = null;
+}
+
+export function attachPeer(pc?: RTCPeerConnection, local?: MediaStream, abortCtrl?: AbortController) {
+  if (pc) __pcCur = pc;
+  if (local) __localCur = local;
+  if (abortCtrl) __abortCtrl = abortCtrl;
+}
+
 export async function startRtcFlowOnce() {
   if (__rtcOnceFlag) return;
   __rtcOnceFlag = true;
   try {
+    stopRtcSession("restart");
     // نفترض وجود startRtcFlow الأصلي في نفس الملف (كما هو معمَّم في المشروع)
     // إن كان اسمه مختلفًا لديك، استبدله هنا بنفس الاسم.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return
