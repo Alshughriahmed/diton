@@ -2,22 +2,23 @@
 import { useEffect, useMemo, useState } from "react";
 import CountryModal from "./CountryModal";
 import GenderModal, { GenderKey } from "./GenderModal";
+import { isBrowser, lsGet, lsSet } from "@/utils/browser";
 
 const LS_COUNTRIES = "ditona:filters:countries";
-const LS_GENDERS   = "ditona:filters:genders"; // بدون "any"
+const LS_GENDERS   = "ditona:filters:genders";
 
 function useStored<T>(key: string, def: T) {
   const [val, setVal] = useState<T>(def);
   useEffect(()=>{
-    try{
-      const raw = localStorage.getItem(key);
-      if (raw) setVal(JSON.parse(raw));
-    }catch{} 
+    if (isBrowser()) {
+      const stored = lsGet(key, def);
+      if (stored !== null) setVal(stored);
+    }
   }, [key]);
   useEffect(()=>{ 
-    try{
-      localStorage.setItem(key, JSON.stringify(val));
-    }catch{} 
+    if (isBrowser()) {
+      lsSet(key, val);
+    }
   }, [key, val]);
   return [val, setVal] as const;
 }
@@ -37,7 +38,9 @@ export default function FilterBar() {
         const vip = !!(j?.isVip||j?.vip);
         setIsVip(vip);
         // Cache VIP status for filtersBridge
-        localStorage.setItem("ditona:vip-status", JSON.stringify(vip));
+        if (isBrowser()) {
+          lsSet("ditona:vip-status", vip);
+        }
       }catch{} 
     }).catch(()=>{});
     
@@ -45,8 +48,8 @@ export default function FilterBar() {
     fetch("/api/geo").then(r=>r.json()).then(j=>{
       try{
         const code = (j?.countryCode || j?.country || "").toString().toUpperCase();
-        if (code && /^[A-Z]{2}$/.test(code)) {
-          localStorage.setItem("ditona:geo:country", JSON.stringify(code));
+        if (code && /^[A-Z]{2}$/.test(code) && isBrowser()) {
+          lsSet("ditona:geo:country", code);
         }
       }catch{}
     }).catch(()=>{});
@@ -59,14 +62,7 @@ export default function FilterBar() {
       if (genders.length > 0) setGenders([]);
       
       // Normalize countries: user country only or All
-      const userCode = (() => {
-        try {
-          const cached = localStorage.getItem("ditona:geo:country");
-          return cached ? JSON.parse(cached) : null;
-        } catch {
-          return null;
-        }
-      })();
+      const userCode = isBrowser() ? lsGet("ditona:geo:country", null) : null;
       
       if (countries.length > 1 || (countries.length === 1 && userCode && !countries.includes(userCode))) {
         setCountries(userCode ? [userCode] : []);
@@ -74,43 +70,51 @@ export default function FilterBar() {
     }
   }, [isVip]);
 
-  // النص المعروض
-  const countriesBadge = countries.length>0 ? countries.length : 0;
-  const genderLabel = useMemo(()=>{
-    if (genders.length===0) return "Everyone";
-    const map: Record<GenderKey,string> = {any:"Everyone", female:"Female", male:"Male", couples:"Couples", lgbt:"LGBT"};
-    return genders.map(g=>map[g]).join(" + ");
+  // Badge display logic
+  const countriesBadge = countries.length > 0 ? countries.length.toString() : "All";
+  const genderBadge = useMemo(()=>{
+    if (genders.length === 0) return "All";
+    if (genders.length === 1) {
+      const map: Record<GenderKey,string> = {any:"All", female:"♀", male:"♂", couples:"👫", lgbt:"🏳️‍🌈"};
+      return map[genders[0]] || "All";
+    }
+    if (genders.length === 2) {
+      const map: Record<GenderKey,string> = {any:"All", female:"♀", male:"♂", couples:"👫", lgbt:"🏳️‍🌈"};
+      return genders.map(g => map[g]).join("+");
+    }
+    return "All";
   }, [genders]);
 
-  // بثّ حدث داخلي ليستفيد منه أي كود قائم (لا نكسر شيء)
+  // Broadcast internal event for any existing code
   useEffect(()=>{
-    const detail = { countries, genders };
-    window.dispatchEvent(new CustomEvent("ditona:filters", { detail }));
+    if (isBrowser()) {
+      const detail = { countries, genders };
+      window.dispatchEvent(new CustomEvent("ditona:filters", { detail }));
+    }
   }, [countries, genders]);
 
   return (
-    <div className="pointer-events-auto absolute right-3 top-3 z-40 flex items-center gap-2">
+    <div className="absolute top-2 right-2 z-10 flex items-center gap-2 pointer-events-auto">
       {/* Countries */}
       <button
+        data-ui="country-button"
         onClick={()=>setOpenCountries(true)}
-        className="relative rounded-2xl bg-white/10 backdrop-blur px-3 md:px-4 py-2 text-white shadow ring-1 ring-white/20 hover:bg-white/20"
+        className="relative flex flex-col items-center justify-center rounded-xl bg-white/5 backdrop-blur px-3 py-2 text-white shadow-sm hover:bg-white/10 transition-all"
         title="Country Filter"
       >
-        <span className="mr-1">🌍</span>
-        <span className="hidden md:inline">Countries</span>
-        {countriesBadge>0 && (
-          <span className="ml-2 inline-flex items-center justify-center rounded-full bg-emerald-500 text-white text-xs w-5 h-5">{countriesBadge}</span>
-        )}
+        <span className="text-lg">🌍</span>
+        <span data-ui="country-count-badge" className="text-xs mt-0.5 font-medium">{countriesBadge}</span>
       </button>
 
       {/* Gender */}
       <button
+        data-ui="gender-button"
         onClick={()=>setOpenGender(true)}
-        className="rounded-2xl bg-white/10 backdrop-blur px-3 md:px-4 py-2 text-white shadow ring-1 ring-white/20 hover:bg-white/20"
+        className="flex flex-col items-center justify-center rounded-xl bg-white/5 backdrop-blur px-3 py-2 text-white shadow-sm hover:bg-white/10 transition-all"
         title="Gender Filter"
       >
-        <span className="mr-1">⚧️</span>
-        <span className="hidden md:inline">{genderLabel}</span>
+        <span className="text-lg">⚧️</span>
+        <span data-ui="gender-badge" className="text-xs mt-0.5 font-medium">{genderBadge}</span>
       </button>
 
       <CountryModal

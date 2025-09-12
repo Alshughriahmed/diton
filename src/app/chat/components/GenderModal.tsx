@@ -5,10 +5,10 @@ export type GenderKey = "any" | "female" | "male" | "couples" | "lgbt";
 
 const OPTIONS: {key: GenderKey; label: string; icon: string; color: string}[] = [
   { key:"any",     label:"Everyone", icon:"👥", color:"bg-gray-800" },
-  { key:"female",  label:"Female",   icon:"♀️", color:"bg-pink-600" },
-  { key:"male",    label:"Male",     icon:"♂️", color:"bg-blue-600" },
-  { key:"couples", label:"Couples",  icon:"👫", color:"bg-purple-600" },
-  { key:"lgbt",    label:"LGBT",     icon:"🏳️‍🌈", color:"bg-emerald-600" },
+  { key:"female",  label:"Female",   icon:"♀️", color:"bg-red-500" },
+  { key:"male",    label:"Male",     icon:"♂️", color:"bg-blue-800" },
+  { key:"couples", label:"Couples",  icon:"👫", color:"bg-red-600" },
+  { key:"lgbt",    label:"LGBT",     icon:"🏳️‍🌈", color:"bg-gradient-to-r from-red-500 via-yellow-500 via-green-500 via-blue-500 to-purple-500" },
 ];
 
 type Props = {
