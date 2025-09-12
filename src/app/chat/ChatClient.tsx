@@ -272,6 +272,8 @@ export default function ChatClient(){
       unsubscribeMobile(); 
     };
   },[]);
+useEffect(() => () => { try { stopRtcSession('unmount'); } catch {} }, []);
+
 
 
   async function doMatch(backward=false){
