@@ -334,7 +334,7 @@ export default function ChatClient(){
     const anonId = await getAnonId();
     for(let i=0;i<60;i++){
       try{
-        const r = await fetch(`/api/rtc/matchmake?anonId=${encodeURIComponent(anonId)}`);
+        const r = await fetch("/api/rtc/matchmake", { method: "POST", cache: "no-store" });
         const j = await r.json();
         if(j?.found && j?.pairId){
           localStorage.setItem("ditona_pair", j.pairId);
