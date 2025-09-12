@@ -1,36 +1,21 @@
 import { NextResponse } from "next/server";
-
-/**
- * Returns ICE servers with Twilio TURN over UDP, TCP, and TLS:443.
- * Username/Credential pulled from common env names without logging secrets.
- */
-function cred() {
-  const username =
-    process.env.TWILIO_TURN_USERNAME ||
-    process.env.TURN_USERNAME ||
-    process.env.TW_TURN_USERNAME ||
-    "";
-  const credential =
-    process.env.TWILIO_TURN_CREDENTIAL ||
-    process.env.TURN_CREDENTIAL ||
-    process.env.TW_TURN_CREDENTIAL ||
-    "";
-  return { username, credential };
+export const runtime = "nodejs";
+async function fetchTwilioIce() {
+  const sid = process.env.TWILIO_ACCOUNT_SID || "";
+  const auth = process.env.TWILIO_AUTH_TOKEN || "";
+  if (!sid || !auth) return null;
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Tokens.json`, {
+    method: "POST",
+    headers: { Authorization: "Basic " + Buffer.from(`${sid}:${auth}`).toString("base64") },
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const j = await res.json().catch(() => ({}));
+  return Array.isArray(j?.ice_servers) ? j.ice_servers.map((s:any)=>({
+    urls: s.urls, username: s.username, credential: s.credential
+  })) : null;
 }
-
 export async function GET() {
-  const { username, credential } = cred();
-  const iceServers: any[] = [
-    {
-      urls: [
-        "turn:global.turn.twilio.com:3478?transport=udp",
-        "turn:global.turn.twilio.com:3478?transport=tcp",
-        "turns:global.turn.twilio.com:443?transport=tcp",
-      ],
-      username,
-      credential,
-    },
-    { urls: "stun:stun.l.google.com:19302" },
-  ];
+  const iceServers = (await fetchTwilioIce()) ?? [{ urls: "stun:stun.l.google.com:19302" }];
   return NextResponse.json({ iceServers });
 }
