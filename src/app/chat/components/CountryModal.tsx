@@ -41,12 +41,15 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
   // [] means All; badge handled outside
 
   const toggle = (code: string) => {
-    // Non-VIP: only own country allowed; if unknown, keep All
+    // Non-VIP: only user country or All allowed
     if (!isVip) {
-      if (userCode) onChange([userCode]);
-      else onChange([]); // All
+      if (code === userCode || !userCode) {
+        onChange(userCode ? [userCode] : []); // User country or All
+      }
+      // Ignore clicks on other countries for non-VIP
       return;
     }
+    
     // VIP: up to 15 countries
     const set = new Set(selected);
     if (set.has(code)) {
@@ -54,7 +57,7 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
     } else {
       set.add(code);
       if (set.size > 15) {
-        // drop oldest deterministically
+        // drop oldest (first) deterministically
         const oldest = Array.from(set)[0];
         set.delete(oldest);
       }
@@ -88,7 +91,7 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
               <button
                 onClick={()=>onChange([])}
                 className="text-xs px-2 py-1 rounded border bg-gray-50 hover:bg-gray-100"
-                title="Reset to All"
+                title="Reset to All Countries"
               >
                 Select All
               </button>
@@ -101,7 +104,7 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
                   checked={selected.includes(r.code)}
                   onChange={()=>toggle(r.code)}
                   disabled={!isVip && !!userCode && r.code !== userCode}
-                  title={!isVip && !!userCode && r.code !== userCode ? "Only your country is allowed for non-VIP" : ""}
+                  title={!isVip && userCode && r.code !== userCode ? "VIP required for additional countries" : ""}
                 />
                 <span className="text-xl">{r.flag}</span>
                 <span className="flex-1">{r.name}</span>

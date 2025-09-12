@@ -8,7 +8,18 @@ export async function startRtcFlow() {
 
     // 1) Enqueue (سمات + فلاتر). الواجهة يمكنها تمرير جسم اختياري:
     const baseBody = (window as any).__ditonaEnqueueBody || {};
-    const body = withFiltersBody(baseBody);
+    
+    // Use async version for server-trusted filtering when possible
+    let body;
+    try {
+      const { withFiltersBodyAsync } = await import("./filtersBridge");
+      body = await withFiltersBodyAsync(baseBody);
+    } catch {
+      // Fallback to conservative sync version if async fails
+      const { withFiltersBody } = await import("./filtersBridge");
+      body = withFiltersBody(baseBody);
+    }
+    
     await fetch("/api/rtc/enqueue", {
       method: "POST",
       headers: { "content-type": "application/json" },

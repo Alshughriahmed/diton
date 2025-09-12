@@ -29,18 +29,49 @@ export default function FilterBar() {
   const [genders, setGenders]     = useStored<GenderKey[]>(LS_GENDERS, []);
   const [isVip, setIsVip] = useState(false);
 
-  // Fetch VIP status on mount
+  // Fetch VIP status and geo on mount
   useEffect(()=>{
+    // Fetch VIP status
     fetch("/api/user/vip-status").then(r=>r.json()).then(j=>{ 
-      try{ setIsVip(!!(j?.isVip||j?.vip)); }catch{} 
+      try{ 
+        const vip = !!(j?.isVip||j?.vip);
+        setIsVip(vip);
+        // Cache VIP status for filtersBridge
+        localStorage.setItem("ditona:vip-status", JSON.stringify(vip));
+      }catch{} 
+    }).catch(()=>{});
+    
+    // Fetch user geo for defensive filtering
+    fetch("/api/geo").then(r=>r.json()).then(j=>{
+      try{
+        const code = (j?.countryCode || j?.country || "").toString().toUpperCase();
+        if (code && /^[A-Z]{2}$/.test(code)) {
+          localStorage.setItem("ditona:geo:country", JSON.stringify(code));
+        }
+      }catch{}
     }).catch(()=>{});
   }, []);
 
-  // Reset non-VIP genders to Everyone only
+  // Normalize filters when VIP status changes
   useEffect(()=>{ 
-    if(!isVip && genders.length > 0){ 
-      setGenders([]); 
-    } 
+    if(!isVip) {
+      // Reset genders to Everyone for non-VIP
+      if (genders.length > 0) setGenders([]);
+      
+      // Normalize countries: user country only or All
+      const userCode = (() => {
+        try {
+          const cached = localStorage.getItem("ditona:geo:country");
+          return cached ? JSON.parse(cached) : null;
+        } catch {
+          return null;
+        }
+      })();
+      
+      if (countries.length > 1 || (countries.length === 1 && userCode && !countries.includes(userCode))) {
+        setCountries(userCode ? [userCode] : []);
+      }
+    }
   }, [isVip]);
 
   // النص المعروض
