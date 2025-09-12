@@ -28,6 +28,18 @@ import FilterBar from "./components/FilterBar";
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
 export default function ChatClient(){
+  function __updatePeerBadges(meta:any){
+    try{
+      if(!meta || typeof document==="undefined") return;
+      const g = document.querySelector('[data-ui="peer-gender"]');
+      const ctry = document.querySelector('[data-ui="peer-country"]');
+      const cty = document.querySelector('[data-ui="peer-city"]');
+      if(g) (g as HTMLElement).textContent = meta.gender ? String(meta.gender) : '—';
+      if(ctry) (ctry as HTMLElement).textContent = meta.country ? String(meta.country) : '—';
+      if(cty) (cty as HTMLElement).textContent = meta.city ? String(meta.city) : '';
+    }catch{}
+  }
+
   const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
   const lastTsRef = useRef(0);
@@ -61,7 +73,26 @@ export default function ChatClient(){
 
   useEffect(()=>{
     // Enqueue on mount
-    fetch("/api/rtc/enqueue",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({anonId:typeof window!=="undefined"?localStorage.getItem("ditona_anon"):"" })}).catch(()=>{});
+    
+(async ()=>{
+  try{
+    const ls = (k:string)=> (typeof window!=="undefined" && window.localStorage) ? window.localStorage.getItem(k) : null;
+    const anonId = (typeof window!=="undefined") ? (window.localStorage.getItem("ditona_anon")||"") : "";
+    // جنس المستخدم (المعلن) وموقعه من التخزين الحالي
+    const myGender = ls("ditona_myGender") || ls("ditona:filters:genders") || "all";
+    const geoRaw = ls("ditona_geo") || ls("ditona_geo_hint");
+    let geo:any = null;
+    try{ geo = geoRaw ? JSON.parse(geoRaw) : null; }catch{ geo=null; }
+    const country = geo?.country || "";
+    const city = geo?.city || "";
+
+    await fetch("/api/rtc/enqueue",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body: JSON.stringify({ anonId, gender: myGender, geo: {country, city} })
+    }).catch(()=>{});
+  }catch{}
+})();
     
     let off1=on("ui:toggleMic",()=>{ toggleMic(); });
     let off2=on("ui:toggleCam",()=>{ toggleCam(); });
@@ -339,11 +370,19 @@ useEffect(() => () => { try { stopRtcSession('unmount'); } catch {} }, []);
       try{
         const r = await fetch("/api/rtc/matchmake", { method: "POST", cache: "no-store" });
         const j = await r.json();
-        if(j?.found && j?.pairId){
-          localStorage.setItem("ditona_pair", j.pairId);
-          localStorage.setItem("ditona_role", j.role);
-          return j;
-        }
+        
+if(j?.found && j?.pairId){
+  try{
+    if(j?.peerMeta){
+      localStorage.setItem("ditona:peer:meta", JSON.stringify(j.peerMeta));
+      __updatePeerBadges(j.peerMeta);
+      window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:j.peerMeta}));
+    }
+  }catch{}
+  localStorage.setItem("ditona_pair", j.pairId);
+  localStorage.setItem("ditona_role", j.role);
+  return j;
+}
       }catch{}
       await new Promise(res=>setTimeout(res, ms));
       // try to progress pairing from server

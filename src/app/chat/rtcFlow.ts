@@ -32,8 +32,16 @@ export async function startRtcFlow() {
     for (let i = 0; i < 50; i++) {
       const r = await fetch("/api/rtc/matchmake", { method: "POST", cache: "no-store" });
       if (r.status === 200) {
-        const j = await r.json().catch(() => ({}));
-        pairId = j?.pairId; role = j?.role;
+        const j = await r.json().catch(()=>({}));
+pairId = j?.pairId; role = j?.role;
+/*__PEER_META_IN_RTCFLOW__*/
+try{
+  if(j?.peerMeta && typeof window!=="undefined"){
+    localStorage.setItem("ditona:peer:meta", JSON.stringify(j.peerMeta));
+    window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:j.peerMeta}));
+  }
+}catch{}
+
         if (pairId && role) break;
       }
       await new Promise(res => setTimeout(res, 300 + Math.floor(Math.random() * 500)));

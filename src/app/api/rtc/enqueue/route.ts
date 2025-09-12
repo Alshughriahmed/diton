@@ -5,7 +5,33 @@ export const runtime = "nodejs";
 
 export async function OPTIONS() { return NextResponse.json({ ok: true }); }
 
-export async function POST(req: NextRequest) {
+
+async function upstashPipeline(cmds:any[]){
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if(!url||!token) return null;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {'content-type':'application/json','authorization':`Bearer ${token}`},
+    body: JSON.stringify(cmds),
+    cache:'no-store'
+  }).catch(()=>null);
+  return r ? await r.json().catch(()=>null) : null;
+}
+async function saveUserMetaUpstash(anonId:string, meta:any){
+  try{
+    if(!anonId) return;
+    const key = `rtc:user:${anonId}`;
+    const ttlMs = 120000;
+    await upstashPipeline([
+      ["HSET", key, "meta", JSON.stringify(meta||{})],
+      ["PEXPIRE", key, String(ttlMs)]
+    ]);
+  }catch{}
+}
+
+export async function POST(
+req: NextRequest) {
   try {
     const anon = extractAnonId(req);
     if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
