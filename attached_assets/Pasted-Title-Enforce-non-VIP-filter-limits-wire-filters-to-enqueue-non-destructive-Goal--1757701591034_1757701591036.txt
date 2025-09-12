@@ -1,0 +1,76 @@
+Title: Enforce non-VIP filter limits + wire filters to enqueue (non-destructive)
+
+Goal:
+- واجهة الفلاتر تبقى أعلى يمين القسم العلوي.
+- غير-VIP: Gender=Everyone فقط. Countries=All أو بلد المستخدم فقط.
+- VIP: Gender حتى جنسين. Countries حتى 15 دولة.
+- تمرير {gender,countries,genders[]} إلى /api/rtc/enqueue فقط. لا تغيير لأي منطق RTC آخر.
+- بناء ناجح + تحقق وظيفي.
+
+Context (repo state to verify):
+- Components: src/app/chat/components/{FilterBar.tsx,CountryModal.tsx,GenderModal.tsx}
+- Filters bridge: src/app/chat/filtersBridge.ts (withFiltersBody)
+- rtcFlow.ts يستدعي fetch("/api/rtc/enqueue", withFiltersBody(...))
+
+Requirements:
+- إبقاء كل النصوص EN فقط.
+- عدم حذف أو تعطيل أي ميزة قائمة.
+- كل التعديلات idempotent (لا تتكرر عند التشغيل أكثر من مرة).
+
+Steps:
+1) Sanity checks
+   - Assert files exist:
+     src/app/chat/components/FilterBar.tsx
+     src/app/chat/components/CountryModal.tsx
+     src/app/chat/components/GenderModal.tsx
+     src/app/chat/filtersBridge.ts
+     src/app/chat/rtcFlow.ts
+   - Grep:
+     - rtcFlow.ts contains `withFiltersBody(` wrapping /api/rtc/enqueue calls.
+     - FilterBar dispatches `window.dispatchEvent(new CustomEvent("ditona:filters"...))`.
+
+2) Enforce non-VIP rules (idempotent)
+   - CountryModal.tsx:
+     - غير-VIP: toggle() يعيد [] = All إذا لا نعرف userCode، أو [userCode] فقط.
+     - VIP: يسمح حتى 15 عناصر. اختيار 16th يطيح الأقدم.
+     - ترتيب القائمة: بلد المستخدم أولًا.
+   - GenderModal.tsx:
+     - غير-VIP: أي تفاعل ⇒ onChange([]) أي Everyone فقط. عطّل بصريًا كل الخيارات عدا "Everyone".
+     - VIP: حد أقصى جنسين. الثالث يستبدل الأقدم.
+   - FilterBar.tsx:
+     - on mount استعلم /api/user/vip-status وضبط isVip.
+     - إذا !isVip و genders.length>0 ⇒ setGenders([]) لضمان Everyone.
+     - لا تغييرات على المواقع أو الأنماط. تبقى أعلى يمين القسم العلوي.
+
+3) Wire to enqueue (verify only)
+   - rtcFlow.ts: كل استدعاء fetch("/api/rtc/enqueue", …) ملتف بـ withFiltersBody(). إذا نقص، لفّه.
+   - لا تغيّر أي استدعاء آخر (matchmake/offer/answer/ice).
+
+4) Build
+   - pnpm i --frozen-lockfile
+   - pnpm build
+
+5) Acceptance
+   Set BASE=https://www.ditonachat.com
+   A) Non-VIP
+      - curl -s "$BASE/api/user/vip/dev/revoke"
+      - افتح /chat، جرّب Gender: يجب أن يبقى Everyone فقط والخيارات الأخرى disabled.
+      - افتح Countries: كل صناديق الاختيار disabled ما عدا بلد المستخدم؛ زر “Select All” يُعيد All ([]).
+      - التقط console.log من Network على /api/rtc/enqueue: body يحتوي { gender:"any", countries:["ALL"] } أو ["<USERCODE>"] فقط.
+   B) VIP
+      - curl -s "$BASE/api/user/vip/dev/grant"
+      - Gender: اختر جنسين كحد أقصى. الثالث يستبدل الأقدم.
+      - Countries: اختر حتى 15. الاختيار 16 يستبعد الأقدم. الشارة تعرض العدد.
+      - تحقق أن body في /api/rtc/enqueue يعكس الاختيارات (gender من genders[0], countries[]=...).
+   C) Regression / RTC
+      - bash _ops/acc_rtc.sh "$BASE"  # يجب RC=0
+      - curl -s "$BASE/api/turn" | jq '.iceServers'  # TLS:443 حاضر وcredential غير فارغ.
+
+6) Deliverables
+   - ARTIFACTS: diffs، لقطات شاشة للـUI في الحالتين، curl outputs، build log، acc_rtc output.
+   - ملخص من سطرين: ماذا تغير، وكيف تم التحقق.
+
+Guardrails:
+- لا تعدّل أي API routes أو منطق RTC غير enqueue.
+- لا تنقل موضع الفلاتر. أعلى يمين القسم العلوي فقط.
+- أي فشل بناء أو lint ⇒ أصلحه بأقل فرق ممكن ثم أعد الاختبار.

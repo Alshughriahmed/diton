@@ -1,11 +1,14 @@
 /* Minimal RTC client flow: enqueue -> matchmake -> offer/answer -> ice (REST only) */
+import { withFiltersBody } from "./filtersBridge";
+
 export async function startRtcFlow() {
   try {
     // 0) تهيئة كوكي anon الموقّع (إن لم يوجد)
     await fetch("/api/anon/init", { method: "GET", cache: "no-store" }).catch(() => {});
 
     // 1) Enqueue (سمات + فلاتر). الواجهة يمكنها تمرير جسم اختياري:
-    const body = (window as any).__ditonaEnqueueBody || {};
+    const baseBody = (window as any).__ditonaEnqueueBody || {};
+    const body = withFiltersBody(baseBody);
     await fetch("/api/rtc/enqueue", {
       method: "POST",
       headers: { "content-type": "application/json" },

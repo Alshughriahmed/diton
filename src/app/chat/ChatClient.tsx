@@ -23,6 +23,7 @@ import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
+import FilterBar from "./components/FilterBar";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
@@ -420,6 +421,7 @@ useEffect(() => () => { try { stopRtcSession('unmount'); } catch {} }, []);
   if (!hydrated) {
     return (
       <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
+      <FilterBar />
         <div className="h-full grid grid-rows-2 gap-2 p-2">
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
             <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm">
