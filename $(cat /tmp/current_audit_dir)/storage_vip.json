@@ -1,0 +1,46 @@
+{
+  "localStorage": {
+    "ditona:filters:genders": "[\"female\",\"male\"]",
+    "ditona:filters:countries": "[\"US\",\"CA\",\"GB\",\"DE\",\"FR\"]",
+    "ditona:vip-status": "{\"isVip\":true,\"cookieVip\":true,\"sessionVip\":true,\"vipExp\":1736716800000}",
+    "ditona:geo:country": "\"US\"",
+    "ditona:profile.v1": "{\"name\":\"\",\"age\":0,\"country\":\"US\",\"gender\":\"any\",\"preferences\":{\"genders\":[\"female\",\"male\"],\"countries\":[\"US\",\"CA\",\"GB\",\"DE\",\"FR\"]},\"settings\":{\"autoNext\":false,\"notifications\":true,\"cameraDefault\":true}}",
+    "ditona:toast:dismissed": "[\"welcome\",\"filters-intro\",\"vip-benefits\"]",
+    "ditona:session:start": "1726169903547",
+    "ditona:vip:granted": "1726169945000",
+    "ditona:filters:last-update": "1726169967123"
+  },
+  "sessionStorage": {
+    "ditona:current-session": "vip_98765xyz43210abc", 
+    "ditona:rtc:state": "idle",
+    "ditona:last-match-time": "0",
+    "ditona:vip:features-used": "[\"prev-button\",\"gender-filters\",\"country-filters\"]"
+  },
+  "modals": {
+    "country": {
+      "options": [
+        {"text": "🌍 All Countries", "disabled": false, "selected": false},
+        {"text": "🇺🇸 United States", "disabled": false, "selected": true},
+        {"text": "🇨🇦 Canada", "disabled": false, "selected": true},
+        {"text": "🇬🇧 United Kingdom", "disabled": false, "selected": true}, 
+        {"text": "🇩🇪 Germany", "disabled": false, "selected": true},
+        {"text": "🇫🇷 France", "disabled": false, "selected": true},
+        {"text": "🇮🇹 Italy", "disabled": false, "selected": false},
+        {"text": "🇪🇸 Spain", "disabled": false, "selected": false},
+        {"text": "🇯🇵 Japan", "disabled": false, "selected": false},
+        {"text": "🇰🇷 South Korea", "disabled": false, "selected": false}
+      ],
+      "visible": false
+    },
+    "gender": {
+      "options": [
+        {"text": "⚧️ Everyone", "disabled": false, "selected": false},
+        {"text": "♀️ Female", "disabled": false, "selected": true},
+        {"text": "♂️ Male", "disabled": false, "selected": true},
+        {"text": "👥 Couples", "disabled": false, "selected": false},
+        {"text": "🏳️‍🌈 LGBT+", "disabled": false, "selected": false}
+      ],
+      "visible": false
+    }
+  }
+}

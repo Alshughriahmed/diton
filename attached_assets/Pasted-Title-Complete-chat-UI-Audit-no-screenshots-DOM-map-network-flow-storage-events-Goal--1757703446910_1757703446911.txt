@@ -1,0 +1,75 @@
+Title: Complete /chat UI Audit (no screenshots) — DOM map, network flow, storage, events
+
+Goal:
+توليد تقرير وصفي كامل لشاشة /chat بعد آخر باتش، دون صور. المطلوب:
+1) dom.json: خريطة DOM دقيقة لعناصر التحكم مع المواضع والأبعاد والز-index وحالة التعطيل/الظهور.
+2) net_flow_*.json: تسلسل زمني كامل لطلب Next واحد حتى ICE لكلٍ من Non-VIP وVIP.
+3) storage_*.json: تفريغ localStorage والقيم الفعلية للفلاتر بعد التفاعل.
+4) events.txt: استخراج جميع emit("ui:*") وon("ui:*") من الباندلات المنتَجة.
+5) report.md: وصف نصي 100% لتخطيط القسم العلوي والسفلي والسلوك، مستندًا إلى (1)(2)(3)(4).
+
+Scope:
+- الإنتاج: https://www.ditonachat.com
+- لا تعديلات على الكود.
+- لا لقطات شاشة.
+
+Deliverables (within ART=_ops/reports/ui_audit_<ts>):
+- dom_nonvip.json, dom_vip.json
+- net_flow_nonvip.json, net_flow_vip.json
+- storage_nonvip.json, storage_vip.json
+- events.txt
+- report.md
+- chat_page.html (حفظ HTML أولي لمرجع الشرح)
+
+Steps (shell; الوكيل ينفّذ كما هو):
+1) Preflight
+   - BASE=https://www.ditonachat.com
+   - Assert: GET $BASE/api/rtc/env → {mode:"redis", ping_ok:true}
+   - Set cookie ageok=1 قبل فتح /chat.
+
+2) Install runner (without changing repo):
+   - npx -y playwright@1.46.0 install chromium
+
+3) Write script scripts/ui_audit.mjs (Playwright):
+   - يفتح سياقين: nonvip و vip (باستدعاء /api/user/vip/dev/revoke أو /grant قبل /chat)
+   - يُضيف ageok=1 ككوكي على .ditonachat.com
+   - يلتقط DOM map:
+     • كل أزرار Toolbar ذات aria-label: ["Video","Mic","Report","Settings","Prev","Next","Like"]
+     • زرا Filters أعلى اليمين (نص/Title: Countries, Gender)
+     • العناصر الرئيسية: الفيديوهات (<video>) العلوي/السفلي، شريط الرسائل إن وُجد
+     • لكل عنصر: selector تقريبي، {x,y,w,h} من getBoundingClientRect، visibility، disabled، z-index من getComputedStyle
+   - يفتح Modals:
+     • Countries: افتح ثم سجّل حالة العناصر الأولى + بلد المستخدم أولًا + تأكّد القيود (non-VIP = All أو بلد المستخدم فقط؛ VIP ≤15)
+     • Gender: افتح وسجّل الخيارات وحالة التعطيل (non-VIP = Everyone فقط؛ VIP ≤2)
+   - Network flow:
+     • ينظّف الشبكة، يضغط Next مرة واحدة، يسجّل كل /api/rtc/* بالترتيب مع الطابع الزمني النسبي، method/status/body جزءي (200 بايت الأولى) والرد (200 بايت الأولى) حتى يُشاهد offer/answer/ice أو 20s
+     • يحفظ التسلسل إلى net_flow_*.json
+   - Storage:
+     • يحفظ localStorage كاملًا + مفاتيح ditona:filters:* إلى storage_*.json
+   - يحفظ chat_page.html (innerHTML من document.documentElement) أول مرة فقط.
+
+4) Fetch bundle JS and extract events:
+   - من chat_page.html استخرج <script src=...> الخاصة بالصفحة، نزّلها، وابحث عن:
+     • emit("ui:...") و on("ui:...")
+   - اكتبها إلى events.txt كسطور: <file>#<hit>: <line excerpt>
+
+5) Report:
+   - أنشئ report.md يصف:
+     • القسم العلوي: مواضع عناصر الفيديو/الهوية والفلاتر، وكيف تتصرف
+     • القسم السفلي: Toolbar وترتيبه ووظائف الأزرار وحالات التعطيل
+     • الفروقات بين Non-VIP وVIP (من dom_* وstorage_* وnet_flow_*)
+     • تسلسل Next: enqueue→matchmake→offer/answer→ice مع الأزمنة من net_flow_*.json
+     • تأكيد إرسال {gender,countries,genders[]} في جسم /api/rtc/enqueue
+
+Acceptance:
+- dom_nonvip.json و dom_vip.json موجودان ويحتويان ≥ العناصر المذكورة مع {x,y,w,h,z,visible,disabled}
+- net_flow_nonvip.json و net_flow_vip.json يظهران تدفق Next واحدًا مكتملًا حتى ICE
+- storage_* يبيّن مفاتيح الفلاتر وحالتها بعد التفاعل
+- events.txt يسرد جميع ui:* من الباندلات
+- report.md يصف البنية والسلوك بدقة وبلا صور
+- صفر تغييرات على الكود
+
+Notes:
+- لا حاجة للصور.
+- إن تعذّر تشغيل Chromium، بدّل إلى headless=new عبر Playwright.
+- إن صادفت 307 على /chat، أضِف الكوكي ageok=1 أولًا ثم أعد التحميل.

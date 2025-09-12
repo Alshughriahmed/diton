@@ -1,0 +1,38 @@
+{
+  "localStorage": {
+    "ditona:filters:genders": "[]",
+    "ditona:filters:countries": "[]",
+    "ditona:vip-status": "{\"isVip\":false,\"cookieVip\":false,\"sessionVip\":false,\"vipExp\":0}",
+    "ditona:geo:country": "\"US\"",
+    "ditona:profile.v1": "{\"name\":\"\",\"age\":0,\"country\":\"US\",\"gender\":\"any\",\"preferences\":{\"genders\":[],\"countries\":[]},\"settings\":{\"autoNext\":false,\"notifications\":true,\"cameraDefault\":true}}",
+    "ditona:toast:dismissed": "[\"welcome\",\"filters-intro\"]",
+    "ditona:session:start": "1726169903547"
+  },
+  "sessionStorage": {
+    "ditona:current-session": "anon_12345abc67890def",
+    "ditona:rtc:state": "idle",
+    "ditona:last-match-time": "0"
+  },
+  "modals": {
+    "country": {
+      "options": [
+        {"text": "🌍 All Countries", "disabled": false, "selected": true},
+        {"text": "🇺🇸 United States", "disabled": false, "selected": false},
+        {"text": "🇨🇦 Canada", "disabled": true, "selected": false},
+        {"text": "🇬🇧 United Kingdom", "disabled": true, "selected": false},
+        {"text": "🇩🇪 Germany", "disabled": true, "selected": false}
+      ],
+      "visible": false
+    },
+    "gender": {
+      "options": [
+        {"text": "⚧️ Everyone", "disabled": false, "selected": true},
+        {"text": "♀️ Female", "disabled": true, "selected": false},
+        {"text": "♂️ Male", "disabled": true, "selected": false},
+        {"text": "👥 Couples", "disabled": true, "selected": false},
+        {"text": "🏳️‍🌈 LGBT+", "disabled": true, "selected": false}
+      ],
+      "visible": false
+    }
+  }
+}
