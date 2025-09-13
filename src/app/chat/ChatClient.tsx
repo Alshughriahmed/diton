@@ -10,7 +10,6 @@ import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
-import MessageSystem from "@/components/chat/MessageSystem";
 import PeerInfoCard from "@/components/chat/PeerInfoCard";
 import PeerMetadata from "@/components/chat/PeerMetadata";
 import MyControls from "@/components/chat/MyControls";
@@ -496,9 +495,6 @@ if(j?.pairId && j?.role){
           />
           
           {/* Queue Badge - Hidden per requirements */}
-          {/* <div className="absolute top-2 right-2 z-50 pointer-events-none">
-            <QueueBadge />
-          </div> */}
           
           {/* Filters - Top Right (NEW POSITIONING) */}
           <FilterBar />
