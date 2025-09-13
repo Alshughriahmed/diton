@@ -2,39 +2,82 @@
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
+import { useFilters } from "@/state/filters";
+import type { GenderOpt } from "@/state/filters";
+import type { GenderKey } from "./GenderModal";
 
-// نتجاوز قيود الأنواع لضمان البناء
-const GenderModal: any = dynamic(() => import("./GenderModal"), { ssr: false });
-const CountryModal: any = dynamic(() => import("./CountryModal"), { ssr: false });
+const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
+const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 
 export default function FilterBar() {
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);
+  const { gender, countries, setGender, setCountries } = useFilters();
+
+  // Convert between old filter system (string) and new modal system (array)
+  const genderToArray = (g: GenderOpt): GenderKey[] => {
+    if (g === "all") return [];
+    if (g === "couple") return ["couples"];
+    return [g as GenderKey];
+  };
+
+  const arrayToGender = (vals: GenderKey[]): GenderOpt => {
+    if (vals.length === 0) return "all";
+    if (vals.includes("couples")) return "couple";
+    return vals[0] as GenderOpt;
+  };
 
   return (
-    <div className="absolute top-3 right-3 z-[40] flex items-center gap-3">
+    <div className="absolute top-1 right-1 z-[60] flex items-center gap-2 pointer-events-none">
+      {/* Gender */}
       <button
+        type="button"
         data-ui="gender-button"
-        className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-sm"
+        aria-label="Gender"
         onClick={() => setOpenGender(true)}
+        className="pointer-events-auto h-8 w-8 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white text-sm backdrop-blur transition"
       >
-        Gender
+        <span
+          aria-hidden
+          className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-rose-400"
+          style={{ lineHeight: 1 }}
+        >
+          ⚧
+        </span>
       </button>
 
+      {/* Countries */}
       <button
+        type="button"
         data-ui="country-button"
-        className="px-3 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-sm"
+        aria-label="Countries"
         onClick={() => setOpenCountry(true)}
+        className="pointer-events-auto h-8 w-8 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white text-sm backdrop-blur transition"
       >
-        Countries
+        <span aria-hidden style={{ lineHeight: 1 }}>🌍</span>
       </button>
 
-      {/* شارات بسيطة (يمكن تحسينها لاحقاً) */}
-      <div data-ui="gender-badge" className="text-xs opacity-80"></div>
-      <div data-ui="country-count-badge" className="text-xs opacity-80"></div>
+      {/* badges placeholders */}
+      <div data-ui="gender-badge" className="sr-only"></div>
+      <div data-ui="country-count-badge" className="sr-only"></div>
 
-      {openGender && <GenderModal onClose={() => setOpenGender(false)} />}
-      {openCountry && <CountryModal onClose={() => setOpenCountry(false)} />}
+      {/* Modals */}
+      {openGender && (
+        <GenderModal 
+          open={true} 
+          onClose={() => setOpenGender(false)}
+          selected={genderToArray(gender)}
+          onChange={(vals) => setGender(arrayToGender(vals))}
+        />
+      )}
+      {openCountry && (
+        <CountryModal 
+          open={true} 
+          onClose={() => setOpenCountry(false)}
+          selected={countries}
+          onChange={(codes) => setCountries(codes)}
+        />
+      )}
     </div>
   );
 }
