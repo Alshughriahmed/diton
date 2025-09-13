@@ -15,8 +15,8 @@ import PeerInfoCard from "@/components/chat/PeerInfoCard";
 import PeerMetadata from "@/components/chat/PeerMetadata";
 import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
-import ChatToolbar from "@/components/chat/ChatToolbar";
-import ChatMessagingBar from "@/components/chat/ChatMessaging";
+import ChatToolbar from "./components/ChatToolbar";
+import ChatMessagingBar from "./components/ChatMessagingBar";
 // import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";

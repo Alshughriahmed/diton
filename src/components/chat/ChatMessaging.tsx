@@ -1,102 +1,75 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { emit } from "@/utils/events";
 
-const EMOJIS = ["😋","😜","🤗","😊","😏","🤭","😬","😳","😍","🥰","💔","🫦","🍒","⚘️","🔥","🎆","🌈","💦","💫","💋","😈","🫶","👍","🍦","🍺","✨️","🖕","💨","💧","🩱","👙","💯"];
+const EMOJIS = "😊 😀 😘 🤩 ☺️ 😋 🤪 😜 🤗 🤔 🫣 😏 😴 🤤 💋 ❤️ 💔 💯 💥 💫 💬 💦 👍 🫦 👄 👅 🧖‍♀️ 🔥 🥂 🍌 🌹 🩱 👙 🌨 🛀 💯 🥂 🏞".split(/\s+/).filter(Boolean);
 
-export default function ChatMessagingBar({ onSend }: { onSend?: (m: string) => void }) {
-  const [text, setText] = useState("");
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Array<{id: number, me: boolean, text: string}>>([]);
+export default function ChatMessaging(){
+  const [msg, setMsg] = useState("");
+  const [bottom, setBottom] = useState(88); // px above safe area; sits above toolbar
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    const close = () => setOpen(false);
-    window.addEventListener("scroll", close, { passive: true });
-    return () => window.removeEventListener("scroll", close);
-  }, []);
+  // shrink safely with on-screen keyboard (mobile)
+  useEffect(()=>{
+    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    if(!vv) return;
+    const h = () => {
+      // keep bar visible above keyboard
+      const kb = Math.max(0, (window.innerHeight - vv.height));
+      setBottom(88 + (kb>0 ? kb - 12 : 0));
+    };
+    vv.addEventListener("resize", h);
+    vv.addEventListener("scroll", h);
+    h();
+    return ()=>{ vv.removeEventListener("resize", h); vv.removeEventListener("scroll", h); };
+  },[]);
 
-  async function send() {
-    const v = text.trim();
-    if (!v) return;
-    
-    // Send to API and show local echo on success
-    try {
-      const response = await fetch('/api/message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: v })
-      });
-      
-      if (response.ok) {
-        // Show local echo
-        appendLocalAfterSend(setMessages, v);
-      }
-    } catch (error) {
-      console.warn('Message send failed:', error);
-    }
-    
-    onSend?.(v);
-    setText("");
-  }
+  const onPick = (e:string) => {
+    const el = inputRef.current;
+    if(!el) { setMsg(m=>m+e); return; }
+    const start = el.selectionStart ?? msg.length;
+    const end = el.selectionEnd ?? start;
+    const next = msg.slice(0,start)+e+msg.slice(end);
+    setMsg(next);
+    requestAnimationFrame(()=>{ try{ el.setSelectionRange(start+e.length,start+e.length); el.focus(); }catch{} });
+  };
 
-  /* ensure local echo after successful POST */
-  function appendLocalAfterSend(listSetter: any, text: string) {
-    listSetter((prev: any[]) => [...prev.slice(-2), { id: Date.now(), me: true, text }]);
-  }
+  const onSend = () => {
+    const t = msg.trim();
+    if(!t) return;
+    // Hook نقطة تمرير لاحقة: يمكن ربطها بـ MessageSystem/WebRTC
+    console.log("[chat:send]", t);
+    setMsg("");
+    emit("ui:closeMessaging");
+  };
 
   return (
-    <div className="fixed inset-x-2 bottom-[max(env(safe-area-inset-bottom),0.5rem)] z-[60] pointer-events-none">
-      <div className="mx-auto max-w-5xl rounded-xl bg-black/35 backdrop-blur-sm border border-white/10 p-2 flex items-center gap-2 pointer-events-auto">
-        {/* Emoji (left) */}
-        <div className="relative">
-          <button aria-label="emoji" onClick={() => setOpen((o) => !o)} className="p-2 rounded-lg hover:bg-white/10">😊</button>
-          {open && (
-            <div className="absolute bottom-full mb-2 left-0 max-h-40 w-64 overflow-auto rounded-xl bg-black/90 border border-white/10 p-2 grid grid-cols-8 gap-1 z-[70]">
-              {EMOJIS.map((e) => (
-                <button
-                  key={e}
-                  onClick={() => { setText((t) => t + e); setOpen(false); inputRef.current?.focus(); }}
-                  className="text-xl leading-6 hover:scale-110"
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Input */}
-        <input
-          ref={inputRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Type a message..."
-          className="flex-1 bg-transparent outline-none placeholder:text-slate-300/60 px-2 py-2"
-        />
-
-        {/* Send (right) */}
-        <button onClick={send} className="px-3 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 active:scale-95">
-          Send
-        </button>
-      </div>
-
-      {/* Messages display (last 3) */}
-      {messages.length > 0 && (
-        <div className="absolute bottom-full mb-2 right-0 max-w-xs space-y-1">
-          {messages.slice(-3).map((msg) => (
-            <div
-              key={msg.id}
-              className={`px-3 py-2 rounded-lg text-sm backdrop-blur-sm border ${
-                msg.me 
-                  ? 'bg-emerald-600/80 border-emerald-500/50 text-white ml-8' 
-                  : 'bg-slate-700/80 border-slate-600/50 text-slate-100 mr-8'
-              }`}
-            >
-              {msg.text}
-            </div>
+    <div
+      data-messaging-bar
+      className="fixed left-24 right-24 sm:left-28 sm:right-28 z-50"
+      style={{ bottom: `calc(env(safe-area-inset-bottom) + ${bottom}px)` }}
+    >
+      <div className="rounded-2xl bg-black/60 backdrop-blur-md border border-white/15 shadow-lg p-2">
+        {/* emoji row */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {EMOJIS.map((e,i)=>(
+            <button key={i} onClick={()=>onPick(e)} className="min-w-8 h-8 px-2 rounded bg-white/10 hover:bg-white/20 text-base">{e}</button>
           ))}
         </div>
-      )}
+        {/* input + send */}
+        <div className="mt-2 flex items-center gap-2">
+          <input
+            ref={inputRef}
+            value={msg}
+            onChange={e=>setMsg(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); onSend(); } }}
+            placeholder="Type your message here …"
+            className="flex-1 px-3 py-2 rounded-lg bg-zinc-800/80 text-white outline-none"
+            maxLength={500}
+          />
+          <button onClick={onSend} className="px-4 py-2 rounded-lg bg-emerald-600/80 hover:bg-emerald-700/80 text-white">Send</button>
+        </div>
+      </div>
     </div>
   );
 }

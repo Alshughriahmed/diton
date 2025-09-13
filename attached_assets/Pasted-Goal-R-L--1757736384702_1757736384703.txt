@@ -1,0 +1,213 @@
+Goal
+
+شريط أدوات سفلي ثابت R→L: 💬, ❤, 🔊, 🎤, ⏸️, ⚙️, 🎭, 🚩.
+
+زر ⏭️ كبير يمين فوق الشريط، وزر ⏮️ كبير يسار فوق الشريط.
+
+زر الكاميرا غير موجود.
+
+شريط رسائل يُظهَر/يُخفى بزر 💬، فوق الشريط، مع صف إيموجي أفقي وإرسال.
+
+تفاعل آمن مع لوحة مفاتيح الموبايل.
+
+Minimal-Diff. لا تغييرات خادمية. لا كسر لأي ميزة.
+
+Do (single shell batch)
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+LABEL="ui_toolbar_msg_$(date -u +%Y%m%d-%H%M%S)"
+BR="feat/ui-toolbar-messaging"
+BK="_ops/backups/$LABEL"
+COMP_DIR="src/app/chat/components"
+mkdir -p "$BK" "$COMP_DIR"
+
+echo "[1/8] Branch"
+git checkout -b "$BR" 2>/dev/null || git checkout "$BR"
+
+echo "[2/8] Backups"
+for f in \
+  "src/app/chat/ChatClient.tsx" \
+  "src/utils/events.ts" \
+  "$COMP_DIR/ChatToolbar.tsx" \
+  "$COMP_DIR/ChatMessagingBar.tsx" \
+  "src/app/chat/components/MyControls.tsx" \
+  "src/styles/globals.css"
+do [ -f "$f" ] && install -D "$f" "$BK/$f"; done
+
+echo "[3/8] Events: ensure messaging channels exist"
+if ! grep -q 'ui:openMessaging' src/utils/events.ts; then
+  sed -i 's/|"filters:country"/|"filters:country"|"ui:openMessaging"|"ui:closeMessaging"/' src/utils/events.ts
+fi
+
+echo "[4/8] Write $COMP_DIR/ChatToolbar.tsx"
+cat > "$COMP_DIR/ChatToolbar.tsx" <<'TSX'
+"use client";
+import { useState } from "react";
+import { emit } from "@/utils/events";
+import { useFilters } from "@/state/filters";
+
+export default function ChatToolbar(){
+  const { isVip } = useFilters();
+  const freeAll = true; // كل الميزات مفتوحة الآن
+  const [micOn, setMicOn] = useState(true);
+  const [paused, setPaused] = useState(false);
+  const [msgOpen, setMsgOpen] = useState(false);
+
+  const toggleMsg = () => {
+    setMsgOpen(v=>!v);
+    emit(!msgOpen ? "ui:openMessaging" : "ui:closeMessaging");
+  };
+
+  return (
+    <>
+      {/* Prev / Next */}
+      <button
+        data-ui="btn-prev"
+        onClick={()=>{ if(!isVip && !freeAll){ emit("ui:upsell","prev"); return; } emit("ui:prev"); }}
+        className="fixed bottom-[92px] left-3 z-50 w-24 h-12 sm:w-28 sm:h-14 rounded-xl bg-black/40 text-white border border-white/20 hover:bg-black/50 backdrop-blur font-medium"
+        aria-label="Previous">⏮️</button>
+
+      <button
+        data-ui="btn-next"
+        onClick={()=>emit("ui:next")}
+        className="fixed bottom-[92px] right-3 z-50 w-24 h-12 sm:w-28 sm:h-14 rounded-xl bg-emerald-600/80 text-white border border-emerald-400/60 hover:bg-emerald-700/80 backdrop-blur font-medium"
+        aria-label="Next">⏭️</button>
+
+      {/* Bottom toolbar R→L */}
+      <section data-toolbar className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 bottom-4 sm:bottom-6 z-40">
+        <div className="flex items-center gap-2 sm:gap-3 justify-center flex-wrap">
+
+          <button data-ui="btn-messages" onClick={toggleMsg}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg border flex items-center justify-center ${msgOpen?'bg-purple-600/40 border-purple-400/60':'bg-black/20 border-white/20 hover:bg-white/10'} text-white`} aria-pressed={msgOpen} aria-label="Messages">💬</button>
+
+          <button data-ui="btn-like" onClick={()=>emit("ui:like",{isLiked:true})}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40" aria-label="Like">❤</button>
+
+          <button data-ui="btn-remote-audio" onClick={()=>emit("ui:toggleRemoteAudio")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10" aria-label="Mute remote">🔊</button>
+
+          <button data-ui="btn-mic" onClick={()=>{setMicOn(v=>!v); emit("ui:toggleMic");}}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${micOn?'bg-green-600/30 border-green-400/40 hover:bg-green-500/40':'bg-red-600/30 border-red-400/40 hover:bg-red-500/40'}`}
+            aria-label={micOn?'Mute mic':'Unmute mic'}>{micOn?'🎤':'🔇'}</button>
+
+          <button data-ui="btn-pause" onClick={()=>{setPaused(v=>!v); emit("ui:togglePlay");}}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${paused?'bg-orange-600/30 border-orange-400/40 hover:bg-orange-500/40':'bg-green-600/30 border-green-400/40 hover:bg-green-500/40'}`}
+            aria-label={paused?'Resume':'Pause'}>{paused?'▶️':'⏸️'}</button>
+
+          <button data-ui="btn-settings" onClick={()=>{ try{window.location.href='/settings'}catch{} }}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10" aria-label="Settings">⚙️</button>
+
+          <button data-ui="btn-masks" onClick={()=>emit("ui:toggleMasks")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10" aria-label="Masks">🎭</button>
+
+          <button data-ui="btn-report" onClick={()=>emit("ui:report")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-red-600/30 text-white border border-red-400/40 hover:bg-red-500/40" aria-label="Report">🚩</button>
+
+        </div>
+      </section>
+    </>
+  );
+}
+TSX
+
+echo "[5/8] Write $COMP_DIR/ChatMessagingBar.tsx"
+cat > "$COMP_DIR/ChatMessagingBar.tsx" <<'TSX'
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { on, off } from "@/utils/events";
+
+const EMOJIS = "😊 😀 😘 🤩 ☺️ 😋 🤪 😜 🤗 🤔 🫣 😏 😴 🤤 💋 ❤️ 💔 💯 💥 💫 💬 💦 👍 🫦 👄 👅 🧖‍♀️ 🔥 🥂 🍌 🌹 🩱 👙 🌨 🛀 💯 🥂 🏞".split(/\s+/).filter(Boolean);
+
+export default function ChatMessagingBar(){
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [bottom, setBottom] = useState(88);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(()=>{ const a=()=>setOpen(true), b=()=>setOpen(false); on("ui:openMessaging",a); on("ui:closeMessaging",b); return ()=>{ off("ui:openMessaging",a); off("ui:closeMessaging",b); }; },[]);
+  useEffect(()=>{
+    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    if(!vv) return;
+    const h = () => { const kb = Math.max(0, window.innerHeight - vv.height); setBottom(88 + (kb>0 ? kb - 12 : 0)); };
+    vv.addEventListener("resize", h); vv.addEventListener("scroll", h); h();
+    return ()=>{ vv.removeEventListener("resize", h); vv.removeEventListener("scroll", h); };
+  },[]);
+
+  if(!open) return null;
+
+  const pick = (e:string) => {
+    const el = inputRef.current;
+    const start = el?.selectionStart ?? msg.length;
+    const end = el?.selectionEnd ?? start;
+    const next = msg.slice(0,start)+e+msg.slice(end);
+    setMsg(next);
+    requestAnimationFrame(()=>{ try{ el?.setSelectionRange(start+e.length,start+e.length); el?.focus(); }catch{} });
+  };
+  const send = () => { const t = msg.trim(); if(!t) return; console.log("[chat:send]", t); setMsg(""); setOpen(false); };
+
+  return (
+    <div className="fixed left-24 right-24 sm:left-28 sm:right-28 z-50" style={{ bottom: `calc(env(safe-area-inset-bottom) + ${bottom}px)` }}>
+      <div className="rounded-2xl bg-black/60 backdrop-blur-md border border-white/15 shadow-lg p-2">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {EMOJIS.map((e,i)=>(
+            <button key={i} onClick={()=>pick(e)} className="min-w-8 h-8 px-2 rounded bg-white/10 hover:bg-white/20 text-base">{e}</button>
+          ))}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <input ref={inputRef} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); send(); } }} placeholder="Type your message here …" className="flex-1 px-3 py-2 rounded-lg bg-zinc-800/80 text-white outline-none" maxLength={500}/>
+          <button onClick={send} className="px-4 py-2 rounded-lg bg-emerald-600/80 hover:bg-emerald-700/80 text-white">Send</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+TSX
+
+echo "[6/8] Wire in ChatClient + hide camera button by CSS"
+# imports
+grep -q 'ChatToolbar' src/app/chat/ChatClient.tsx || sed -i '1i import ChatToolbar from "@\/app\/chat\/components\/ChatToolbar";' src/app/chat/ChatClient.tsx
+grep -q 'ChatMessagingBar' src/app/chat/ChatClient.tsx || sed -i '1i import ChatMessagingBar from "@\/app\/chat\/components\/ChatMessagingBar";' src/app/chat/ChatClient.tsx
+# mount once near bottom of main container
+if ! grep -q '<ChatToolbar />' src/app/chat/ChatClient.tsx; then
+  awk '1; /<\/section>[[:space:]]*$/ && !p { print "      <ChatMessagingBar />\n      <ChatToolbar />"; p=1 }' src/app/chat/ChatClient.tsx > /tmp/cc.tsx && mv /tmp/cc.tsx src/app/chat/ChatClient.tsx
+fi
+# CSS: hide any legacy camera button
+touch src/styles/globals.css
+grep -q '\[data-ui="btn-camera"\]' src/styles/globals.css || cat >> src/styles/globals.css <<'CSS'
+
+/* Hide legacy camera button without breaking logic */
+[data-ui="btn-camera"]{ display:none !important; }
+
+/* Safe-area padding for toolbar */
+@supports (bottom: env(safe-area-inset-bottom)) {
+  [data-toolbar]{ padding-bottom: max(.25rem, env(safe-area-inset-bottom)); }
+}
+CSS
+
+echo "[7/8] Build"
+pnpm build
+
+echo "[8/8] Commit + push"
+git add -A
+git commit -m "feat(ui): bottom toolbar R->L, big prev/next, toggle messaging bar; keyboard-safe; hide camera" || true
+git push -u origin "$BR"
+
+echo "-- ACCEPTANCE --"
+echo "EXPECT: order 💬❤🔊🎤⏸️⚙️🎭🚩; big ⏭️/⏮️; 💬 toggles messaging; mobile keyboard lifts bars."
+
+
+Acceptance
+
+ترتيب الأزرار كما حُدّد.
+
+⏭️ يمين و⏮️ يسار فوق الشريط.
+
+💬 يبدّل شريط الرسائل.
+
+المرور على الموبايل مع لوحة المفاتيح لا يحجب الفيديو.
+
+بناء يمر بلا أخطاء.
+
+تقرير يبين الفرع، الملفات المعدلة، ونجاح البناء.

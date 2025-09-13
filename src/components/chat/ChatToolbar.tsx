@@ -2,177 +2,116 @@
 import { emit } from "@/utils/events";
 import { useFilters } from "@/state/filters";
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 export default function ChatToolbar(){
   const { isVip } = useFilters();
   const router = useRouter();
   const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
-  
-  // Button states for ON/OFF visual feedback
+
   const [isMicOn, setIsMicOn] = useState(true);
-  const [isCamOn, setIsCamOn] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
-  
-  // Simple toggle handlers for visual feedback only
-  const handleMicToggle = () => {
-    setIsMicOn(!isMicOn);
-    emit("ui:toggleMic");
+  const [msgOpen, setMsgOpen] = useState(false);
+
+  const toggleMic = () => { setIsMicOn(v=>!v); emit("ui:toggleMic"); };
+  const togglePlay = () => { setIsPaused(v=>!v); emit("ui:togglePlay"); };
+
+  const toggleMessages = () => {
+    setMsgOpen(v=>!v);
+    emit(!msgOpen ? "ui:openMessaging" : "ui:closeMessaging");
   };
-  
-  const handleCamToggle = () => {
-    setIsCamOn(!isCamOn);
-    emit("ui:toggleCam");
-  };
-  
-  const handlePlayToggle = () => {
-    setIsPaused(!isPaused);
-    emit("ui:togglePlay");
-  };
-  
+
   return (
-    <section data-toolbar className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 bottom-4 sm:bottom-6 z-40">
-      <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-center">
-        {/* Prev - يسار */}
-        <button 
-          className={`px-3 sm:px-4 py-2 rounded-lg text-white text-xs sm:text-sm border transition-all duration-200 font-medium ${
-            !isVip && !freeForAll
-              ? 'bg-black/20 border-white/20 opacity-60' 
-              : 'bg-black/30 border-white/30 hover:bg-white/10'
-          }`}
-          aria-label="Previous" 
-          onClick={(e)=>{
-            e.preventDefault(); 
-            if (!isVip && !freeForAll) {
-              emit("ui:upsell", "prev");
-              return;
-            }
-            emit("ui:prev");
-          }}
-        >
-          Prev
-          {!isVip && !freeForAll && <span className="ml-1 text-xs">🔒</span>}
-        </button>
-        
-        {/* الأزرار الوسطى */}
-        <div className="flex items-center gap-2">
-          {/* MutePeer 🔈 */}
-          <button 
-            onClick={() => emit("ui:toggleRemoteAudio")}
-            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 backdrop-blur-sm text-white border border-white/20 hover:bg-white/10 transition-all duration-200 flex items-center justify-center text-sm sm:text-base" 
-            aria-label="Mute remote"
-          >
-            🔈
-          </button>
+    <>
+      {/* Prev ⏮️ كبير - يسار أعلى الشريط */}
+      <button
+        data-ui="btn-prev"
+        onClick={(e)=>{e.preventDefault(); if(!isVip && !freeForAll){ emit("ui:upsell","prev"); return;} emit("ui:prev");}}
+        className="fixed bottom-[92px] left-3 z-50 w-24 h-12 sm:w-28 sm:h-14 rounded-xl bg-black/40 text-white border border-white/20 hover:bg-black/50 backdrop-blur font-medium"
+        aria-label="Previous"
+      >⏮️</button>
 
-          {/* Mic 🎙️ */}
-          <button 
-            onClick={handleMicToggle}
-            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg backdrop-blur-sm text-white border transition-all duration-200 flex items-center justify-center text-sm sm:text-base ${
-              isMicOn 
-                ? 'bg-green-600/30 border-green-400/40 hover:bg-green-500/40' 
-                : 'bg-red-600/30 border-red-400/40 hover:bg-red-500/40'
-            }`}
-            aria-label={isMicOn ? "Mute mic" : "Unmute mic"}
-            aria-pressed={!isMicOn}
-          >
-            {isMicOn ? '🎙️' : '🔇'}
-          </button>
+      {/* Next ⏭️ كبير - يمين أعلى الشريط */}
+      <button
+        data-ui="btn-next"
+        onClick={(e)=>{e.preventDefault(); emit("ui:next");}}
+        className="fixed bottom-[92px] right-3 z-50 w-24 h-12 sm:w-28 sm:h-14 rounded-xl bg-emerald-600/80 text-white border border-emerald-400/60 hover:bg-emerald-700/80 backdrop-blur font-medium"
+        aria-label="Next"
+      >⏭️</button>
 
-          {/* Camera 📹 */}
-          <button 
-            onClick={handleCamToggle}
-            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg backdrop-blur-sm text-white border transition-all duration-200 flex items-center justify-center text-sm sm:text-base ${
-              isCamOn 
-                ? 'bg-green-600/30 border-green-400/40 hover:bg-green-500/40' 
-                : 'bg-red-600/30 border-red-400/40 hover:bg-red-500/40'
-            }`}
-            aria-label={isCamOn ? "Turn off camera" : "Turn on camera"}
-            aria-pressed={!isCamOn}
-          >
-            {isCamOn ? '📹' : '📷'}
-          </button>
-
-          {/* Like ❤ */}
-          <button 
-            onClick={() => emit("ui:like", { isLiked: true })}
-            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 backdrop-blur-sm text-white border border-pink-400/40 hover:bg-pink-500/40 transition-all duration-200 flex items-center justify-center text-sm sm:text-base" 
-            aria-label="Like"
-          >
-            ❤
-          </button>
-
-          {/* Masks 🤡 (VIP gate) */}
-          <button 
-            onClick={() => {
-              if (!isVip && !freeForAll) {
-                emit("ui:upsell", "masks");
-                return;
-              }
-              emit("ui:toggleMasks");
-            }}
-            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg backdrop-blur-sm text-white border transition-all duration-200 flex items-center justify-center relative text-sm sm:text-base ${
-              !isVip && !freeForAll
-                ? 'bg-black/10 border-white/10 opacity-60' 
-                : 'bg-black/20 border-white/20 hover:bg-white/10'
-            }`}
-            aria-label="Masks"
-          >
-            🤡
-            {!isVip && !freeForAll && <span className="absolute -top-1 -right-1 text-[10px]">🔒</span>}
-          </button>
-
-          {/* Settings ⚙️ */}
-          <button 
-            onClick={() => router.push('/settings')}
-            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 backdrop-blur-sm text-white border border-white/20 hover:bg-white/10 transition-all duration-200 flex items-center justify-center text-sm sm:text-base" 
-            aria-label="Settings"
-          >
-            ⚙️
-          </button>
-
-          {/* Pause ⏯️ */}
-          <button 
-            onClick={handlePlayToggle}
-            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg backdrop-blur-sm text-white border transition-all duration-200 flex items-center justify-center text-sm sm:text-base ${
-              isPaused 
-                ? 'bg-orange-600/30 border-orange-400/40 hover:bg-orange-500/40' 
-                : 'bg-green-600/30 border-green-400/40 hover:bg-green-500/40'
-            }`}
-            aria-label={isPaused ? "Resume" : "Pause"}
-            aria-pressed={isPaused}
-          >
-            {isPaused ? '▶️' : '⏸️'}
-          </button>
-
-          {/* Report 🚩 */}
-          <button 
-            onClick={() => emit("ui:report")}
-            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-red-600/30 backdrop-blur-sm text-white border border-red-400/40 hover:bg-red-500/40 transition-all duration-200 flex items-center justify-center text-sm sm:text-base" 
-            aria-label="Report"
-          >
-            🚩
-          </button>
+      {/* شريط الأدوات السفلي */}
+      <section data-toolbar className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 bottom-4 sm:bottom-6 z-40">
+        <div className="flex items-center gap-2 sm:gap-3 justify-center flex-wrap">
+          {/* يمين ← يسار */}
 
           {/* Messages 💬 */}
-          <button 
-            onClick={() => emit("ui:openMessaging" as any)}
-            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-purple-600/30 backdrop-blur-sm text-white border border-purple-400/40 hover:bg-purple-500/40 transition-all duration-200 flex items-center justify-center text-sm sm:text-base" 
+          <button
+            data-ui="btn-messages"
+            onClick={toggleMessages}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg border transition-all duration-200 flex items-center justify-center text-sm sm:text-base ${msgOpen?'bg-purple-600/40 border-purple-400/60 text-white':'bg-black/20 border-white/20 hover:bg-white/10 text-white'} `}
+            aria-pressed={msgOpen}
             aria-label="Messages"
-          >
-            💬
-          </button>
+          >💬</button>
+
+          {/* Like ❤ */}
+          <button
+            data-ui="btn-like"
+            onClick={()=>emit("ui:like",{isLiked:true})}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
+            aria-label="Like"
+          >❤</button>
+
+          {/* Mute remote 🔊 */}
+          <button
+            data-ui="btn-remote-audio"
+            onClick={()=>emit("ui:toggleRemoteAudio")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
+            aria-label="Mute remote"
+          >🔊</button>
+
+          {/* Mic 🎤 */}
+          <button
+            data-ui="btn-mic"
+            onClick={toggleMic}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border transition-all duration-200 flex items-center justify-center text-sm sm:text-base ${isMicOn?'bg-green-600/30 border-green-400/40 hover:bg-green-500/40':'bg-red-600/30 border-red-400/40 hover:bg-red-500/40'}`}
+            aria-label={isMicOn?"Mute mic":"Unmute mic"}
+            aria-pressed={!isMicOn}
+          >{isMicOn?'🎤':'🔇'}</button>
+
+          {/* Pause ⏸️ */}
+          <button
+            data-ui="btn-pause"
+            onClick={togglePlay}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border transition-all duration-200 flex items-center justify-center text-sm sm:text-base ${isPaused?'bg-orange-600/30 border-orange-400/40 hover:bg-orange-500/40':'bg-green-600/30 border-green-400/40 hover:bg-green-500/40'}`}
+            aria-label={isPaused?'Resume':'Pause'}
+            aria-pressed={isPaused}
+          >{isPaused?'▶️':'⏸️'}</button>
+
+          {/* Settings ⚙️ */}
+          <button
+            data-ui="btn-settings"
+            onClick={()=>{ try{window.location.href='/settings'}catch{} }}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
+            aria-label="Settings"
+          >⚙️</button>
+
+          {/* Masks 🎭 */}
+          <button
+            data-ui="btn-masks"
+            onClick={()=>{ if(!isVip && !freeForAll){ emit("ui:upsell","masks"); return; } emit("ui:toggleMasks"); }}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
+            aria-label="Masks"
+          >🎭</button>
+
+          {/* Report 🚩 */}
+          <button
+            data-ui="btn-report"
+            onClick={()=>emit("ui:report")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-red-600/30 text-white border border-red-400/40 hover:bg-red-500/40 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
+            aria-label="Report"
+          >🚩</button>
         </div>
-        
-        {/* Next - يمين (أكبر قليلاً) */}
-        <button 
-          className="px-4 sm:px-6 py-2 sm:py-3 rounded-lg bg-emerald-600/80 backdrop-blur-sm text-white border border-emerald-400/60 hover:bg-emerald-700/80 transition-all duration-200 font-medium text-sm sm:text-base" 
-          aria-label="Next" 
-          onClick={(e)=>{e.preventDefault(); emit("ui:next");}}
-        >
-          Next
-        </button>
-      </div>
-    </section>
+      </section>
+    </>
   );
 }
