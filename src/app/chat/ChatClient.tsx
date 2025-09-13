@@ -71,27 +71,7 @@ export default function ChatClient(){
   useKeyboardShortcuts();
 
   useEffect(()=>{
-    // Enqueue on mount
-    
-(async ()=>{
-  try{
-    const ls = (k:string)=> (typeof window!=="undefined" && window.localStorage) ? window.localStorage.getItem(k) : null;
-    const anonId = (typeof window!=="undefined") ? (window.localStorage.getItem("ditona_anon")||"") : "";
-    // جنس المستخدم (المعلن) وموقعه من التخزين الحالي
-    const myGender = ls("ditona_myGender") || ls("ditona:filters:genders") || "all";
-    const geoRaw = ls("ditona_geo") || ls("ditona_geo_hint");
-    let geo:any = null;
-    try{ geo = geoRaw ? JSON.parse(geoRaw) : null; }catch{ geo=null; }
-    const country = geo?.country || "";
-    const city = geo?.city || "";
-
-    await fetch("/api/rtc/enqueue",{
-      method:"POST",
-      headers:{"content-type":"application/json"},
-      body: JSON.stringify({ anonId, gender: myGender, geo: {country, city} })
-    }).catch(()=>{});
-  }catch{}
-})();
+    // Enqueue moved to rtcFlow.ts to avoid duplication
     
     let off1=on("ui:toggleMic",()=>{ toggleMic(); });
     let off2=on("ui:toggleCam",()=>{ toggleCam(); });
@@ -270,17 +250,7 @@ export default function ChatClient(){
         localRef.current.play().catch(()=>{}); 
         
         // Start RTC matchmaking after media is ready
-        (async () => {
-          try {
-            await enqueueOnce();
-            const pair = await pollPair();
-            if (pair && localRef.current?.srcObject) {
-              await startRTCWithEndpoints(localRef.current.srcObject as MediaStream);
-            }
-          } catch (error) {
-            console.warn('RTC setup failed:', error);
-          }
-        })();
+        // Legacy RTC setup removed - now handled by rtcFlow.ts via startRtcFlowOnce() calls
       }
       setReady(true);
     }).catch(()=>{});
@@ -353,104 +323,7 @@ useEffect(() => () => { try { stopRtcSession('unmount'); } catch {} }, []);
     };
   },[vip]);
 
-  // === Ditona RTC helpers (injected) ===
-  async function getAnonId(){
-    let id = typeof window!=="undefined" ? localStorage.getItem("ditona_anon") : null;
-    if(!id && typeof window!=="undefined"){ id = `anon-${Date.now().toString(36)}-${Math.floor(Math.random()*1e6).toString(36)}`; localStorage.setItem("ditona_anon", id); }
-    return id||"";
-  }
-  async function enqueueOnce(){
-    const anonId = await getAnonId();
-    try{ await fetch("/api/rtc/enqueue",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({anonId})}); }catch{}
-  }
-  async function pollPair(ms=1000){
-    const anonId = await getAnonId();
-    for(let i=0;i<60;i++){
-      try{
-        const r = await fetch("/api/rtc/matchmake", { method: "POST", cache: "no-store" });
-        const j = await r.json();
-        
-if(j?.pairId && j?.role){
-  try{
-    if(j?.peerMeta){
-      localStorage.setItem("ditona:peer:meta", JSON.stringify(j.peerMeta));
-      __updatePeerBadges(j.peerMeta);
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:j.peerMeta}));
-      }
-    }
-  }catch{}
-  localStorage.setItem("ditona_pair", j.pairId);
-  localStorage.setItem("ditona_role", j.role);
-  return j;
-}
-      }catch{}
-      await new Promise(res=>setTimeout(res, ms));
-      // try to progress pairing from server
-      try{ await fetch("/api/rtc/matchmake",{method:"POST"}); }catch{}
-    }
-    return null;
-  }
-  async function startRTCWithEndpoints(stream: MediaStream){
-    const pairId = localStorage.getItem("ditona_pair")||"";
-    const role = localStorage.getItem("ditona_role")||"caller";
-    const anonId = await getAnonId();
-    const iceServers = (typeof process!=="undefined" && process.env.NEXT_PUBLIC_TURN_URL)
-      ? [{urls: process.env.NEXT_PUBLIC_TURN_URL as string, username: process.env.NEXT_PUBLIC_TURN_USER as string|undefined, credential: process.env.NEXT_PUBLIC_TURN_PASS as string|undefined}]
-      : [{urls:"stun:stun.l.google.com:19302"}];
-
-    const pc = new RTCPeerConnection({iceServers});
-    stream.getTracks().forEach(t=>pc.addTrack(t, stream));
-    
-    // Set up remote video handler BEFORE any SDP operations
-    pc.ontrack = (event) => {
-      const remoteVideo = document.getElementById('remoteVideo') as HTMLVideoElement;
-      if (remoteVideo && event.streams[0]) {
-        remoteVideo.srcObject = event.streams[0];
-        remoteVideo.muted = true; // Start muted for autoplay compatibility
-        remoteVideo.play().catch(() => {});
-      }
-    };
-    
-    pc.onicecandidate = async (e)=>{ if(e.candidate){ try{ await fetch("/api/rtc/ice",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,candidate:e.candidate,anonId})}); }catch{} } };
-
-    async function pollICE(){
-      for(let i=0;i<200;i++){
-        try{
-          const r = await fetch(`/api/rtc/ice?pairId=${encodeURIComponent(pairId)}&anonId=${encodeURIComponent(anonId)}`);
-          const j = await r.json(); if(j?.candidate){ try{ await pc.addIceCandidate(j.candidate); }catch{} }
-        }catch{}
-        await new Promise(r=>setTimeout(r,500));
-      }
-    }
-
-    if(role==="caller"){
-      const offer = await pc.createOffer({offerToReceiveAudio:true, offerToReceiveVideo:true});
-      await pc.setLocalDescription(offer);
-      await fetch("/api/rtc/offer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"caller",sdp:offer,anonId})});
-      // poll answer
-      for(let i=0;i<60;i++){
-        const anonId = await getAnonId();
-      const r = await fetch(`/api/rtc/answer?pairId=${encodeURIComponent(pairId)}&role=caller&anonId=${encodeURIComponent(anonId)}`);
-        const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
-        await new Promise(res=>setTimeout(res,1000));
-      }
-    }else{
-      // callee path: wait for offer first
-      for(let i=0;i<60;i++){
-        const anonId = await getAnonId();
-      const r = await fetch(`/api/rtc/offer?pairId=${encodeURIComponent(pairId)}&role=callee&anonId=${encodeURIComponent(anonId)}`);
-        const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
-        await new Promise(res=>setTimeout(res,1000));
-      }
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await fetch("/api/rtc/answer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"callee",sdp:answer,anonId})});
-    }
-    pollICE().catch(()=>{});
-    (window as any).ditonaPC = pc; // debug
-    return pc;
-  }
+  // === Legacy RTC helpers removed - now using rtcFlow.ts ===
 
   function toggleCountry(code:string){ 
     const newCountries = countries.includes(code) ? countries.filter(c=>c!==code) : [...countries,code];
