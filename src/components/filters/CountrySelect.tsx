@@ -1,3 +1,4 @@
+import FilterBar from "@/app/chat/components/FilterBar";
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useFilters } from "@/state/filters";

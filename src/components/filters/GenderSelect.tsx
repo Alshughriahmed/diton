@@ -1,3 +1,4 @@
+import FilterBar from "@/app/chat/components/FilterBar";
 "use client";
 import { useFilters, type GenderOpt } from "@/state/filters";
 import { GENDERS } from "@/data/genders";

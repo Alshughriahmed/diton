@@ -1,7 +1,5 @@
 "use client";
 import { useEffect } from "react";
-import GenderSelect from "./GenderSelect";
-import CountrySelect from "./CountrySelect";
 import { useFilters } from "@/state/filters";
 
 export default function FilterBar(){
