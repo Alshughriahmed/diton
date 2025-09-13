@@ -17,7 +17,7 @@ import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
 import ChatToolbar from "@/components/chat/ChatToolbar";
 import ChatMessagingBar from "@/components/chat/ChatMessaging";
-import QueueBadge from "@/components/chat/QueueBadge";
+// import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
@@ -492,15 +492,13 @@ if(j?.found && j?.pairId){
             age={peerInfo.age}
           />
           
-          {/* Queue length badge - Top Right overlay */}
-          <div className="absolute top-2 right-2 z-50 pointer-events-none">
+          {/* Queue Badge - Hidden per requirements */}
+          {/* <div className="absolute top-2 right-2 z-50 pointer-events-none">
             <QueueBadge />
-          </div>
+          </div> */}
           
-          {/* Filters - Top Right (below queue badge) */}
-          <div className="absolute top-12 right-2 z-40">
-            <FilterBar />
-          </div>
+          {/* Filters - Top Right (NEW POSITIONING) */}
+          <FilterBar />
           
           {/* Like System - Bottom Right */}
           <div className="absolute bottom-4 right-4 z-30">
