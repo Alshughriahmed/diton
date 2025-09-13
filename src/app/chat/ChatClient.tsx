@@ -370,12 +370,14 @@ useEffect(() => () => { try { stopRtcSession('unmount'); } catch {} }, []);
         const r = await fetch("/api/rtc/matchmake", { method: "POST", cache: "no-store" });
         const j = await r.json();
         
-if(j?.found && j?.pairId){
+if(j?.pairId && j?.role){
   try{
     if(j?.peerMeta){
       localStorage.setItem("ditona:peer:meta", JSON.stringify(j.peerMeta));
       __updatePeerBadges(j.peerMeta);
-      window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:j.peerMeta}));
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:j.peerMeta}));
+      }
     }
   }catch{}
   localStorage.setItem("ditona_pair", j.pairId);
