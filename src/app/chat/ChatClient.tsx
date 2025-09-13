@@ -11,7 +11,6 @@ import type { GenderOpt } from "@/utils/filters";
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import MessageSystem from "@/components/chat/MessageSystem";
-import RemoteTopRight from "@/components/chat/RemoteTopRight";
 import PeerInfoCard from "@/components/chat/PeerInfoCard";
 import PeerMetadata from "@/components/chat/PeerMetadata";
 import MyControls from "@/components/chat/MyControls";
@@ -500,7 +499,7 @@ if(j?.found && j?.pairId){
           
           {/* Filters - Top Right (below queue badge) */}
           <div className="absolute top-12 right-2 z-40">
-            <RemoteTopRight />
+            <FilterBar />
           </div>
           
           {/* Like System - Bottom Right */}

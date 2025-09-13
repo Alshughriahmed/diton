@@ -1,7 +1,6 @@
+import FilterBar from "@/app/chat/components/FilterBar";
 "use client";
 
-import CountrySelect from "../filters/CountrySelect";
-import GenderSelect from "../filters/GenderSelect";
 
 /**
  * فلاتر أعلى يمين القسم العلوي (منطقة الطرف الثاني)
