@@ -1,47 +1,82 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { on, off } from "@/utils/events";
+import { emit } from "@/utils/events";
 
-const EMOJIS = "😊 😀 😘 🤩 ☺️ 😋 🤪 😜 🤗 🤔 🫣 😏 😴 🤤 💋 ❤️ 💔 💯 💥 💫 💬 💦 👍 🫦 👄 👅 🧖‍♀️ 🔥 🥂 🍌 🌹 🩱 👙 🌨 🛀 💯 🥂 🏞".split(/\s+/).filter(Boolean);
+const EMOJIS = ["😊","😀","😘","🤩","☺️","😋","🤪","😜","🤗","🤔","🫣","😏","😴","🤤","💋","❤️","💔","💯","💥","💫","💬","💦","👍","🫦","👄","👅","🧖‍♀️","🔥","🥂","🍌","🌹","🩱","👙","🌨","🛀","🏞"];
 
 export default function ChatMessagingBar(){
-  const [open, setOpen] = useState(false);
-  const [msg, setMsg] = useState("");
-  const [bottom, setBottom] = useState(88);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [open,setOpen]=useState(false);
+  const [text,setText]=useState("");
+  const [showEmoji,setShowEmoji]=useState(false);
+  const barRef = useRef<HTMLDivElement>(null);
 
-  useEffect(()=>{ const a=()=>setOpen(true), b=()=>setOpen(false); on("ui:openMessaging",a); on("ui:closeMessaging",b); return ()=>{ off("ui:openMessaging",a); off("ui:closeMessaging",b); }; },[]);
+  // open/close by toolbar
   useEffect(()=>{
-    const vv = (window as any).visualViewport as VisualViewport | undefined;
-    if(!vv) return;
-    const h = () => { const kb = Math.max(0, window.innerHeight - vv.height); setBottom(88 + (kb>0 ? kb - 12 : 0)); };
-    vv.addEventListener("resize", h); vv.addEventListener("scroll", h); h();
-    return ()=>{ vv.removeEventListener("resize", h); vv.removeEventListener("scroll", h); };
+    const onOpen = ()=>setOpen(true);
+    const onClose= ()=>{ setOpen(false); setShowEmoji(false); };
+    window.addEventListener("ui:openMessaging", onOpen as any);
+    window.addEventListener("ui:closeMessaging", onClose as any);
+    return ()=>{ window.removeEventListener("ui:openMessaging",onOpen as any); window.removeEventListener("ui:closeMessaging",onClose as any); };
   },[]);
+
+  // keep above keyboard using visualViewport
+  useEffect(()=>{
+    const vv:any = (window as any).visualViewport;
+    if(!vv) return;
+    const handler=()=>{
+      if(!barRef.current) return;
+      const bottom = Math.max(8, (vv.height < window.innerHeight ? (window.innerHeight - vv.height + 8) : 8));
+      barRef.current.style.bottom = `calc(env(safe-area-inset-bottom) + ${bottom}px)`;
+    };
+    vv.addEventListener("resize", handler);
+    vv.addEventListener("scroll", handler);
+    handler();
+    return ()=>{ vv.removeEventListener("resize", handler); vv.removeEventListener("scroll", handler); };
+  },[]);
+
+  const send = ()=>{
+    const t = text.trim();
+    if(!t) return;
+    console.log('[chat:send]', t);
+    // HUD hook: يبقى نصيًا بلا صناديق
+    window.dispatchEvent(new CustomEvent("ditona:chat:sent",{detail:{text:t, ts:Date.now()}}));
+    setText("");
+  };
 
   if(!open) return null;
 
-  const pick = (e:string) => {
-    const el = inputRef.current;
-    const start = el?.selectionStart ?? msg.length;
-    const end = el?.selectionEnd ?? start;
-    const next = msg.slice(0,start)+e+msg.slice(end);
-    setMsg(next);
-    requestAnimationFrame(()=>{ try{ el?.setSelectionRange(start+e.length,start+e.length); el?.focus(); }catch{} });
-  };
-  const send = () => { const t = msg.trim(); if(!t) return; console.log("[chat:send]", t); setMsg(""); setOpen(false); };
-
   return (
-    <div className="fixed left-24 right-24 sm:left-28 sm:right-28 z-50" style={{ bottom: `calc(env(safe-area-inset-bottom) + ${bottom}px)` }}>
-      <div className="rounded-2xl bg-black/60 backdrop-blur-md border border-white/15 shadow-lg p-2">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {EMOJIS.map((e,i)=>(
-            <button key={i} onClick={()=>pick(e)} className="min-w-8 h-8 px-2 rounded bg-white/10 hover:bg-white/20 text-base">{e}</button>
-          ))}
-        </div>
-        <div className="mt-2 flex items-center gap-2">
-          <input ref={inputRef} value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); send(); } }} placeholder="Type your message here …" className="flex-1 px-3 py-2 rounded-lg bg-zinc-800/80 text-white outline-none" maxLength={500}/>
-          <button onClick={send} className="px-4 py-2 rounded-lg bg-emerald-600/80 hover:bg-emerald-700/80 text-white">Send</button>
+    <div ref={barRef} data-ui="messaging-bar"
+         className="fixed left-0 right-0 z-[65] pointer-events-auto"
+         style={{bottom:"calc(env(safe-area-inset-bottom)+8px)"}}>
+      <div className="relative mx-2 sm:mx-4 rounded-2xl bg-black/45 backdrop-blur border border-white/15 px-3 py-2">
+        {/* emoji drawer inside container */}
+        {showEmoji && (
+          <div className="absolute -top-14 left-0 right-0 mx-auto max-w-[min(92vw,640px)]">
+            <div className="rounded-2xl bg-black/60 backdrop-blur border border-white/10 px-2 py-1 overflow-x-auto whitespace-nowrap">
+              {EMOJIS.map(e=>(
+                <button key={e} className="px-1.5 py-1 text-xl" onClick={()=>setText(t=>t+e)}>{e}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          {/* emoji toggle left */}
+          <button aria-label="Emoji" onClick={()=>setShowEmoji(v=>!v)}
+                  className="w-10 h-10 rounded-xl bg-white/10">🙂</button>
+
+          {/* input */}
+          <input
+            value={text}
+            onChange={e=>setText(e.target.value)}
+            onFocus={()=>setShowEmoji(false)}
+            placeholder="Type your message here ..."
+            className="flex-1 h-10 rounded-xl bg-zinc-800/70 text-white px-3 outline-none border border-white/10"/>
+
+          {/* send on right */}
+          <button aria-label="Send" onClick={send}
+                  className="w-12 h-10 rounded-xl bg-emerald-600 text-white">➤</button>
         </div>
       </div>
     </div>

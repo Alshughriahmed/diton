@@ -17,12 +17,13 @@ import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
 import ChatToolbar from "./components/ChatToolbar";
 import ChatMessagingBar from "./components/ChatMessagingBar";
+import MessageHud from "./components/MessageHud";
+import FilterBar from "./components/FilterBar";
 // import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
-import FilterBar from "./components/FilterBar";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
@@ -502,6 +503,9 @@ if(j?.pairId && j?.role){
           {/* Filters - Top Right (NEW POSITIONING) */}
           <FilterBar />
           
+          {/* HUD - آخر 3 رسائل */}
+          <MessageHud />
+          
           {/* Like System - Bottom Right */}
           <div className="absolute bottom-4 right-4 z-30">
             <LikeSystem />
@@ -532,16 +536,7 @@ if(j?.pairId && j?.role){
           {/* My Controls - Top Right */}
           <MyControls />
 
-          {/* Enhanced Message System */}
-          <div className="absolute inset-x-0 bottom-14">
-            <MessageSystem 
-              isGuest={isGuest}
-              onSend={(message) => {
-                console.log('Message sent:', message);
-                // TODO: إرسال الرسالة عبر WebRTC أو Socket.io
-              }} 
-            />
-          </div>
+          {/* No enhanced message system - replaced by stub */}
 
           {/* Gesture layer */}
           <div id="gesture-layer" className="absolute inset-0 -z-10" />

@@ -1,213 +1,144 @@
 "use client";
-
-import { useEffect, useMemo, useRef, useState } from "react";
-import { getAllRegions } from "@/lib/regions";
+import { useEffect, useMemo, useState } from "react";
+import { emit } from "@/utils/events";
+import { COUNTRIES, ALL_COUNTRIES_OPTION } from "@/data/countries";
 
 type GenderKey = "everyone"|"female"|"male"|"couples"|"lgbt";
 
-const flag = (cc:string) =>
-  cc.length===2 ? String.fromCodePoint(...[...cc.toUpperCase()].map(c=>127397+c.charCodeAt(0))) : "🌍";
+function flagOf(cc:string){
+  if(!cc) return "🌍";
+  return cc.replace(/./g,c=>String.fromCodePoint(0x1f1e6+(c.toUpperCase().charCodeAt(0)-65)));
+}
 
-const useOutsideClose = (ref: React.RefObject<HTMLDivElement | null>, onClose: ()=>void) => {
-  useEffect(() => {
-    const h = (e: MouseEvent) => { 
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose(); 
-    };
-    const k = (e: KeyboardEvent) => { 
-      if (e.key==="Escape") onClose(); 
-    };
-    document.addEventListener("mousedown", h);
-    document.addEventListener("keydown", k);
-    return () => { 
-      document.removeEventListener("mousedown", h); 
-      document.removeEventListener("keydown", k); 
-    };
-  }, [ref, onClose]);
-};
+export default function FilterBar(){
+  const [openLoc,setOpenLoc]=useState(false);
+  const [openGen,setOpenGen]=useState(false);
 
-export default function FilterBar() {
-  const [openG, setOpenG] = useState(false);
-  const [openC, setOpenC] = useState(false);
-  const [q, setQ] = useState("");
-  const [myCountry, setMyCountry] = useState<string>("");
+  const [userCC,setUserCC]=useState<string|undefined>(undefined);
+  const [countries,setCountries]=useState<string[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:countries")||"[]"));
+  const [genders,setGenders]=useState<GenderKey[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:genders")||'["everyone"]'));
 
-  // persisted selections (local UI only; backend still clamps)
-  const [selG, setSelG] = useState<GenderKey[]>(() => {
-    if (typeof window==="undefined") return ["everyone"];
-    try { 
-      const v = JSON.parse(localStorage.getItem("ditona:filters:genders")||"[]"); 
-      return (v.length? v : ["everyone"]); 
-    } catch { 
-      return ["everyone"]; 
-    }
-  });
-  
-  const [selC, setSelC] = useState<string[]>(() => {
-    if (typeof window==="undefined") return [];
-    try { 
-      const v = JSON.parse(localStorage.getItem("ditona:filters:countries")||"[]"); 
-      return v; 
-    } catch { 
-      return []; 
-    }
-  });
+  useEffect(()=>{ // محاولة قراءة بلد المستخدم إن وُجد
+    try{
+      const g = JSON.parse(localStorage.getItem("ditona:geo")||"{}");
+      if(g?.countryCode) setUserCC(g.countryCode);
+    }catch{}
+  },[]);
+  useEffect(()=>{ localStorage.setItem("ditona:filters:countries",JSON.stringify(countries)); },[countries]);
+  useEffect(()=>{ localStorage.setItem("ditona:filters:genders",JSON.stringify(genders)); },[genders]);
 
-  useEffect(() => {
-    // fetch geo once
-    (async () => {
-      try {
-        const r = await fetch("/api/geo", { cache: "no-store" }).then(r=>r.ok?r.json():null);
-        if (r?.country) setMyCountry(String(r.country).toUpperCase());
-      } catch {}
-    })();
-  }, []);
+  const regions = useMemo(() => {
+    const base = COUNTRIES || [];
+    const rest = base.filter(r => r.code !== userCC);
+    const all = [
+      ...(userCC ? base.filter(r=>r.code===userCC) : []),
+      ALL_COUNTRIES_OPTION,
+      ...rest.sort((a,b)=>a.name.localeCompare(b.name))
+    ];
+    return all;
+  },[userCC]);
 
-  // save to localStorage on change
-  useEffect(() => {
-    if (typeof window!=="undefined") localStorage.setItem("ditona:filters:genders", JSON.stringify(selG));
-  }, [selG]);
-  
-  useEffect(() => {
-    if (typeof window!=="undefined") localStorage.setItem("ditona:filters:countries", JSON.stringify(selC));
-  }, [selC]);
+  const [q,setQ]=useState("");
+  const view = regions.filter(r=>r.name.toLowerCase().includes(q.toLowerCase()) || r.code.toLowerCase().includes(q.toLowerCase()));
 
-  // countries list: "All Countries" then myCountry, then rest filtered, two columns
-  const countries = useMemo(() => {
-    const base = getAllRegions();
-    const seen = new Set<string>();
-    const arr: Array<{code:string; name:string}> = [];
-    arr.push({code:"ALL", name:"All Countries"});
-    if (myCountry) arr.push({code:myCountry, name: base.find(x=>x.code===myCountry)?.name || myCountry});
-    for (const c of base) {
-      if (c.code===myCountry) continue;
-      if (q && !c.name.toLowerCase().includes(q.toLowerCase())) continue;
-      if (!seen.has(c.code)) { arr.push(c); seen.add(c.code); }
-    }
-    return arr;
-  }, [q, myCountry]);
+  const badgeCnt = countries.length>0 && !countries.includes("ALL") ? countries.length : 0;
 
-  // popover refs + outside close
-  const popG = useRef<HTMLDivElement>(null);
-  const popC = useRef<HTMLDivElement>(null);
-  useOutsideClose(popG, () => setOpenG(false));
-  useOutsideClose(popC, () => setOpenC(false));
-
-  // helpers
-  const toggleGender = (g: GenderKey) => {
-    if (g==="everyone") { setSelG(["everyone" as GenderKey]); return; }
-    const withoutEveryone = selG.filter(x=>x!=="everyone") as ("female"|"male"|"couples"|"lgbt")[];
-    const exists = withoutEveryone.includes(g as any);
-    let next: GenderKey[] = exists ? withoutEveryone.filter(x=>x!==g) : [...withoutEveryone, g as any];
-    // allow up to 2; feel free-all now
-    if (next.length===0) next = ["everyone" as GenderKey];
-    if (next.length>2) next = next.slice(-2);
-    setSelG(next);
-  };
-  
-  const toggleCountry = (cc: string) => {
-    if (cc==="ALL") { setSelC([]); return; }
-    const exists = selC.includes(cc);
-    let next = exists ? selC.filter(x=>x!==cc) : [...selC, cc];
-    // allow up to 15; free-all now
-    if (next.length>15) next = next.slice(0,15);
-    setSelC(next);
+  const toggleCountry=(cc:string)=>{
+    if(cc==="ALL"){ setCountries(["ALL"]); return; }
+    setCountries(prev=>{
+      const base = (prev.includes("ALL") ? [] : prev).slice();
+      const i = base.indexOf(cc);
+      if(i>=0){ base.splice(i,1); return base; }
+      if(base.length>=15) return base; // VIP cap محفوظ لاحقًا
+      base.push(cc); return base;
+    });
   };
 
-  const genderCount = selG.includes("everyone") ? 0 : selG.length;
-  const countryCount = selC.length;
-
-  const genderOptions = [
-    {k:"everyone", label:"Everyone", icon:"👥", clr:""},
-    {k:"female",   label:"Female",   icon:"♀️", clr:"text-rose-300"},
-    {k:"male",     label:"Male",     icon:"♂️", clr:"text-blue-300"},
-    {k:"couples",  label:"Couples",  icon:"👫", clr:"text-purple-300"},
-    {k:"lgbt",     label:"LGBT",     icon:"🏳️‍🌈", clr:""},
-  ];
+  const toggleGender=(g:GenderKey)=>{
+    if(g==="everyone"){ setGenders(["everyone"]); return; }
+    setGenders(prev=>{
+      let base=prev.includes("everyone")?[]:[...prev];
+      const i=base.indexOf(g);
+      if(i>=0){ base.splice(i,1); if(base.length===0) base=["everyone"]; return base; }
+      if(base.length>=2) return base;
+      base.push(g); return base;
+    });
+  };
 
   return (
-    <div className="absolute top-1 right-1 z-[80] flex items-center gap-3 pointer-events-none select-none">
+    <div className="absolute top-1 right-1 z-[80] flex gap-2 select-none">
       {/* Location button */}
-      <div className="relative pointer-events-auto">
-        <button
-          type="button"
-          data-ui="country-button"
-          aria-haspopup="listbox"
-          aria-expanded={openC}
-          onClick={() => { setOpenC(v=>!v); setOpenG(false); }}
-          className="h-8 px-3 rounded-xl bg-black/35 hover:bg-black/45 text-white text-sm flex items-center gap-2 backdrop-blur transition"
-        >
-          <span aria-hidden>🌍</span>
-          <span>Location</span>
-          {countryCount>0 && <span className="ml-1 text-[11px] px-1.5 py-0.5 rounded bg-white/20">{countryCount}</span>}
+      <div className="relative">
+        <button data-ui="country-button"
+          onClick={()=>{setOpenLoc(v=>!v); setOpenGen(false);}}
+          className="h-9 px-3 rounded-full bg-black/40 text-white border border-white/15 backdrop-blur flex items-center gap-2">
+          <span>🌍</span><span>Location</span>
+          {badgeCnt>0 && <span className="ml-1 text-xs rounded-full bg-white/20 px-2 py-0.5">{badgeCnt}</span>}
         </button>
-
-        {openC && (
-          <div ref={popC}
-               className="absolute right-0 mt-2 w-[min(92vw,560px)] max-h-[70vh] overflow-auto rounded-xl bg-zinc-900/95 text-zinc-100 shadow-xl ring-1 ring-white/10 p-3 grid gap-2"
-               style={{gridTemplateRows:"auto 1fr"}}>
-            <div className="flex items-center gap-2">
-              <input
-                placeholder="Search country"
-                value={q}
-                onChange={e=>setQ(e.target.value)}
-                className="w-full rounded-lg bg-zinc-800/70 px-3 py-2 text-sm outline-none"
-              />
-              <button className="px-3 py-2 text-sm rounded-lg bg-zinc-800/70 hover:bg-zinc-700" onClick={()=>{setQ(""); setOpenC(false);}}>
-                Done
-              </button>
+        {openLoc && (
+          <div role="dialog" aria-label="Location"
+               className="absolute mt-2 right-0 w-[min(92vw,640px)] max-h-[60vh] overflow-auto rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur p-3 shadow-xl z-[90]"
+               onKeyDown={(e)=>{ if(e.key==="Escape") setOpenLoc(false); }}>
+            <div className="flex items-center gap-2 mb-3">
+              <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search country"
+                     className="w-full h-10 px-3 rounded-xl bg-zinc-800/70 text-white outline-none border border-white/10"/>
+              <button onClick={()=>setOpenLoc(false)}
+                      className="h-10 px-4 rounded-xl bg-white/10 text-white">Done</button>
             </div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1">
-              {countries.map(c=>(
-                <button
-                  key={c.code}
-                  type="button"
-                  onClick={()=>toggleCountry(c.code)}
-                  className={"flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:bg-white/10 " + ( (c.code==="ALL" && selC.length===0) || (c.code!=="ALL" && selC.includes(c.code)) ? "bg-white/10" : "")}
-                >
-                  <span className="flex items-center gap-2">
-                    <span aria-hidden>{flag(c.code==="ALL"?"":c.code)}</span>
-                    <span className="text-sm">{c.name}</span>
-                  </span>
-                  <span className="text-xs opacity-60">{c.code==="ALL"?"":c.code}</span>
-                </button>
-              ))}
+            <div className="grid grid-cols-2 gap-2">
+              {view.map(r=>{
+                const active = countries.includes("ALL") ? r.code==="ALL" : countries.includes(r.code);
+                return (
+                  <button key={r.code}
+                          onClick={()=>toggleCountry(r.code)}
+                          className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left border ${active?'bg-indigo-600/20 border-indigo-400/40':'bg-white/5 border-white/10'} hover:bg-white/10`}>
+                    <div className="flex items-center gap-3">
+                      <span className="text-lg">{r.code==="ALL"?"🌐":flagOf(r.code)}</span>
+                      <span className="text-white">{r.name}</span>
+                    </div>
+                    <span className="text-xs text-white/60">{r.code}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
       </div>
 
       {/* Gender button */}
-      <div className="relative pointer-events-auto">
-        <button
-          type="button"
-          data-ui="gender-button"
-          aria-haspopup="listbox"
-          aria-expanded={openG}
-          onClick={() => { setOpenG(v=>!v); setOpenC(false); }}
-          className="h-8 px-3 rounded-xl bg-black/35 hover:bg-black/45 text-white text-sm flex items-center gap-2 backdrop-blur transition"
-        >
-          <span aria-hidden className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-rose-400">⚧</span>
-          <span>Gender</span>
-          {genderCount>0 && <span className="ml-1 text-[11px] px-1.5 py-0.5 rounded bg-white/20">{genderCount}</span>}
+      <div className="relative">
+        <button data-ui="gender-button"
+          onClick={()=>{setOpenGen(v=>!v); setOpenLoc(false);}}
+          className="h-9 px-3 rounded-full bg-black/40 text-white border border-white/15 backdrop-blur flex items-center gap-2">
+          <span>⚧</span><span>Gender</span>
         </button>
-
-        {openG && (
-          <div ref={popG}
-               className="absolute right-0 mt-2 w-[min(92vw,300px)] rounded-xl bg-zinc-900/95 text-zinc-100 shadow-xl ring-1 ring-white/10 p-2 grid">
-            {genderOptions.map(o=>(
-              <button key={o.k}
-                      type="button"
-                      onClick={()=>toggleGender(o.k as GenderKey)}
-                      className={"flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white/10 " + (selG.includes(o.k as GenderKey) ? "bg-white/10" : "")}>
-                <span className="flex items-center gap-2">
-                  <span aria-hidden className={o.clr}>{o.icon}</span>
-                  <span className="text-sm">{o.label}</span>
-                </span>
-                {selG.includes(o.k as GenderKey) ? <span className="text-xs opacity-70">Selected</span> : null}
-              </button>
-            ))}
-            <div className="flex justify-end pt-1">
-              <button className="px-3 py-2 text-sm rounded-lg bg-zinc-800/70 hover:bg-zinc-700" onClick={()=>setOpenG(false)}>Done</button>
+        {openGen && (
+          <div role="dialog" aria-label="Gender"
+               className="absolute mt-2 right-0 w-[min(92vw,360px)] max-h-[60vh] overflow-auto rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur p-3 shadow-xl z-[90]"
+               onKeyDown={(e)=>{ if(e.key==="Escape") setOpenGen(false); }}>
+            {([
+              {k:"everyone",label:"Everyone",icon:"👥"},
+              {k:"female",label:"Female",icon:"♀️"},
+              {k:"male",label:"Male",icon:"♂️"},
+              {k:"couples",label:"Couples",icon:"👫"},
+              {k:"lgbt",label:"LGBT",icon:"🏳️‍🌈"},
+            ] as Array<{k:GenderKey;label:string;icon:string}>).map(it=>{
+              const active = genders.includes(it.k as GenderKey);
+              return (
+                <button key={it.k}
+                        onClick={()=>toggleGender(it.k as GenderKey)}
+                        className={`w-full flex items-center justify-between rounded-xl px-3 py-3 mb-2 border ${active?'bg-blue-600/25 border-blue-400/40':'bg-white/5 border-white/10'} hover:bg-white/10`}>
+                  <span className="flex items-center gap-3">
+                    <span className="text-lg">{it.icon}</span>
+                    <span className="text-white">{it.label}</span>
+                  </span>
+                  {active && <span className="text-xs text-white/70">Selected</span>}
+                </button>
+              );
+            })}
+            <div className="text-xs text-white/50 mt-1">VIP users can select up to two genders.</div>
+            <div className="mt-3 flex justify-end">
+              <button onClick={()=>setOpenGen(false)} className="h-10 px-4 rounded-xl bg-white/10 text-white">Done</button>
             </div>
           </div>
         )}
