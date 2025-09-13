@@ -1,0 +1,61 @@
+Goal: إلغاء بقايا الفلاتر القديمة التي تُسبب فشل البناء
+Type error: Cannot find name 'GenderSelect' in src/components/filters/FilterBar.tsx
+وتوحيد الاستعمال على src/app/chat/components/FilterBar.tsx، ثم بناء، واختبار، ودفع/نشر.
+
+Do:
+
+# 0) بيئة نظيفة على أحدث وضع
+git fetch origin && git checkout -B fix/filters-unify origin/main
+
+# 1) تأكيد مكان الخطأ والبقايا القديمة
+rg -n "components/filters/FilterBar|<GenderSelect|<CountrySelect|RemoteTopRight" src || true
+
+# 2) اجعل الملف القديم مجرد re-export للملف الجديد (يتفادى الكومبايل)
+mkdir -p src/components/filters
+cat > src/components/filters/FilterBar.tsx <<'TS'
+export { default } from "@/app/chat/components/FilterBar";
+TS
+
+# 3) تأكد أنه لا يوجد أي استيراد لملفات قديمة أخرى
+rg -n "from .*/components/filters/(GenderSelect|CountrySelect)" src || true
+rg -n "<GenderSelect|<CountrySelect" src | grep -v "src/app/chat/components" || true
+
+# 4) إن وُجدت مراجع أخرى للقديم، حوّلها إلى الجديد:
+#   - استبدل أي import لـ components/filters/FilterBar بالنص الجديد
+#   - واحذف أي JSX <GenderSelect/> أو <CountrySelect/> غير مستخدمين
+# (تطبيق تلقائي آمن)
+git ls-files -z | xargs -0 sed -i 's#@\?/components/filters/FilterBar#@/app/chat/components/FilterBar#g'
+
+# 5) تحقق أن ChatClient يستعمل FilterBar (وليس RemoteTopRight)
+rg -n "RemoteTopRight" src/app/chat/ChatClient.tsx || true
+rg -n "<FilterBar"    src/app/chat/ChatClient.tsx || true
+
+# 6) بناء + فحوص
+pnpm -s build
+
+# 7) اختبار REST-RTC السريع
+bash _ops/acc_rtc.sh https://www.ditonachat.com
+
+# 8) التزم وادفع فرع الإصلاح
+git add -A
+git commit -m "fix(ui): unify filters; re-export legacy FilterBar to new chat FilterBar; remove old JSX refs"
+git push -u origin fix/filters-unify
+
+# 9) افتح PR ثم (اختياري) دمج إلى main بعد نجاح Preview
+echo "PR => https://github.com/Alshughriahmed/diton/compare/main...fix/filters-unify"
+
+# 10) بعد الدمج إلى main، تأكد من نشر Vercel ومرور البناء
+# وفي حال فشل clone في Vercel: Project > Settings > Git > Reconnect + Resync webhooks ثم Retry
+
+
+Acceptance:
+
+لا توجد أخطاء TypeScript/بناء.
+
+لا وجود لأي <GenderSelect/> أو <CountrySelect/> خارج ملفات الـ modal الجديدة.
+
+ChatClient يعرض أزرار الفلاتر الجديدة أعلى يمين القسم العلوي.
+
+bash _ops/acc_rtc.sh https://www.ditonachat.com ينتهي بـ RC=0.
+
+نشر Vercel (Preview ثم main) ناجح، والواجهة تعرض الأزرار الجديدة.
