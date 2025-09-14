@@ -5,6 +5,10 @@ import { sendRtcMetrics, type RtcMetrics } from '@/utils/metrics';
 const isAbort = (e:any)=> e && (e.name==='AbortError' || e.code===20);
 const swallowAbort = (e:any)=> { if(!isAbort(e)) throw e; };
 
+// Sleep helper and cooldown tracking
+const sleep = (ms:number)=>new Promise(r=>setTimeout(r,ms));
+let cooldownNext = false;
+
 const __kpi = {
   tEnq: 0, tMatched: 0, tFirstRemote: 0,
   reconnectStart: 0, reconnectDone: 0,
@@ -150,6 +154,11 @@ export function stop() {
     // Update phase
     state.phase = 'stopped';
     if (onPhaseCallback) onPhaseCallback('stopped');
+    
+    // Broadcast phase event
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'idle',role:null}}));
+    }
 
     // Abort any ongoing requests
     if (state.ac) { try { state.ac.abort(); } catch {} }
@@ -397,6 +406,11 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     onPhaseCallback = onPhase;
     onPhase('searching');
     
+    // Broadcast initial phase event
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'searching',role:null}}));
+    }
+    
     // Create new AbortController
     state.ac = new AbortController();
     
@@ -446,6 +460,10 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
           if (typeof window !== "undefined") {
             window.localStorage.setItem("ditona_pair", j.pairId);
             window.localStorage.setItem("ditona_role", j.role);
+            
+            // Broadcast pair and phase events
+            window.dispatchEvent(new CustomEvent('rtc:pair',{detail:{pairId:j.pairId,role:j.role}}));
+            window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'matched',role:j.role}}));
           }
           
           // Handle peer metadata
@@ -507,6 +525,11 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
         }
         state.phase = 'connected';
         onPhase('connected');
+        
+        // Broadcast connected phase event
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'connected',role:state.role}}));
+        }
       } else if (['disconnected', 'failed'].includes(connectionState)) {
         __kpi.iceTries++;
         __kpi.reconnectStart = (typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -529,6 +552,9 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
           remote.autoplay = true as any;
           remote.play?.().catch(() => {});
         }
+        
+        // Broadcast remote track event
+        window.dispatchEvent(new CustomEvent('rtc:remote-track',{detail:{stream:stream}}));
       }
       
       if (!__kpi.tFirstRemote) {
@@ -585,8 +611,23 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
   }
 }
 
-// Next function: stop current session then start new one
-export async function next(media: MediaStream) {
+// Next function with cooldown: stop current session, wait, then start new one
+export async function next(){
+  if(cooldownNext) return;
+  cooldownNext = true;
+  try{ 
+    stop(); 
+    await sleep(700); 
+    const localStream = getLocalStream();
+    if (localStream && onPhaseCallback) {
+      await start(localStream, onPhaseCallback);
+    }
+  }
+  finally{ cooldownNext = false; }
+}
+
+// Legacy next function for backward compatibility
+export async function nextWithMedia(media: MediaStream) {
   stop();
   if (onPhaseCallback) {
     await start(media, onPhaseCallback);
