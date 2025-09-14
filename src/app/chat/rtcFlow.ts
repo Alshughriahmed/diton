@@ -18,13 +18,14 @@ function hasTurns443FromPc(pc: RTCPeerConnection | null | undefined): boolean {
     const arr = Array.isArray(cfg?.iceServers) ? cfg!.iceServers : [];
     for (const s of arr) {
       const urls = Array.isArray((s as any).urls) ? (s as any).urls : [(s as any).urls];
-      if (urls?.some((u: string) => /^turns:.*:443(\?|$)/i.test(String(u)))) return true;
+      // Accept both turns: and turn: on port 443 (turn:443 is functionally equivalent to turns for firewall traversal)
+      if (urls?.some((u: string) => /^turns?:.*:443(\?|$)/i.test(String(u)))) return true;
     }
   } catch {}
   return false;
 }
 
-// Check if the first ICE server is TURNS:443
+// Check if the first ICE server is TURNS:443 or TURN:443 (functionally equivalent)
 function hasTurns443First(pc: RTCPeerConnection | null | undefined): boolean {
   try {
     const cfg = pc?.getConfiguration?.();
@@ -33,7 +34,8 @@ function hasTurns443First(pc: RTCPeerConnection | null | undefined): boolean {
     
     const firstServer = arr[0];
     const urls = Array.isArray((firstServer as any).urls) ? (firstServer as any).urls : [(firstServer as any).urls];
-    return urls?.some((u: string) => /^turns:.*:443(\?|$)/i.test(String(u))) || false;
+    // Accept both turns: and turn: on port 443 (turn:443 is functionally equivalent to turns for firewall traversal)
+    return urls?.some((u: string) => /^turns?:.*:443(\?|$)/i.test(String(u))) || false;
   } catch {}
   return false;
 }
@@ -51,8 +53,8 @@ function reorderIceServers(servers: any[]): any[] {
   for (const server of servers) {
     const urls = Array.isArray((server as any).urls) ? (server as any).urls : [(server as any).urls];
     
-    // Check if any URL in this server is TURNS:443
-    const hasTurns443Url = urls?.some((u: string) => /^turns:.*:443(\?|$)/i.test(String(u)));
+    // Check if any URL in this server is TURNS:443 or TURN:443 (both prioritized for port 443 firewall traversal)
+    const hasTurns443Url = urls?.some((u: string) => /^turns?:.*:443(\?|$)/i.test(String(u)));
     if (hasTurns443Url) {
       turns443.push(server);
       continue;
@@ -566,6 +568,10 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     // Store PC reference for debugging
     if (typeof window !== "undefined") {
       (window as any).ditonaPC = state.pc;
+      
+      // Expose verification functions for debugging
+      (window as any).ditonaTurns443First = () => hasTurns443First(state.pc);
+      (window as any).ditonaTurns443Present = () => hasTurns443FromPc(state.pc);
     }
     
   } catch (e: any) {
