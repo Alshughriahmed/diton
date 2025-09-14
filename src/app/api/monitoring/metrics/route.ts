@@ -14,7 +14,16 @@ async function store(m: any) {
     body,
     cache: 'no-store',
   }).catch(err => ({ ok:false, _e:String(err&&err.name||'err') } as any));
-  return { stored: !!(res as any)?.ok };
+  
+  if (!(res as any)?.ok) return { stored: false };
+  
+  try {
+    const data = await (res as any).json();
+    const stored = Array.isArray(data) && data.length > 0 && data[0] === "OK";
+    return { stored };
+  } catch {
+    return { stored: false };
+  }
 }
 
 export async function POST(req: Request) {

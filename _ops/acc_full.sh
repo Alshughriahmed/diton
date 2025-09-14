@@ -10,8 +10,8 @@ curl -s "$BASE/api/monitoring/metrics" | jq . || true
 echo "== metrics probe =="
 json='{"ts":'"$(date +%s000)"',"sessionId":"acc-'$(openssl rand -hex 6 2>/dev/null || echo abcd)'","matchMs":1200,"ttfmMs":800,"iceOk":true,"iceTries":1,"turns443":true}'
 out="$(curl -sS -X POST "$BASE/api/monitoring/metrics" -H 'content-type: application/json' -d "$json")"
-m_ok="$(echo "$out" | sed -n 's/.*"ok":\([^,}]*\).*/\1/p')"
-m_stored="$(echo "$out" | sed -n 's/.*"stored":\([^,}]*\).*/\1/p')"
+m_ok="$(echo "$out" | jq -r '.ok // ""')"
+m_stored="$(echo "$out" | jq -r '.stored // ""')"
 
 echo "== rtc acceptance =="
 WAIT_MS=500
