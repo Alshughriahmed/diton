@@ -1,0 +1,203 @@
+0) Preconditions
+
+لا تغييرات سابقة قيد التنفيذ.
+
+بيئة فيها UPSTASH_REDIS_REST_URL/TOKEN إن توفرت، وإلا التخزين يصبح no-op.
+
+1) Create file: src/utils/metrics.ts
+*** /dev/null
+--- a/src/utils/metrics.ts
+@@
++// Lightweight client-only metrics beacons
++export type RtcMetrics = {
++  ts: number;
++  sessionId: string;
++  pairId?: string;
++  role?: 'caller'|'callee';
++  matchMs?: number;
++  ttfmMs?: number;
++  reconnectMs?: number;
++  iceOk?: boolean;
++  iceTries?: number;
++  turns443?: boolean;
++};
++
++export function sendRtcMetrics(m: RtcMetrics) {
++  const payload = JSON.stringify(m);
++  const url = '/api/monitoring/metrics';
++  try {
++    if (typeof navigator !== 'undefined' && 'sendBeacon' in navigator) {
++      const blob = new Blob([payload], { type: 'application/json' });
++      (navigator as any).sendBeacon(url, blob);
++      return;
++    }
++  } catch {}
++  // Fallback
++  try {
++    fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: payload });
++  } catch {}
++}
+
+2) Create file: src/app/api/monitoring/metrics/route.ts
+*** /dev/null
+--- a/src/app/api/monitoring/metrics/route.ts
+@@
++import { NextResponse } from 'next/server';
++export const runtime = 'nodejs';
++
++const URL = process.env.UPSTASH_REDIS_REST_URL;
++const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
++
++async function store(m: any) {
++  if (!URL || !TOKEN) return { stored: false };
++  const key = `mx:${Date.now()}:${Math.random().toString(36).slice(2)}`;
++  const body = JSON.stringify([[ "SET", key, JSON.stringify(m), "EX", 604800 ]]); // 7d
++  const res = await fetch(URL, {
++    method: 'POST',
++    headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
++    body,
++    cache: 'no-store',
++  }).catch(() => null);
++  return { stored: !!(res && res.ok) };
++}
++
++export async function POST(req: Request) {
++  try {
++    const m = await req.json().catch(() => ({} as any));
++    const allowed = {
++      ts: m.ts|0,
++      sessionId: String(m.sessionId||''),
++      pairId: m.pairId ? String(m.pairId).slice(0,64) : undefined,
++      role: (m.role==='caller'||m.role==='callee') ? m.role : undefined,
++      matchMs: m.matchMs|0,
++      ttfmMs: m.ttfmMs|0,
++      reconnectMs: m.reconnectMs|0,
++      iceOk: !!m.iceOk,
++      iceTries: m.iceTries|0,
++      turns443: !!m.turns443,
++    };
++    const res = await store(allowed);
++    return NextResponse.json({ ok: true, ...res }, { status: 200 });
++  } catch {
++    return NextResponse.json({ ok: false }, { status: 200 });
++  }
++}
+
+3) Patch (safe) src/app/chat/rtcFlow.ts
+
+دون تغيير المنطق. نضيف قياسًا فقط ونقرأ turns443 من تكوين الـPeer مباشرة.
+
+--- a/src/app/chat/rtcFlow.ts
++++ b/src/app/chat/rtcFlow.ts
+@@
++import { sendRtcMetrics, type RtcMetrics } from '@/utils/metrics';
++
++const __kpi = {
++  tEnq: 0, tMatched: 0, tFirstRemote: 0,
++  reconnectStart: 0, reconnectDone: 0,
++  iceTries: 0,
++  sessionId: (typeof crypto!=='undefined' && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : String(Date.now()),
++};
++
++function hasTurns443FromPc(pc: RTCPeerConnection | null | undefined): boolean {
++  try {
++    const cfg = pc?.getConfiguration?.();
++    const arr = Array.isArray(cfg?.iceServers) ? cfg!.iceServers : [];
++    for (const s of arr) {
++      const urls = Array.isArray((s as any).urls) ? (s as any).urls : [(s as any).urls];
++      if (urls?.some((u: string) => /^turns:.*:443(\?|$)/i.test(String(u)))) return true;
++    }
++  } catch {}
++  return false;
++}
+@@
+- // عند بدء البحث/الenqueue (أقرب نقطة مناسبة في منطقك)
++ // عند بدء البحث/الenqueue
+  // ... منطقك
++ __kpi.tEnq = (typeof performance!=='undefined' ? performance.now() : Date.now());
++ __kpi.tMatched = 0; __kpi.tFirstRemote = 0;
++ __kpi.reconnectStart = 0; __kpi.reconnectDone = 0; __kpi.iceTries = 0;
+@@
+- // بعد matchmake الناجح
++ // بعد matchmake الناجح
+  // const { pairId, role } = result;
++ __kpi.tMatched = (typeof performance!=='undefined' ? performance.now() : Date.now());
++ const kpiBase: RtcMetrics = {
++   ts: Date.now(),
++   sessionId: __kpi.sessionId,
++   pairId,
++   role,
++ };
+@@
+- // في ontrack الأول للطرف البعيد
++ // في ontrack الأول للطرف البعيد
+  // pc.ontrack = (ev) => { ... ربط فيديوك ... }
++ if (!__kpi.tFirstRemote) {
++   __kpi.tFirstRemote = (typeof performance!=='undefined' ? performance.now() : Date.now());
++   sendRtcMetrics({
++     ...kpiBase,
++     matchMs: __kpi.tMatched ? (__kpi.tMatched - __kpi.tEnq) : undefined,
++     ttfmMs: (__kpi.tFirstRemote - (__kpi.tMatched || __kpi.tEnq)),
++     iceOk: true,
++     iceTries: __kpi.iceTries,
++     turns443: hasTurns443FromPc(pc),
++   });
++ }
+@@
+- // عند بدء إعادة الاتصال
++ // عند بدء إعادة الاتصال
++ __kpi.iceTries++;
++ __kpi.reconnectStart = (typeof performance!=='undefined' ? performance.now() : Date.now());
+@@
+- // عند عودة الاتصال connected بعد انقطاع
++ // عند عودة الاتصال connected بعد انقطاع
++ if (__kpi.reconnectStart) {
++   __kpi.reconnectDone = (typeof performance!=='undefined' ? performance.now() : Date.now());
++   sendRtcMetrics({
++     ts: Date.now(),
++     sessionId: __kpi.sessionId,
++     pairId,
++     role,
++     reconnectMs: (__kpi.reconnectDone - __kpi.reconnectStart),
++     iceOk: true,
++     iceTries: __kpi.iceTries,
++     turns443: hasTurns443FromPc(pc),
++   });
++   __kpi.reconnectStart = 0;
++ }
+
+
+إن اختلفت أسماء دوالك/المواضع (enqueue/match/ontrack/reconnect)، ضع هذه الكتل في أقرب نقاط منطقية مطابقة، بدون لمس بقية الكود.
+
+4) Create file: _ops/acc_metrics.sh
+*** /dev/null
+--- a/_ops/acc_metrics.sh
+@@
++#!/usr/bin/env bash
++set -euo pipefail
++BASE="${1:?usage: $0 BASE_URL}"
++json='{"ts":'"$(date +%s000)"',"sessionId":"acc-'$(openssl rand -hex 6 2>/dev/null || echo abcd)'","matchMs":1200,"ttfmMs":800,"iceOk":true,"iceTries":1,"turns443":true}'
++out="$(curl -sS -X POST "$BASE/api/monitoring/metrics" -H 'content-type: application/json' -d "$json")"
++stored="$(echo "$out" | sed -n 's/.*"stored":\([^,}]*\).*/\1/p')"
++ok="$(echo "$out" | sed -n 's/.*"ok":\([^,}]*\).*/\1/p')"
++echo "-- Acceptance --"
++echo "METRICS_API_OK=$ok"
++echo "METRICS_STORED=$stored"
++echo "-- End Acceptance --"
+
+5) Build & Acceptance
+pnpm install --frozen-lockfile
+pnpm build
+bash _ops/acc_metrics.sh "https://$REPLIT_DEV_DOMAIN"
+
+
+Expected:
+
+-- Acceptance --
+METRICS_API_OK=true
+METRICS_STORED=true   # أو false إذا لا Secrets لـUpstash في dev (مقبول مؤقتًا)
+-- End Acceptance --
+
+6) Commit
+
+Title: chore(metrics): add lightweight RTC KPIs beacons + Upstash sink (optional)

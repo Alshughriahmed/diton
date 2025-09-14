@@ -1,5 +1,25 @@
 /* Anti-leak WebRTC flow with session stamping and phase tracking */
 import { getLocalStream } from "@/lib/media";
+import { sendRtcMetrics, type RtcMetrics } from '@/utils/metrics';
+
+const __kpi = {
+  tEnq: 0, tMatched: 0, tFirstRemote: 0,
+  reconnectStart: 0, reconnectDone: 0,
+  iceTries: 0,
+  sessionId: (typeof crypto!=='undefined' && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : String(Date.now()),
+};
+
+function hasTurns443FromPc(pc: RTCPeerConnection | null | undefined): boolean {
+  try {
+    const cfg = pc?.getConfiguration?.();
+    const arr = Array.isArray(cfg?.iceServers) ? cfg!.iceServers : [];
+    for (const s of arr) {
+      const urls = Array.isArray((s as any).urls) ? (s as any).urls : [(s as any).urls];
+      if (urls?.some((u: string) => /^turns:.*:443(\?|$)/i.test(String(u)))) return true;
+    }
+  } catch {}
+  return false;
+}
 
 // Session counter for leak prevention
 let session = 0;
@@ -328,6 +348,9 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     }).catch(() => {});
 
     // Enqueue
+    __kpi.tEnq = (typeof performance!=='undefined' ? performance.now() : Date.now());
+    __kpi.tMatched = 0; __kpi.tFirstRemote = 0;
+    __kpi.reconnectStart = 0; __kpi.reconnectDone = 0; __kpi.iceTries = 0;
     const enqueueResponse = await safeFetch("/api/rtc/enqueue", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -371,6 +394,13 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
             } catch {}
           }
           
+          __kpi.tMatched = (typeof performance!=='undefined' ? performance.now() : Date.now());
+          const kpiBase: RtcMetrics = {
+            ts: Date.now(),
+            sessionId: __kpi.sessionId,
+            pairId: j.pairId,
+            role: j.role,
+          };
           logRtc('match-found', 200, { role: state.role });
           break;
         }
@@ -396,9 +426,26 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
       logRtc('connection-state', 200, { connectionState });
       
       if (connectionState === 'connected') {
+        if (__kpi.reconnectStart) {
+          __kpi.reconnectDone = (typeof performance!=='undefined' ? performance.now() : Date.now());
+          sendRtcMetrics({
+            ts: Date.now(),
+            sessionId: __kpi.sessionId,
+            pairId: state.pairId || undefined,
+            role: state.role || undefined,
+            reconnectMs: (__kpi.reconnectDone - __kpi.reconnectStart),
+            iceOk: true,
+            iceTries: __kpi.iceTries,
+            turns443: hasTurns443FromPc(state.pc),
+          });
+          __kpi.reconnectStart = 0;
+        }
         state.phase = 'connected';
         onPhase('connected');
-      } else if (['disconnected', 'failed', 'closed'].includes(connectionState)) {
+      } else if (['disconnected', 'failed'].includes(connectionState)) {
+        __kpi.iceTries++;
+        __kpi.reconnectStart = (typeof performance!=='undefined' ? performance.now() : Date.now());
+      } else if (connectionState === 'closed') {
         stop();
       }
     };
@@ -418,6 +465,22 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
           remote.play?.().catch(() => {});
         }
       }
+      
+      if (!__kpi.tFirstRemote) {
+        __kpi.tFirstRemote = (typeof performance!=='undefined' ? performance.now() : Date.now());
+        sendRtcMetrics({
+          ts: Date.now(),
+          sessionId: __kpi.sessionId,
+          pairId: state.pairId || undefined,
+          role: state.role || undefined,
+          matchMs: __kpi.tMatched ? (__kpi.tMatched - __kpi.tEnq) : undefined,
+          ttfmMs: (__kpi.tFirstRemote - (__kpi.tMatched || __kpi.tEnq)),
+          iceOk: true,
+          iceTries: __kpi.iceTries,
+          turns443: hasTurns443FromPc(state.pc),
+        });
+      }
+      
       logRtc('track-received', 200);
     };
     
