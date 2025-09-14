@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 
-const URL = process.env.UPSTASH_REDIS_REST_URL;
-const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const URL = process.env.UPSTASH_REDIS_REST_URL || '';
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 
 async function store(m: any) {
   if (!URL || !TOKEN) return { stored: false };
@@ -13,8 +13,8 @@ async function store(m: any) {
     headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
     body,
     cache: 'no-store',
-  }).catch(() => null);
-  return { stored: !!(res && res.ok) };
+  }).catch(err => ({ ok:false, _e:String(err&&err.name||'err') } as any));
+  return { stored: !!(res as any)?.ok };
 }
 
 export async function POST(req: Request) {

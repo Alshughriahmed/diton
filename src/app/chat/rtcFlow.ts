@@ -143,27 +143,22 @@ async function safeFetch(url: string, options: RequestInit = {}, operation: stri
   }
 
   const signal = state.ac?.signal;
+  let response: Response;
   try {
-    const response = await fetch(url, { ...options, signal });
-    logRtc(operation, response.status);
-    
-    if (response.status === 403) {
-      console.warn('[rtc]', state.role, '403 at', operation);
-      // Don't call stop() immediately to prevent recursion
-      state.phase = 'idle';
-      if (onPhaseCallback) onPhaseCallback('idle');
-      return null;
-    }
-    
-    return response;
-  } catch (e: any) {
-    if (e.name === 'AbortError') {
-      logRtc(operation, 499, { reason: 'aborted' });
-    } else {
-      logRtc(operation, 500, { error: e.message });
-    }
+    response = await fetch(url, { ...options, signal });
+  } catch(e){ swallowAbort(e); return null; }
+  
+  logRtc(operation, response.status);
+  
+  if (response.status === 403) {
+    console.warn('[rtc]', state.role, '403 at', operation);
+    // Don't call stop() immediately to prevent recursion
+    state.phase = 'idle';
+    if (onPhaseCallback) onPhaseCallback('idle');
     return null;
   }
+  
+  return response;
 }
 
 // Get ICE servers from API or fallback
@@ -342,11 +337,13 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     logRtc('flow-start', 200);
 
     // Initialize anon cookie
-    await fetch("/api/anon/init", { 
-      method: "GET", 
-      cache: "no-store",
-      signal: state.ac.signal 
-    }).catch(() => {});
+    try {
+      await fetch("/api/anon/init", { 
+        method: "GET", 
+        cache: "no-store",
+        signal: state.ac.signal 
+      });
+    } catch(e){ swallowAbort(e); }
 
     // Enqueue
     __kpi.tEnq = (typeof performance!=='undefined' ? performance.now() : Date.now());
