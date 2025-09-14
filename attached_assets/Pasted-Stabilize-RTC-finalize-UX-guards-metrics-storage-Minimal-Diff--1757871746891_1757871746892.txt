@@ -1,0 +1,176 @@
+Stabilize RTC + finalize UX guards + metrics storage. Minimal-Diff. لا حذف ميزات ولا تغييرات بصرية غير محددة.
+
+الحالة الآن
+
+تم حل AbortError والـfetch-abort.
+
+القياس مُفعّل. METRICS_API_OK=true.
+
+أحيانًا METRICS_STORED=false في المعاينة.
+
+Redis وTURN (TURNS:443 + credential) يعملان.
+
+المطلوب
+
+تثبيت التخزين، وإقفال UX كما في plan map.md، وتأكيد تفضيل TURNS:443 من الـPC، ثم قبول نهائي.
+
+قيود صارمة
+
+Minimal-Diff.
+
+لا تغييرات على منطق المطابقة أو ترتيب الطبقات المرئية.
+
+لا تسجيل لأي SDP/ICE في الـconsole.
+
+1) Metrics storage ⇒ true دائمًا عند توفّر المفاتيح
+
+الملف: src/app/api/monitoring/metrics/route.ts
+
+تأكيد: export const runtime='nodejs'.
+
+اقرأ البيئات:
+
+const URL = process.env.UPSTASH_REDIS_REST_URL || '';
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+
+
+عند POST: خزّن عبر Upstash REST (pipeline أو أمر واحد) وأكّد الرد:
+
+نجاح فقط إذا رد Upstash بـ { "result":"OK" } أو res.ok && text includes "OK".
+
+أضف GET تشخيصي موجود أو حدّثه ليعيد:
+
+{ "ok": true, "env": { "upstash_url": true|false, "upstash_token": true|false } }
+
+
+لا تطبع الأسرار.
+
+الملف: _ops/acc_metrics.sh
+
+استبدل parsing بـjq. القبول المطلوب بالأسفل.
+
+2) زر Cancel أثناء “Searching…”
+
+الملف: src/app/chat/ChatClient.tsx
+
+أضف زرًا صغيرًا “Cancel” يظهر فقط عندما تكون حالة البحث فعّالة.
+
+عند النقر: استدعِ rtc.stop() أو cleanup() ثم أعِد الحالة إلى idle دون رميات.
+
+قبول: CANCEL_WORKS=1 ولا Overlay.
+
+3) تبريد زر Next ≈ 700ms
+
+الملف: src/app/chat/ChatClient.tsx أو الهاندلر الحالي
+
+أضف debounce/lock داخلي: تجاهل الطلبات المتتابعة خلال 700±50ms.
+
+لا يؤثر على Prev/Cancel.
+
+قبول: NEXT_COOLDOWN_MS≈700.
+
+4) Prev = VIP فقط + Tooltip
+
+الملفات:
+
+src/app/chat/ChatClient.tsx (أو موضع أزرار التحكم)
+
+يستخدم /api/user/vip-status
+
+إن كان vip=false اجعل زر Prev معطّلًا ويظهر Tooltip “VIP only”.
+
+قبول: PREV_VIP_ONLY=1 والTooltip ظاهر.
+
+5) مرآة المعاينة + تبديل سريع
+
+افتراضيًا mirrored كما هو.
+
+أضف Toggle صغير في الشريط يبدّل خاصية data-local-video أو CSS الكلاس.
+
+لا يؤثر على البث المُرسل.
+
+قبول: MIRROR_DEFAULT=1, MIRROR_TOGGLE_OK=1.
+
+6) السحب لا يتعارض مع التمرير
+
+الملف: موضع hook السحب (حيث موجود الآن)
+
+عتبة أفقية > رأسية، وتعطيل الإطلاق إذا كان السحب عموديًا.
+
+يسار=Next، يمين=Prev.
+
+قبول: SWIPE_NO_SCROLL_CONFLICT=1.
+
+7) تفضيل TURNS:443 من الـPC
+
+الملف: src/app/chat/rtcFlow.ts
+
+عند إنشاء RTCPeerConnection:
+
+رتّب iceServers: turns:…:443?transport=tcp أولًا، ثم turn:443, ثم turn:3478, ثم STUN.
+
+بعد الإنشاء أكد:
+
+const urls = (pc.getConfiguration()?.iceServers ?? []).flatMap(s => Array.isArray(s.urls)? s.urls : [s.urls]);
+const turns443First = /^turns:.*:443/.test(String(urls[0]||''));
+
+
+استخدم هذا العلم في القياس فقط. لا تغيّر منطق الاتصال.
+
+قبول: TURNS443_FIRST=1.
+
+8) فحوص قبول موحّدة (E2E + Metrics)
+
+تأكد من وجود السكربتات التالية (أنشئ/حدّث إن لزم):
+
+_ops/acc_full.sh يشغّل تسلسل: env/turn/anon/rtc/metrics.
+
+_ops/acc_rtc.sh (إن وُجد) للاختبار السريع.
+
+_ops/acc_metrics.sh (محدّث بـ jq).
+
+تشغيل داخلي للوكيل:
+
+pnpm install --frozen-lockfile
+pnpm exec next build
+pnpm exec next dev -p ${PORT:-3000} -H 0.0.0.0 &
+
+BASE="https://<REPLIT_HOST>"
+curl -s "$BASE/api/monitoring/metrics" | jq .
+bash _ops/acc_metrics.sh "$BASE"
+bash _ops/acc_full.sh "$BASE"
+
+
+بلوك القبول المطلوب طباعته:
+
+-- Acceptance --
+RTC_MODE=redis
+RTC_PING_OK=1
+TURN_TLS443_PRESENT=1
+TURN_CREDENTIAL_PRESENT=1
+TURNS443_FIRST=1
+PAIR_ID_MATCH=1
+NO_403_ON_RTC=1
+
+CANCEL_WORKS=1
+NEXT_COOLDOWN_MS≈700
+PREV_VIP_ONLY=1
+MIRROR_DEFAULT=1
+MIRROR_TOGGLE_OK=1
+SWIPE_NO_SCROLL_CONFLICT=1
+
+METRICS_API_OK=true
+METRICS_STORED=true
+NO_ABORT_OVERLAY=1
+NO_FEATURE_REMOVED=1
+-- End Acceptance --
+
+تقرير مطلوب من الوكيل
+
+قائمة الملفات والأسطر المعدّلة فقط.
+
+ناتج acc_metrics.sh وacc_full.sh.
+
+لقطتا GET /api/turn وGET /api/rtc/env.
+
+تأكيد صريح أنه لم يُجرِ أي تغييرات بصرية غير محددة ولم يُعطّل أي ميزة.

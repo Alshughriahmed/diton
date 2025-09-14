@@ -7,21 +7,29 @@ const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
 async function store(m: any) {
   if (!URL || !TOKEN) return { stored: false };
   const key = `mx:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  const body = JSON.stringify([[ "SET", key, JSON.stringify(m), "EX", 604800 ]]); // 7d
-  const res = await fetch(URL, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-    body,
-    cache: 'no-store',
-  }).catch(err => ({ ok:false, _e:String(err&&err.name||'err') } as any));
-  
-  if (!(res as any)?.ok) return { stored: false };
+  const value = JSON.stringify(m);
   
   try {
-    const data = await (res as any).json();
-    const stored = Array.isArray(data) && data.length > 0 && data[0] === "OK";
+    // Use Upstash Redis REST API direct format with SETEX for 7-day TTL
+    const res = await fetch(`${URL}/setex/${encodeURIComponent(key)}/604800/${encodeURIComponent(value)}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TOKEN}` },
+      cache: 'no-store',
+    });
+    
+    // Check HTTP status first
+    if (!res.ok) return { stored: false };
+    
+    // Parse and validate Redis response
+    const data = await res.json();
+    
+    // For SETEX command, Upstash returns {"result": "OK"} on success
+    const stored = data && data.result === "OK";
+    
     return { stored };
-  } catch {
+  } catch (err) {
+    // Log error for debugging but don't expose it
+    console.error('[metrics] Redis store error:', err instanceof Error ? err.message : String(err));
     return { stored: false };
   }
 }
