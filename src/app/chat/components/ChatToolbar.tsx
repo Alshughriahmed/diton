@@ -24,9 +24,9 @@ export default function ChatToolbar(){
         onClick={()=>{ if(isVip) emit("ui:prev"); }}
         disabled={!isVip}
         title={!isVip ? "VIP only" : "Previous match"}
-        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[70] text-3xl sm:text-4xl select-none ${!isVip ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
+        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!isVip ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
       <button data-ui="btn-next" onClick={()=>emit("ui:next")}
-        className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[70] text-3xl sm:text-4xl select-none">⏭️</button>
+        className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[50] text-3xl sm:text-4xl select-none">⏭️</button>
 
       {/* Bottom toolbar fixed forever */}
       <section className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 z-[60]"

@@ -75,6 +75,7 @@ export default function ChatClient(){
     gender: "female",
     age: 24
   });
+  const [cameraPermissionHint, setCameraPermissionHint] = useState<string>('');
 
   useKeyboardShortcuts();
 
@@ -260,7 +261,42 @@ export default function ChatClient(){
       }
     });
     
-    initLocalMedia().then(async ()=>{
+    // Permission-aware media initialization
+    async function initMediaWithPermissionChecks() {
+      try {
+        // Check document visibility state
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+          setCameraPermissionHint('قم بالعودة إلى التبويب لتفعيل الكاميرا');
+          return;
+        }
+        
+        // Clear any existing hints
+        setCameraPermissionHint('');
+        
+        // Try to initialize media
+        await initLocalMedia();
+        
+        // If successful, clear hints and proceed
+        setCameraPermissionHint('');
+        
+      } catch (error: any) {
+        console.warn('Media initialization failed:', error);
+        
+        // Handle specific camera permission/access errors
+        if (error?.name === 'NotAllowedError') {
+          setCameraPermissionHint('قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح');
+        } else if (error?.name === 'NotReadableError' || error?.name === 'AbortError') {
+          setCameraPermissionHint('قم بإغلاق التبويب الثاني أو اسمح للكاميرا');
+        } else if (error?.name === 'NotFoundError') {
+          setCameraPermissionHint('لم يتم العثور على كاميرا أو ميكروفون');
+        } else {
+          setCameraPermissionHint('خطأ في الوصول للكاميرا - تأكد من الأذونات');
+        }
+        return;
+      }
+    }
+    
+    initMediaWithPermissionChecks().then(async ()=>{
       const s=getLocalStream(); 
       if(localRef.current && s){ 
         // Initialize effects if VIP or beauty enabled
@@ -469,7 +505,78 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
             className={`w-full h-full object-cover ${isMirrored ? 'scale-x-[-1]' : ''}`}
             playsInline 
           />
-          {!ready && <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Requesting camera/mic…</div>}
+          {!ready && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 text-sm text-center px-4">
+              {cameraPermissionHint ? (
+                <>
+                  <div className="mb-2 text-yellow-400">⚠️</div>
+                  <div className="mb-4">{cameraPermissionHint}</div>
+                  <button
+                    onClick={() => {
+                      setCameraPermissionHint('');
+                      // Retry media initialization
+                      initLocalMedia().then(async ()=>{
+                        const s=getLocalStream(); 
+                        if(localRef.current && s){ 
+                          // Initialize effects if VIP or beauty enabled
+                          if (vip && typeof window !== 'undefined') {
+                            try {
+                              const { getVideoEffects } = await import("@/lib/effects");
+                              const effects = getVideoEffects();
+                              if (effects) {
+                                const video = document.createElement('video');
+                                video.srcObject = s;
+                                video.play();
+                                
+                                const processedStream = await effects.initialize(video);
+                                if (processedStream) {
+                                  setEffectsStream(processedStream);
+                                  localRef.current.srcObject = processedStream;
+                                  effects.start();
+                                } else {
+                                  localRef.current.srcObject = s;
+                                }
+                              } else {
+                                localRef.current.srcObject = s;
+                              }
+                            } catch (error) {
+                              console.warn('Effects initialization failed, using original stream:', error);
+                              localRef.current.srcObject = s;
+                            }
+                          } else {
+                            localRef.current.srcObject = s;
+                          }
+                          
+                          localRef.current.muted = true; 
+                          localRef.current.play().catch(()=>{}); 
+                          
+                          // Start RTC matchmaking after media is ready
+                          if (localRef.current?.srcObject) {
+                            rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase);
+                          }
+                        }
+                        setReady(true);
+                      }).catch((error) => {
+                        console.warn('Retry failed:', error);
+                        if (error?.name === 'NotAllowedError') {
+                          setCameraPermissionHint('قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح');
+                        } else if (error?.name === 'NotReadableError' || error?.name === 'AbortError') {
+                          setCameraPermissionHint('قم بإغلاق التبويب الثاني أو اسمح للكاميرا');
+                        } else {
+                          setCameraPermissionHint('خطأ في الوصول للكاميرا - تأكد من الأذونات');
+                        }
+                      });
+                    }}
+                    className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
+                  >
+                    إعادة المحاولة
+                  </button>
+                </>
+              ) : (
+                <div>Requesting camera/mic…</div>
+              )}
+            </div>
+          )}
 
           {/* My Controls - Top Right */}
           <MyControls />

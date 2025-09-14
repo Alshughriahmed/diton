@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Z-index layering system */
+:root {
+  --z-toolbar: 60;    /* Main toolbar buttons */
+  --z-msgbar: 70;     /* Message bar (covers toolbar when open) */
+}
+
+/* Z-index hierarchy:
+ * 50: Navigation buttons (prev/next)
+ * 60: Main toolbar 
+ * 70: Message bar (highest priority)
+ */
+
 /* Hide legacy camera button without breaking logic */
 [data-ui="btn-camera"] { 
   display: none !important; 

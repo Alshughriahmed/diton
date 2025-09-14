@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { emit, on } from "@/utils/events";
 
 interface LikeData {
@@ -13,39 +13,126 @@ interface LikeData {
 export default function LikeSystem() {
   const [likeData, setLikeData] = useState<LikeData>({
     myLikes: 0,
-    peerLikes: 123,
+    peerLikes: 0,
     isLiked: false,
     canLike: true
   });
   const [isAnimating, setIsAnimating] = useState(false);
   const [showHeart, setShowHeart] = useState(false);
+  const [currentPairId, setCurrentPairId] = useState<string | null>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isPollingRef = useRef(false);
+
+  // Polling function to get like count from server
+  const pollLikeCount = async (pairId: string) => {
+    if (!pairId || isPollingRef.current) return;
+    
+    try {
+      const response = await fetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, {
+        method: 'GET',
+        cache: 'no-cache'
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setLikeData(prev => ({
+          ...prev,
+          peerLikes: data.count || 0,
+          isLiked: data.mine || false,
+          canLike: true
+        }));
+      }
+    } catch (error) {
+      console.warn('Failed to poll like count:', error);
+    }
+  };
+
+  // Start polling for like updates
+  const startPolling = (pairId: string) => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
+    
+    // Poll immediately and then every 2 seconds
+    pollLikeCount(pairId);
+    pollingIntervalRef.current = setInterval(() => {
+      pollLikeCount(pairId);
+    }, 2000);
+  };
+
+  // Stop polling
+  const stopPolling = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  };
 
   useEffect(() => {
-    // Listen for like updates from other components
-    const unsubscribe = on("ui:likeUpdate", (data) => {
-      setLikeData(data);
+    // Listen for rtc:pair events to get pairId
+    const unsubscribePair = on("rtc:pair" as any, (data) => {
+      const pairId = data?.pairId;
+      if (pairId && pairId !== currentPairId) {
+        setCurrentPairId(pairId);
+        // Reset like state for new pair
+        setLikeData(prev => ({
+          ...prev,
+          peerLikes: 0,
+          isLiked: false,
+          canLike: true
+        }));
+        // Start polling for this new pair
+        startPolling(pairId);
+      }
+    });
+
+    // Listen for like updates from other components (backwards compatibility)
+    const unsubscribeUpdate = on("ui:likeUpdate", (data) => {
+      if (data) {
+        setLikeData(prev => ({
+          ...prev,
+          ...data
+        }));
+      }
+    });
+
+    // Listen for rtc phase changes to stop polling when disconnected
+    const unsubscribePhase = on("rtc:phase" as any, (data) => {
+      if (data?.phase === 'idle' || data?.phase === 'stopped') {
+        stopPolling();
+        setCurrentPairId(null);
+        setLikeData(prev => ({
+          ...prev,
+          peerLikes: 0,
+          isLiked: false,
+          canLike: true
+        }));
+      }
     });
 
     return () => {
-      if (typeof unsubscribe === 'function') {
-        unsubscribe();
-      }
+      if (typeof unsubscribePair === 'function') unsubscribePair();
+      if (typeof unsubscribeUpdate === 'function') unsubscribeUpdate();
+      if (typeof unsubscribePhase === 'function') unsubscribePhase();
+      stopPolling();
     };
-  }, []);
+  }, [currentPairId]);
 
-  const handleLike = () => {
-    if (!likeData.canLike || isAnimating) return;
+  const handleLike = async () => {
+    if (!likeData.canLike || isAnimating || !currentPairId) return;
 
     const newIsLiked = !likeData.isLiked;
-    const newMyLikes = newIsLiked 
-      ? likeData.myLikes + 1 
-      : Math.max(0, likeData.myLikes - 1);
+    const action = newIsLiked ? 'like' : 'unlike';
+    
+    // Store original state for potential rollback
+    const originalState = { ...likeData };
 
-    // Update local state immediately for responsiveness
+    // Optimistic update - immediately update UI
     setLikeData(prev => ({
       ...prev,
       isLiked: newIsLiked,
-      myLikes: newMyLikes
+      peerLikes: newIsLiked ? prev.peerLikes + 1 : Math.max(0, prev.peerLikes - 1),
+      canLike: false // Disable button during request
     }));
 
     // Trigger animations
@@ -56,29 +143,52 @@ export default function LikeSystem() {
     }
     setTimeout(() => setIsAnimating(false), 300);
 
-    // Emit event for ChatClient to handle
-    emit("ui:like", {
-      isLiked: newIsLiked,
-      myLikes: newMyLikes
-    });
+    try {
+      // Send to server
+      const response = await fetch('/api/like', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          pairId: currentPairId,
+          action: action
+        })
+      });
 
-    // Send to server for persistence
-    fetch('/api/user/like', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        action: newIsLiked ? 'like' : 'unlike',
-        timestamp: Date.now()
-      })
-    }).catch(error => {
+      if (response.ok) {
+        const result = await response.json();
+        
+        // Update with server response
+        setLikeData(prev => ({
+          ...prev,
+          peerLikes: result.count || 0,
+          isLiked: result.mine || false,
+          canLike: true
+        }));
+
+        // Emit event for ChatClient compatibility
+        emit("ui:like", {
+          isLiked: result.mine || false,
+          myLikes: result.count || 0,
+          pairId: currentPairId
+        });
+
+      } else {
+        // Server error - revert optimistic update
+        console.warn('Like request failed:', response.status);
+        setLikeData(prev => ({
+          ...originalState,
+          canLike: true
+        }));
+      }
+    } catch (error) {
       console.warn('Failed to save like:', error);
-      // Revert on failure
+      
+      // Network error - revert optimistic update
       setLikeData(prev => ({
-        ...prev,
-        isLiked: !newIsLiked,
-        myLikes: likeData.myLikes
+        ...originalState,
+        canLike: true
       }));
-    });
+    }
   };
 
   return (
