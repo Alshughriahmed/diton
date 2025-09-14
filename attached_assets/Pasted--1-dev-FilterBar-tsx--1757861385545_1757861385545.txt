@@ -1,0 +1,96 @@
+دفعة 1 — تدقيق التعديلات وإرجاع سكربت dev الآمن
+
+الهدف: تأكيد أن التغييرات محصورة في FilterBar.tsx وpackage.json فقط، مع ضبط سكربت dev إلى صيغة آمنة لا تتعارض مع Replit.
+القيود: Minimal-Diff. لا يمس أي ملف آخر. لا تغييرات بصرية.
+
+للـوكيل — ماذا تفعل:
+
+راجع آخر diff واسمح فقط بـ:
+
+src/app/chat/components/FilterBar.tsx (حُرّس localStorage)،
+
+package.json (تصحيح سكربت dev إن لزم).
+
+إن وُجد أي ملف إضافي متغيّر: لا تلمسه، فقط أبلغنا به.
+
+اضبط سكربت التشغيل إلى:
+
+next dev -p ${PORT:-3000} -H 0.0.0.0
+
+شغّل dev وتحقق من /chat (لا Runtime Overlay).
+
+قبول متوقّع يطبعه الوكيل:
+
+-- Acceptance --
+CHANGED_FILES=["src/app/chat/components/FilterBar.tsx","package.json"]
+NO_EXTRA_CHANGES=1
+DEV_SCRIPT_SAFE=1
+CHAT_200=1
+NO_RUNTIME_OVERLAY=1
+NO_FEATURE_REMOVED=1
+-- End Acceptance --
+
+دفعة 2 — اختبار مطابقة E2E على Replit (بدون كود)
+
+الهدف: إثبات المطابقة نهاية-لنهاية على وضع الذاكرة.
+القيود: لا تغييرات على الكود.
+
+للـوكيل — ماذا تفعل:
+
+استخدم نفس رابط Replit https كأساس للاختبار.
+
+أنشئ عميلين بجلسات منفصلة:
+
+عميل A: GET /api/anon/init إلى ملف تعريف كوكي A.
+
+عميل B: GET /api/anon/init إلى ملف تعريف كوكي B.
+
+نفّذ سكربت القبول _ops/acc_rtc.sh <BASE> أو حاكِ خطواته:
+
+enqueue للطرفين، matchmake، تبادل offer/answer، وICE.
+
+تحقّق من عدم وجود 403 على enqueue/matchmake/offer/answer/ice.
+
+التقط pairId نفسه للطرفين وأدوار caller/callee صحيحة.
+
+قبول متوقّع:
+
+-- Acceptance --
+PAIR_ID_MATCH=1
+OFFER_POST_A=204
+ANSWER_POST_B=204
+ICE_GET_A=200
+ICE_GET_B=200
+QLEN_STATUS=200
+NO_403_ON_RTC=1
+-- End Acceptance --
+
+دفعة 3 — تهيئة Redis + Twilio (تهيئة بيئة فقط)
+
+الهدف: تمكين بيئة إنتاجية: /api/rtc/env = redis مع ping_ok:true و/api/turn يبدأ بـ turns:...:443 وبـ credential.
+القيود: لا تغييرات كود. تهيئة .env.local فقط.
+
+للـوكيل — ماذا تفعل:
+
+أضف في .env.local:
+
+UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+
+مفاتيح Twilio (كما هو معتمد في المشروع).
+
+أعد التشغيل.
+
+تحقّق:
+
+GET /api/rtc/env ⇒ {"mode":"redis","ping_ok":true}
+
+GET /api/turn ⇒ أول عنصر turns:global.turn.twilio.com:443?transport=tcp ومعه credential.
+
+قبول متوقّع:
+
+-- Acceptance --
+RTC_MODE=redis
+RTC_PING_OK=1
+TURN_TLS443_PRESENT=1
+TURN_CREDENTIAL_PRESENT=1
+-- End Acceptance --

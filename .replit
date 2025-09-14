@@ -8,10 +8,6 @@ externalPort = 3000
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 44411
-externalPort = 3001
-
 [agent]
 expertMode = true
 
@@ -31,13 +27,13 @@ args = "DitonaChat Frontend"
 name = "DitonaChat Frontend"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm dev"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=5000 pnpm dev"
+waitForPort = 5000
 
 [nix]
 packages = ["jq", "dos2unix", "imagemagick_light"]
