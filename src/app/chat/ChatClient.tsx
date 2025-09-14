@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
-import { startRtcFlowOnce, stopRtcSession } from "./rtcFlow";
+import { start as rtcStart, next as rtcNext, stop as rtcStop } from "./rtcFlow";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useHydrated } from "@/hooks/useHydrated";
@@ -57,6 +57,7 @@ export default function ChatClient(){
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
   const { profile } = useProfile();
+  const [rtcPhase, setRtcPhase] = useState<'idle' | 'searching' | 'matched' | 'connected' | 'stopped'>('idle');
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
     isVip: Math.random() > 0.7,
@@ -132,15 +133,18 @@ export default function ChatClient(){
         toast('🚩 تم إرسال البلاغ وجاري الانتقال'); 
       }catch{}
       // RTC bridge: use new flow
-      startRtcFlowOnce();
+      const localStream = getLocalStream();
+      if (localStream) rtcNext(localStream);
     });
     let off7=on("ui:next",()=>{ 
       // RTC bridge: use new flow
-      startRtcFlowOnce();
+      const localStream = getLocalStream();
+      if (localStream) rtcNext(localStream);
     });
     let off8=on("ui:prev",()=>{ 
       // RTC bridge: use new flow
-      startRtcFlowOnce();
+      const localStream = getLocalStream();
+      if (localStream) rtcNext(localStream);
     });
     let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
     let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
@@ -167,11 +171,13 @@ export default function ChatClient(){
     });
     let offCountryFilter=on("filters:country", (value)=>{
       // Trigger new match with updated filters
-      startRtcFlowOnce();
+      const localStream = getLocalStream();
+      if (localStream) rtcNext(localStream);
     });
     let offGenderFilterUpdate=on("filters:gender", (value)=>{
       // Trigger new match with updated filters  
-      startRtcFlowOnce();
+      const localStream = getLocalStream();
+      if (localStream) rtcNext(localStream);
     });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
@@ -250,7 +256,9 @@ export default function ChatClient(){
         localRef.current.play().catch(()=>{}); 
         
         // Start RTC matchmaking after media is ready
-        // Legacy RTC setup removed - now handled by rtcFlow.ts via startRtcFlowOnce() calls
+        if (localRef.current?.srcObject) {
+          rtcStart(localRef.current.srcObject as MediaStream, setRtcPhase);
+        }
       }
       setReady(true);
     }).catch(()=>{});
@@ -273,7 +281,7 @@ export default function ChatClient(){
       unsubscribeMobile(); 
     };
   },[]);
-useEffect(() => () => { try { stopRtcSession('unmount'); } catch {} }, []);
+useEffect(() => () => { try { rtcStop(); } catch {} }, []);
 
 
 
@@ -390,10 +398,12 @@ useEffect(() => () => { try { stopRtcSession('unmount'); } catch {} }, []);
             muted
           />
           
-          {/* Center remote area overlay */}
-          <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none pointer-events-none">
-            جارٍ العثور على شريك دردشة…
-          </div>
+          {/* Center remote area overlay - only show during searching */}
+          {rtcPhase === 'searching' && (
+            <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none pointer-events-none">
+              Searching for a partner…
+            </div>
+          )}
         </section>
 
         {/* ===== Bottom (me) ===== */}
