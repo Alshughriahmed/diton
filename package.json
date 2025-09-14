@@ -16,7 +16,7 @@
   },
   "scripts": {
     "gbtmap": "node scripts/gbtmap.mjs",
-    "dev": "next dev --turbo=false",
+    "dev": "next dev --port 5000 --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start -p ${PORT:-3000}"
   },

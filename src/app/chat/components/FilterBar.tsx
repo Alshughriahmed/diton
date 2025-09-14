@@ -3,6 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import { emit } from "@/utils/events";
 import { COUNTRIES, ALL_COUNTRIES_OPTION } from "@/data/countries";
 
+// browser guards for storage reads
+const isBrowser = typeof window !== 'undefined';
+const safeParse = <T,>(s: string | null, d: T): T => { try { return s ? JSON.parse(s) as T : d; } catch { return d; } };
+
 type GenderKey = "everyone"|"female"|"male"|"couples"|"lgbt";
 
 function flagOf(cc:string){
@@ -15,17 +19,22 @@ export default function FilterBar(){
   const [openGen,setOpenGen]=useState(false);
 
   const [userCC,setUserCC]=useState<string|undefined>(undefined);
-  const [countries,setCountries]=useState<string[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:countries")||"[]"));
-  const [genders,setGenders]=useState<GenderKey[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:genders")||'["everyone"]'));
+  const [countries,setCountries]=useState<string[]>(
+    () => isBrowser ? safeParse<string[]>(localStorage.getItem("ditona:filters:countries"), []) : []
+  );
+  const [genders,setGenders]=useState<GenderKey[]>(
+    () => isBrowser ? safeParse<GenderKey[]>(localStorage.getItem("ditona:filters:genders"), ["everyone"] as GenderKey[]) : (["everyone"] as GenderKey[])
+  );
 
-  useEffect(()=>{ // محاولة قراءة بلد المستخدم إن وُجد
+  useEffect(()=>{ // محلي فقط؛ لا تُنفَّذ أثناء SSR
+    if(!isBrowser) return;
     try{
       const g = JSON.parse(localStorage.getItem("ditona:geo")||"{}");
       if(g?.countryCode) setUserCC(g.countryCode);
     }catch{}
   },[]);
-  useEffect(()=>{ localStorage.setItem("ditona:filters:countries",JSON.stringify(countries)); },[countries]);
-  useEffect(()=>{ localStorage.setItem("ditona:filters:genders",JSON.stringify(genders)); },[genders]);
+  useEffect(()=>{ if(isBrowser) localStorage.setItem("ditona:filters:countries",JSON.stringify(countries)); },[countries]);
+  useEffect(()=>{ if(isBrowser) localStorage.setItem("ditona:filters:genders",JSON.stringify(genders)); },[genders]);
 
   const regions = useMemo(() => {
     const base = COUNTRIES || [];
