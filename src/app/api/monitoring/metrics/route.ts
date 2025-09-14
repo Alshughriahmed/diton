@@ -38,3 +38,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false }, { status: 200 });
   }
 }
+
+// Debug endpoint (safe): presence only, no values
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    env: {
+      upstash_url: !!process.env.UPSTASH_REDIS_REST_URL,
+      upstash_token: !!process.env.UPSTASH_REDIS_REST_TOKEN,
+    }
+  }, { status: 200 });
+}
