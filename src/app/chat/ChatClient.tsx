@@ -98,11 +98,21 @@ export default function ChatClient(){
     let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
     let off5=on("ui:like", async (data)=>{ 
       try {
-        // Send like to backend
-        const response = await fetch('/api/likes/toggle', {
+        // Check if we have a valid pairId from current RTC connection
+        const currentPairId = pair.id;
+        if (!currentPairId) {
+          toast('لا يوجد اتصال نشط للإعجاب');
+          return;
+        }
+
+        // Send like to backend using new API
+        const response = await fetch('/api/like', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ liked: data?.isLiked || true })
+          body: JSON.stringify({ 
+            pairId: currentPairId, 
+            action: data?.isLiked ? 'like' : 'unlike' 
+          })
         });
         
         if (response.ok) {
@@ -120,19 +130,23 @@ export default function ChatClient(){
           
           toast(`تم الإعجاب ${data?.isLiked ? '❤️' : '💔'}`);
         } else {
-          toast('خطأ في إرسال الإعجاب');
+          const errorData = await response.json().catch(() => ({}));
+          toast(`خطأ في إرسال الإعجاب: ${errorData.error || 'خطأ غير معروف'}`);
         }
       } catch (error) {
         console.warn('Like failed:', error);
-        // Fallback to local update
-        setLike(data?.isLiked || false); 
-        setMyLikes(data?.myLikes || 0);
-        emit("ui:likeUpdate", {
-          myLikes: data?.myLikes || 0,
-          peerLikes: peerLikes,
-          isLiked: data?.isLiked || false,
-          canLike: true
-        });
+        // Fallback to local update only if we have valid data
+        if (data) {
+          setLike(data?.isLiked || false); 
+          setMyLikes(data?.myLikes || 0);
+          emit("ui:likeUpdate", {
+            myLikes: data?.myLikes || 0,
+            peerLikes: peerLikes,
+            isLiked: data?.isLiked || false,
+            canLike: true
+          });
+        }
+        toast('خطأ في الاتصال - تم الحفظ محلياً');
       }
     });
     let off6=on("ui:report", async ()=>{ 
@@ -155,8 +169,8 @@ export default function ChatClient(){
       rtc.next();
     });
     let off8=on("ui:prev",()=>{ 
-      // RTC bridge: use new flow
-      rtc.next();
+      // Use proper previous functionality
+      tryPrevOrRandom();
     });
     let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
     let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
