@@ -2,6 +2,9 @@
 import { getLocalStream } from "@/lib/media";
 import { sendRtcMetrics, type RtcMetrics } from '@/utils/metrics';
 
+const isAbort = (e:any)=> e && (e.name==='AbortError' || e.code===20);
+const swallowAbort = (e:any)=> { if(!isAbort(e)) throw e; };
+
 const __kpi = {
   tEnq: 0, tMatched: 0, tFirstRemote: 0,
   reconnectStart: 0, reconnectDone: 0,
@@ -84,10 +87,8 @@ export function stop() {
     if (onPhaseCallback) onPhaseCallback('stopped');
 
     // Abort any ongoing requests
-    if (state.ac) {
-      state.ac.abort();
-      state.ac = null;
-    }
+    if (state.ac) { try { state.ac.abort(); } catch {} }
+    state.ac = null;
 
     // Close peer connection and stop tracks
     if (state.pc) {
