@@ -1,11 +1,13 @@
 "use client";
 import { useState, useEffect } from "react";
 import { emit } from "@/utils/events";
+import { useVip } from "@/hooks/useVip";
 
 export default function ChatToolbar(){
   const [msgOpen,setMsgOpen]=useState(false);
   const [micOn,setMicOn]=useState(true);
   const [paused,setPaused]=useState(false);
+  const { isVip } = useVip();
 
   useEffect(()=>{ // sync with messaging bar
     const onOpen = ()=>setMsgOpen(true);
@@ -18,8 +20,11 @@ export default function ChatToolbar(){
   return (
     <>
       {/* Prev / Next icons large, no boxes */}
-      <button data-ui="btn-prev" onClick={()=>emit("ui:prev")}
-        className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[70] text-3xl sm:text-4xl select-none">⏮️</button>
+      <button data-ui="btn-prev" 
+        onClick={()=>{ if(isVip) emit("ui:prev"); }}
+        disabled={!isVip}
+        title={!isVip ? "VIP only" : "Previous match"}
+        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[70] text-3xl sm:text-4xl select-none ${!isVip ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
       <button data-ui="btn-next" onClick={()=>emit("ui:next")}
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[70] text-3xl sm:text-4xl select-none">⏭️</button>
 
