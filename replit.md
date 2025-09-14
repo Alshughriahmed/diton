@@ -1,6 +1,14 @@
 # Overview
 DitonaChat is a Next.js-based video chat platform designed for connecting users globally for 18+ adult conversations. It features a modern React frontend, real-time video communication via WebRTC, user authentication with NextAuth, and premium subscription management through Stripe. The platform emphasizes a rich user experience with features like AR masks, translation services, social interactions, and robust safety/moderation tools, aiming to provide a secure and engaging environment for adult communication.
 
+# Recent Changes (September 2025)
+- **RTC Auto-Start Enhancement**: Implemented seamless auto-start matching after getUserMedia() success with 700ms cooldown on Next button and proper event broadcasting
+- **Messaging System**: Added ChatMessagingBar with show/hide functionality, keyboard-aware positioning using visualViewport API, and z-index layering system
+- **Like System**: Complete Upstash-backed per-pairId like system with real-time polling, optimistic updates, and acceptance testing framework
+- **UI Controls**: Enhanced toolbar with VIP-only Previous button restrictions, proper Next/Prev navigation, and improved cooldown mechanics
+- **Permission Guards**: Added camera permission detection with Arabic user guidance for common access issues
+- **Z-Index Architecture**: Implemented systematic layering system (toolbar: z-50/60, messaging: z-70) for proper UI hierarchy
+
 # User Preferences
 Preferred communication style: Simple, everyday language.
 
