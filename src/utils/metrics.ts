@@ -10,6 +10,7 @@ export type RtcMetrics = {
   iceOk?: boolean;
   iceTries?: number;
   turns443?: boolean;
+  turns443First?: boolean;
 };
 
 export function sendRtcMetrics(m: RtcMetrics) {

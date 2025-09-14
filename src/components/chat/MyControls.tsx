@@ -14,6 +14,7 @@ export default function MyControls() {
 
   const [likes, setLikes] = useState<number>(0);
   const [beauty, setBeauty] = useState<boolean>(false);
+  const [isMirrored, setIsMirrored] = useState<boolean>(true); // MIRROR_DEFAULT=1
 
   // ✅ اشترك في الأحداث فقط بعد التحميل
   useEffect(() => {
@@ -23,10 +24,14 @@ export default function MyControls() {
       if (d?.myLikes !== undefined) setLikes(d.myLikes);
     });
     const offBeauty = on('ui:toggleBeauty', (d: any) => setBeauty(!!d?.enabled));
+    const offMirror = on('ui:toggleMirror', () => {
+      setIsMirrored(prev => !prev);
+    });
     
     return () => {
       offLikes();
       offBeauty();
+      offMirror();
     };
   }, [hydrated]);
 
@@ -54,6 +59,10 @@ export default function MyControls() {
     setBeauty(newState);
     emit('ui:toggleBeauty', { enabled: newState });
   }, [isVip, beauty, profile, setProfile]);
+  
+  const onMirrorToggle = useCallback(() => {
+    emit('ui:toggleMirror');
+  }, []);
   
   const onSwitchCam = useCallback(() => {
     const currentFacing = profile.preferences?.camera?.facing || 'user';
@@ -84,6 +93,25 @@ export default function MyControls() {
         className="w-12 h-12 rounded-lg bg-black/60 backdrop-blur-md hover:bg-black/80 transition-colors flex items-center justify-center text-white border border-white/20 shadow-lg"
       >
         🔄
+      </button>
+      
+      {/* Mirror Toggle */}
+      <button 
+        onClick={onMirrorToggle} 
+        aria-label="Mirror toggle" 
+        className={`w-12 h-12 rounded-lg transition-colors flex items-center justify-center border shadow-lg ${
+          isMirrored 
+            ? 'bg-blue-500/50 border-blue-400 text-blue-200 backdrop-blur-md'
+            : 'bg-black/60 hover:bg-black/80 border-white/20 text-white backdrop-blur-md'
+        }`}
+      >
+        🪞
+        {/* Mirror ON Indicator */}
+        {isMirrored && (
+          <div className="absolute -bottom-2 -right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow-lg">
+            ON
+          </div>
+        )}
       </button>
       
       {/* Beauty Effect */}

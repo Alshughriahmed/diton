@@ -26,6 +26,8 @@ import { useProfile } from "@/state/profile";
 
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
+const NEXT_COOLDOWN_MS = 700;
+
 export default function ChatClient(){
   function __updatePeerBadges(meta:any){
     try{
@@ -43,6 +45,7 @@ export default function ChatClient(){
   const { next, prev } = useNextPrev();
   const lastTsRef = useRef(0);
   const busyRef = useRef(false);
+  const lastNextTsRef = useRef(0);
   const localRef = useRef<HTMLVideoElement>(null);
   const [ready,setReady]=useState(false);
   const [like,setLike]=useState(false);
@@ -58,6 +61,7 @@ export default function ChatClient(){
   const [showUpsell, setShowUpsell] = useState(false);
   const { profile } = useProfile();
   const [rtcPhase, setRtcPhase] = useState<'idle' | 'searching' | 'matched' | 'connected' | 'stopped'>('idle');
+  const [isMirrored, setIsMirrored] = useState(true); // MIRROR_DEFAULT=1
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
     isVip: Math.random() > 0.7,
@@ -137,6 +141,13 @@ export default function ChatClient(){
       if (localStream) rtcNext(localStream);
     });
     let off7=on("ui:next",()=>{ 
+      // Next button cooldown/debounce
+      const now = Date.now();
+      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) {
+        return; // Ignore rapid consecutive Next button presses
+      }
+      lastNextTsRef.current = now;
+      
       // RTC bridge: use new flow
       const localStream = getLocalStream();
       if (localStream) rtcNext(localStream);
@@ -158,6 +169,13 @@ export default function ChatClient(){
     });
     let offToggleMasks=on("ui:toggleMasks", ()=>{
       toast('🤡 تفعيل/إلغاء الأقنعة');
+    });
+    let offMirrorToggle=on("ui:toggleMirror", ()=>{
+      setIsMirrored(prev => {
+        const newState = !prev;
+        toast(newState ? '🪞 تفعيل المرآة' : '📹 إلغاء المرآة');
+        return newState;
+      });
     });
     let offUpsell=on("ui:upsell", (feature)=>{
       const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
@@ -277,7 +295,7 @@ export default function ChatClient(){
     });
     return ()=>{ 
       off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
-      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilterUpdate();offCountryFilter();offOpenMessaging();offCloseMessaging();
+      offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilterUpdate();offCountryFilter();offOpenMessaging();offCloseMessaging();offMirrorToggle();
       unsubscribeMobile(); 
     };
   },[]);
@@ -307,7 +325,7 @@ useEffect(() => () => { try { rtcStop(); } catch {} }, []);
     const down=(e:PointerEvent)=>{ x0=e.clientX; y0=e.clientY; moved=false; };
     const up=(e:PointerEvent)=>{
       const dx=e.clientX-x0, dy=e.clientY-y0;
-      if(Math.abs(dx) > 60 && Math.abs(dy) < 60){
+      if(Math.abs(dx) > 60 && Math.abs(dy) < 60 && Math.abs(dx) > Math.abs(dy)){
         if(dx<0) {
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
@@ -400,8 +418,21 @@ useEffect(() => () => { try { rtcStop(); } catch {} }, []);
           
           {/* Center remote area overlay - only show during searching */}
           {rtcPhase === 'searching' && (
-            <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none pointer-events-none">
-              Searching for a partner…
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
+              <div className="mb-4">Searching for a partner…</div>
+              <button
+                onClick={() => {
+                  try {
+                    rtcStop();
+                    toast('🛑 تم إلغاء البحث');
+                  } catch (error) {
+                    console.warn('Cancel failed:', error);
+                  }
+                }}
+                className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
+              >
+                Cancel
+              </button>
             </div>
           )}
         </section>
@@ -409,7 +440,12 @@ useEffect(() => () => { try { rtcStop(); } catch {} }, []);
         {/* ===== Bottom (me) ===== */}
         <section className="relative rounded-2xl bg-black/20 overflow-hidden">
           {/* Local preview fills bottom half */}
-          <video data-local-video ref={localRef} className="w-full h-full object-cover" playsInline />
+          <video 
+            data-local-video 
+            ref={localRef} 
+            className={`w-full h-full object-cover ${isMirrored ? 'scale-x-[-1]' : ''}`}
+            playsInline 
+          />
           {!ready && <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Requesting camera/mic…</div>}
 
           {/* My Controls - Top Right */}

@@ -24,6 +24,69 @@ function hasTurns443FromPc(pc: RTCPeerConnection | null | undefined): boolean {
   return false;
 }
 
+// Check if the first ICE server is TURNS:443
+function hasTurns443First(pc: RTCPeerConnection | null | undefined): boolean {
+  try {
+    const cfg = pc?.getConfiguration?.();
+    const arr = Array.isArray(cfg?.iceServers) ? cfg!.iceServers : [];
+    if (arr.length === 0) return false;
+    
+    const firstServer = arr[0];
+    const urls = Array.isArray((firstServer as any).urls) ? (firstServer as any).urls : [(firstServer as any).urls];
+    return urls?.some((u: string) => /^turns:.*:443(\?|$)/i.test(String(u))) || false;
+  } catch {}
+  return false;
+}
+
+// Reorder ICE servers to prioritize TURNS:443
+function reorderIceServers(servers: any[]): any[] {
+  if (!Array.isArray(servers) || servers.length === 0) return servers;
+  
+  const turns443: any[] = [];
+  const turn443: any[] = [];
+  const turn3478: any[] = [];
+  const stun: any[] = [];
+  const other: any[] = [];
+  
+  for (const server of servers) {
+    const urls = Array.isArray((server as any).urls) ? (server as any).urls : [(server as any).urls];
+    
+    // Check if any URL in this server is TURNS:443
+    const hasTurns443Url = urls?.some((u: string) => /^turns:.*:443(\?|$)/i.test(String(u)));
+    if (hasTurns443Url) {
+      turns443.push(server);
+      continue;
+    }
+    
+    // Check if any URL in this server is TURN:443
+    const hasTurn443Url = urls?.some((u: string) => /^turn:.*:443(\?|$)/i.test(String(u)));
+    if (hasTurn443Url) {
+      turn443.push(server);
+      continue;
+    }
+    
+    // Check if any URL in this server is TURN:3478
+    const hasTurn3478Url = urls?.some((u: string) => /^turn:.*:3478(\?|$)/i.test(String(u)));
+    if (hasTurn3478Url) {
+      turn3478.push(server);
+      continue;
+    }
+    
+    // Check if any URL in this server is STUN
+    const hasStunUrl = urls?.some((u: string) => /^stuns?:/i.test(String(u)));
+    if (hasStunUrl) {
+      stun.push(server);
+      continue;
+    }
+    
+    // Everything else
+    other.push(server);
+  }
+  
+  // Return in priority order: TURNS:443, TURN:443, TURN:3478, STUN, others
+  return [...turns443, ...turn443, ...turn3478, ...stun, ...other];
+}
+
 // Session counter for leak prevention
 let session = 0;
 
@@ -161,13 +224,14 @@ async function safeFetch(url: string, options: RequestInit = {}, operation: stri
   return response;
 }
 
-// Get ICE servers from API or fallback
+// Get ICE servers from API or fallback, reordered by priority
 async function getIceServers() {
   try {
     const response = await fetch('/api/turn', { cache: 'no-store' });
     if (response.ok) {
       const data = await response.json();
-      return data.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+      const servers = data.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+      return reorderIceServers(servers);
     }
   } catch {}
   return [{ urls: "stun:stun.l.google.com:19302" }];
@@ -435,6 +499,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
             iceOk: true,
             iceTries: __kpi.iceTries,
             turns443: hasTurns443FromPc(state.pc),
+            turns443First: hasTurns443First(state.pc),
           });
           __kpi.reconnectStart = 0;
         }
@@ -476,6 +541,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
           iceOk: true,
           iceTries: __kpi.iceTries,
           turns443: hasTurns443FromPc(state.pc),
+          turns443First: hasTurns443First(state.pc),
         });
       }
       

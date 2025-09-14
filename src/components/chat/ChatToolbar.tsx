@@ -26,9 +26,15 @@ export default function ChatToolbar(){
       {/* Prev ⏮️ كبير - يسار أعلى الشريط */}
       <button
         data-ui="btn-prev"
-        onClick={(e)=>{e.preventDefault(); if(!isVip && !freeForAll){ emit("ui:upsell","prev"); return;} emit("ui:prev");}}
-        className="fixed bottom-[92px] left-3 z-50 w-24 h-12 sm:w-28 sm:h-14 rounded-xl bg-black/40 text-white border border-white/20 hover:bg-black/50 backdrop-blur font-medium"
-        aria-label="Previous"
+        onClick={(e)=>{e.preventDefault(); if(isVip || freeForAll){ emit("ui:prev"); }}}
+        disabled={!isVip && !freeForAll}
+        title={!isVip && !freeForAll ? "VIP only" : "Previous"}
+        className={`fixed bottom-[92px] left-3 z-50 w-24 h-12 sm:w-28 sm:h-14 rounded-xl border backdrop-blur font-medium transition-all duration-200 ${
+          !isVip && !freeForAll 
+            ? 'bg-black/20 text-gray-500 border-gray-600/40 cursor-not-allowed opacity-50' 
+            : 'bg-black/40 text-white border-white/20 hover:bg-black/50'
+        }`}
+        aria-label={!isVip && !freeForAll ? "Previous (VIP only)" : "Previous"}
       >⏮️</button>
 
       {/* Next ⏭️ كبير - يمين أعلى الشريط */}
