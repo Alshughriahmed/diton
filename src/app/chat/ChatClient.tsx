@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
-import { start as rtcStart, next as rtcNext, stop as rtcStop } from "./rtcFlow";
+import * as rtc from "./rtcFlow";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useHydrated } from "@/hooks/useHydrated";
@@ -61,6 +61,9 @@ export default function ChatClient(){
   const [showUpsell, setShowUpsell] = useState(false);
   const { profile } = useProfile();
   const [rtcPhase, setRtcPhase] = useState<'idle' | 'searching' | 'matched' | 'connected' | 'stopped'>('idle');
+  const [phase, setPhase] = useState<'idle'|'searching'|'matched'|'connected'>('idle');
+  const [pair, setPair] = useState<{id?:string, role?:'caller'|'callee'}>({});
+  const [remoteInfo, setRemoteInfo] = useState<{name?:string; likes?:number; country?:string; city?:string; gender?:string}>({});
   const [isMirrored, setIsMirrored] = useState(true); // MIRROR_DEFAULT=1
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
@@ -137,8 +140,7 @@ export default function ChatClient(){
         toast('🚩 تم إرسال البلاغ وجاري الانتقال'); 
       }catch{}
       // RTC bridge: use new flow
-      const localStream = getLocalStream();
-      if (localStream) rtcNext(localStream);
+      rtc.next();
     });
     let off7=on("ui:next",()=>{ 
       // Next button cooldown/debounce
@@ -149,13 +151,11 @@ export default function ChatClient(){
       lastNextTsRef.current = now;
       
       // RTC bridge: use new flow
-      const localStream = getLocalStream();
-      if (localStream) rtcNext(localStream);
+      rtc.next();
     });
     let off8=on("ui:prev",()=>{ 
       // RTC bridge: use new flow
-      const localStream = getLocalStream();
-      if (localStream) rtcNext(localStream);
+      rtc.next();
     });
     let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
     let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
@@ -189,13 +189,35 @@ export default function ChatClient(){
     });
     let offCountryFilter=on("filters:country", (value)=>{
       // Trigger new match with updated filters
-      const localStream = getLocalStream();
-      if (localStream) rtcNext(localStream);
+      rtc.next();
     });
     let offGenderFilterUpdate=on("filters:gender", (value)=>{
-      // Trigger new match with updated filters  
-      const localStream = getLocalStream();
-      if (localStream) rtcNext(localStream);
+      // Trigger new match with updated filters
+      rtc.next();
+    });
+    
+    // RTC event listeners
+    let offRtcPhase=on("rtc:phase" as any, (data)=>{
+      setPhase(data.phase);
+      setRtcPhase(data.phase); // Keep compatibility with existing code
+    });
+    let offRtcPair=on("rtc:pair" as any, (data)=>{
+      setPair({id: data.pairId, role: data.role});
+      // Fetch remote profile (placeholder for now)
+      setRemoteInfo({
+        name: "Partner",
+        likes: Math.floor(Math.random() * 500),
+        country: "Unknown",
+        city: "Unknown",
+        gender: "unknown"
+      });
+    });
+    let offRtcRemoteTrack=on("rtc:remote-track" as any, (data)=>{
+      const remoteVideo = document.querySelector('#remoteVideo') as HTMLVideoElement;
+      if (remoteVideo && data.stream) {
+        remoteVideo.srcObject = data.stream;
+        remoteVideo.play().catch(()=>{});
+      }
     });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
       try {
@@ -275,7 +297,7 @@ export default function ChatClient(){
         
         // Start RTC matchmaking after media is ready
         if (localRef.current?.srcObject) {
-          rtcStart(localRef.current.srcObject as MediaStream, setRtcPhase);
+          rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase);
         }
       }
       setReady(true);
@@ -296,10 +318,11 @@ export default function ChatClient(){
     return ()=>{ 
       off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
       offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilterUpdate();offCountryFilter();offOpenMessaging();offCloseMessaging();offMirrorToggle();
+      offRtcPhase();offRtcPair();offRtcRemoteTrack();
       unsubscribeMobile(); 
     };
   },[]);
-useEffect(() => () => { try { rtcStop(); } catch {} }, []);
+useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
 
 
 
@@ -423,7 +446,7 @@ useEffect(() => () => { try { rtcStop(); } catch {} }, []);
               <button
                 onClick={() => {
                   try {
-                    rtcStop();
+                    rtc.stop();
                     toast('🛑 تم إلغاء البحث');
                   } catch (error) {
                     console.warn('Cancel failed:', error);
