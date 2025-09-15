@@ -4,6 +4,9 @@ import { busOn, busEmit } from "../../utils/bus";
 
 let pairId: string | null = null;
 let timer: any = null;
+let intervalVisible=2000; let intervalHidden=8000;
+function adjustTimer(){ try{ const iv=(typeof document!=="undefined" && document.hidden)?intervalHidden:intervalVisible; if (timer) clearInterval(timer); timer=setInterval(pull, iv); }catch(e){} }
+
 let you = false;
 let count = 0;
 
@@ -49,7 +52,7 @@ const off1 = busOn("rtc:pair", (e: any) => {
   try { pairId = e?.pairId || e?.id || null; } catch { pairId = null; }
   if (timer) clearInterval(timer);
   pull();
-  timer = setInterval(pull, 2000);
+  timer = adjustTimer();
 });
 const off2 = busOn("rtc:end", () => { if (timer) clearInterval(timer); timer = null; pairId = null; });
 const off3 = busOn("rtc:closed", () => { if (timer) clearInterval(timer); timer = null; pairId = null; });
@@ -59,3 +62,5 @@ const off4 = busOn("ui:like", () => { void toggle(); });
 if (typeof window !== "undefined") {
   window.addEventListener("pagehide", () => { if (timer) clearInterval(timer); });
 }
+
+if (typeof document!=="undefined"){ document.addEventListener("visibilitychange", ()=>{ try{ if (timer) adjustTimer(); }catch(e){} }); }
