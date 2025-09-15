@@ -34,7 +34,7 @@ export async function cleanStaleQueue(){ const cutoff=Date.now()-60_000; await z
 async function candidatePool(selfAttr:Attrs, selfFilt:Filters){
   const wantedC=(selfFilt.countries||"ALL").toUpperCase(); const wantedG=(selfFilt.genders||"all").toLowerCase();
   const sets:string[][]=[];
-  if(wantedC!=="ALL"){ for(const cc of wantedC.split(",").slice(0,6)){ sets.push(await zrange(`rtc:q:country:${cc}`,0,19)); } }
+  if(wantedC!=="ALL"){ for(const cc of wantedC.split(",").slice(0,15)){ sets.push(await zrange(`rtc:q:country:${cc}`,0,19)); } }
   if(wantedG!=="all"){ for(const g of wantedG.split(",").slice(0,2)){ sets.push(await zrange(`rtc:q:gender:${g}`,0,19)); } }
   sets.push(await zrange(`rtc:q`,0,49));
   const seen=new Set<string>(); const out:string[]=[];

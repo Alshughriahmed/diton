@@ -10,9 +10,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "stripe not configured" }, { status: 500 });
     }
     
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: "2025-08-27.basil",
-    });
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
     
     const PRICES: Record<string, string | undefined> = {
       daily: process.env.STRIPE_PRICE_EUR_DAILY,
