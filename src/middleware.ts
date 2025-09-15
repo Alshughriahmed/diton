@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 export function middleware(req: NextRequest) {
+  try { const { pathname } = new URL(req.url); if (pathname.startsWith("/api/like")) { return NextResponse.next(); } } catch {}
   if (process.env.NODE_ENV !== 'production') return NextResponse.next();
 
   const host = req.headers.get('host') || '';
