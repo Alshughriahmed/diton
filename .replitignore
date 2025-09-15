@@ -1,0 +1,9 @@
+
+_ops/
+*.log
+*.accept
+*.snap
+node_modules/
+.next/
+dist/
+build/
