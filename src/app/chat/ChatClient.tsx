@@ -1,5 +1,7 @@
 "use client";
 
+
+import "./likeSyncClient";
 if (process.env.NODE_ENV !== 'production') {
   if (typeof window !== 'undefined') {
     window.addEventListener('unhandledrejection', (e)=>{

@@ -1,121 +1,91 @@
-import { NextResponse } from 'next/server';
-import { extractAnonId } from '@/lib/rtc/auth';
+// runtime: Node لقراءة مفاتيح Upstash
+export const runtime = "nodejs";
 
-const U = process.env.UPSTASH_REDIS_REST_URL!;
-const T = process.env.UPSTASH_REDIS_REST_TOKEN!;
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
-async function upstash(cmd: any[]) {
-  const res = await fetch(U, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${T}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify([cmd])
+const URL_ = process.env.UPSTASH_REDIS_REST_URL;
+const TOK_ = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+type UpstashItem = { result: any };
+async function redis(cmds: any[]): Promise<UpstashItem[]> {
+  if (!URL_ || !TOK_) throw new Error("UPSTASH_ENV_MISSING");
+  const r = await fetch(`${URL_}/pipeline`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOK_}`, "Content-Type": "application/json" },
+    body: JSON.stringify(cmds),
+    cache: "no-store",
   });
-  return res.ok ? (await res.json())[0].result : null;
+  if (!r.ok) throw new Error(`UPSTASH_FAIL_${r.status}`);
+  return r.json();
 }
 
-// GET /api/like?pairId=... - get like count and mine status
-export async function GET(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const pairId = url.searchParams.get('pairId');
-    
-    if (!pairId) {
-      return NextResponse.json({ error: 'pairId required' }, { status: 400 });
-    }
+const kCount = (p: string) => `likes:count:${p}`;
+const kWho   = (p: string) => `likes:who:${p}`;
 
-    const anonId = extractAnonId(req);
-    if (!anonId) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    }
-
-    // Get count and check if user has liked
-    const [count, mine] = await Promise.all([
-      upstash(['HGET', `like:${pairId}`, 'count']),
-      upstash(['SISMEMBER', `like:${pairId}:who`, anonId])
-    ]);
-
-    return NextResponse.json({
-      count: parseInt(count) || 0,
-      mine: mine === 1
-    });
-  } catch (error) {
-    console.error('GET /api/like error:', error);
-    return NextResponse.json({ error: 'internal error' }, { status: 500 });
-  }
+function parseAnon(req: NextRequest) {
+  const ck = cookies();
+  return (
+    req.headers.get("x-anon") ||
+    ck.get("anon")?.value ||
+    ck.get("ditona_anon")?.value ||
+    ""
+  );
 }
 
-// POST /api/like - like/unlike a pair
-export async function POST(req: Request) {
-  try {
-    const { pairId, action } = await req.json();
-    
-    if (!pairId || !action || !['like', 'unlike'].includes(action)) {
-      return NextResponse.json({ error: 'pairId and action (like/unlike) required' }, { status: 400 });
+export async function GET(req: NextRequest) {
+  const sp = new URL(req.url).searchParams;
+  const pairId = sp.get("pairId");
+  if (!pairId) return NextResponse.json({ error: "pairId required" }, { status: 400 });
+
+  const anon = parseAnon(req) || "";
+  const res = await redis([
+    ["GET", kCount(pairId)],
+    ["SISMEMBER", kWho(pairId), anon],
+  ]);
+
+  const count = Number(res?.[0]?.result ?? 0);
+  const you = !!(res?.[1]?.result ?? false);
+  return NextResponse.json({ count: Number.isFinite(count) ? count : 0, you });
+}
+
+export async function POST(req: NextRequest) {
+  const sp = new URL(req.url).searchParams;
+  const pairId = sp.get("pairId");
+  const op = (sp.get("op") || "inc").toLowerCase();
+  if (!pairId) return NextResponse.json({ error: "pairId required" }, { status: 400 });
+
+  const anon = parseAnon(req);
+  if (!anon) return NextResponse.json({ error: "x-anon or anon cookie required" }, { status: 400 });
+
+  if (op === "inc") {
+    const add = await redis([["SADD", kWho(pairId), anon]]);
+    const added = Number(add?.[0]?.result ?? 0) === 1;
+    if (added) {
+      const inc = await redis([["INCR", kCount(pairId)]]);
+      const count = Number(inc?.[0]?.result ?? 0);
+      return NextResponse.json({ ok: true, count, you: true });
+    } else {
+      const get = await redis([["GET", kCount(pairId)]]);
+      const count = Number(get?.[0]?.result ?? 0);
+      return NextResponse.json({ ok: true, count, you: true });
     }
-
-    const anonId = extractAnonId(req);
-    if (!anonId) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    }
-
-    let newCount = 0;
-    let mine = false;
-
-    if (action === 'like') {
-      // Check if already liked
-      const alreadyLiked = await upstash(['SISMEMBER', `like:${pairId}:who`, anonId]);
-      
-      if (alreadyLiked !== 1) {
-        // Add to set and increment count
-        await Promise.all([
-          upstash(['SADD', `like:${pairId}:who`, anonId]),
-          upstash(['HINCRBY', `like:${pairId}`, 'count', 1])
-        ]);
-        mine = true;
-      } else {
-        mine = true;
+  } else if (op === "dec") {
+    const rem = await redis([["SREM", kWho(pairId), anon]]);
+    const removed = Number(rem?.[0]?.result ?? 0) === 1;
+    if (removed) {
+      const decr = await redis([["DECR", kCount(pairId)]]);
+      let count = Number(decr?.[0]?.result ?? 0);
+      if (!Number.isFinite(count) || count < 0) {
+        await redis([["SET", kCount(pairId), "0"]]);
+        count = 0;
       }
-      
-      // Get updated count
-      const count = await upstash(['HGET', `like:${pairId}`, 'count']);
-      newCount = parseInt(count) || 0;
-      
-    } else { // unlike
-      // Check if currently liked
-      const isLiked = await upstash(['SISMEMBER', `like:${pairId}:who`, anonId]);
-      
-      if (isLiked === 1) {
-        // Remove from set and decrement count (bounded at 0)
-        await upstash(['SREM', `like:${pairId}:who`, anonId]);
-        
-        const currentCount = await upstash(['HGET', `like:${pairId}`, 'count']);
-        const current = parseInt(currentCount) || 0;
-        
-        if (current > 0) {
-          await upstash(['HINCRBY', `like:${pairId}`, 'count', -1]);
-          newCount = current - 1;
-        } else {
-          newCount = 0;
-        }
-        mine = false;
-      } else {
-        // Get current count
-        const count = await upstash(['HGET', `like:${pairId}`, 'count']);
-        newCount = parseInt(count) || 0;
-        mine = false;
-      }
+      return NextResponse.json({ ok: true, count, you: false });
+    } else {
+      const get = await redis([["GET", kCount(pairId)]]);
+      const count = Number(get?.[0]?.result ?? 0);
+      return NextResponse.json({ ok: true, count, you: false });
     }
-
-    return NextResponse.json({
-      count: newCount,
-      mine,
-      action
-    });
-  } catch (error) {
-    console.error('POST /api/like error:', error);
-    return NextResponse.json({ error: 'internal error' }, { status: 500 });
   }
+  return NextResponse.json({ error: "op must be inc or dec" }, { status: 400 });
 }
