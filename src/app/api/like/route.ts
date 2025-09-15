@@ -23,12 +23,11 @@ async function redis(cmds: any[]): Promise<UpstashItem[]> {
 const kCount = (p: string) => `likes:count:${p}`;
 const kWho   = (p: string) => `likes:who:${p}`;
 
-function parseAnon(req: NextRequest) {
-  const ck = cookies();
+function parseAnon(req: NextRequest){
   return (
     req.headers.get("x-anon") ||
-    ck.get("anon")?.value ||
-    ck.get("ditona_anon")?.value ||
+    req.cookies.get("anon")?.value ||
+    req.cookies.get("ditona_anon")?.value ||
     ""
   );
 }
