@@ -1,18 +1,18 @@
 "use client";
 import { useEffect, useState } from "react";
-import { busOn, busOff } from "../../utils/bus";
+import { on } from "@/utils/events";
 
 export default function LikeHud(){
   const [pair,setPair]=useState<string|null>(null);
   const [count,setCount]=useState<number>(0);
   useEffect(()=>{
     const onPair = (e:any) => setPair(e?.pairId || e?.id || null);
-    const onLike = (p:any) => setCount(typeof p?.count === 'number' ? p.count : 0);
-    busOn('rtc:pair', onPair);
-    busOn('like:update', onLike);
+    const onLike = (p:any) => setCount(typeof p?.myLikes === 'number' ? p.myLikes : (typeof p?.count === 'number' ? p.count : 0));
+    const offPair = on('rtc:pair', onPair);
+    const offLike = on('ui:likeUpdate', onLike);
     return () => {
-      busOff('rtc:pair', onPair);
-      busOff('like:update', onLike);
+      offPair();
+      offLike();
     };
   },[]);
   return (
