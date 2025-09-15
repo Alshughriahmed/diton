@@ -29,6 +29,7 @@ import ChatToolbar from "./components/ChatToolbar";
 import ChatMessagingBar from "./components/ChatMessagingBar";
 import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
+import LikeHud from "./LikeHud";
 // import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
@@ -462,7 +463,9 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
   }
 
   return (
-    <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
+    <>
+      <LikeHud />
+      <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
       <div className="h-full grid grid-rows-2 gap-2 p-2">
         {/* ===== Top (peer) ===== */}
         <section className="relative rounded-2xl bg-black/30 overflow-hidden">
@@ -622,5 +625,6 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
       {/* Chat Messaging */}
       <ChatMessagingBar />
     </div>
+    </>
   );
 }
