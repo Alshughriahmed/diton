@@ -161,7 +161,7 @@ export function stop() {
     }
 
     // Abort any ongoing requests
-    if (state.ac) { try { state.ac.abort(); } catch {} }
+    if (state.ac) { try { if (!state.ac.signal || !state.ac.signal.aborted) state.ac.abort("stop"); } catch {} }
     state.ac = null;
 
     // Close peer connection and stop tracks

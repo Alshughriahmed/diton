@@ -1,4 +1,13 @@
 "use client";
+
+if (process.env.NODE_ENV !== 'production') {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('unhandledrejection', (e)=>{
+      const r=e.reason; const msg=String((r&&r.message)||'');
+      if ((r&&r.name==='AbortError') || /aborted/i.test(msg)) e.preventDefault();
+    });
+  }
+}
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 import * as rtc from "./rtcFlow";
