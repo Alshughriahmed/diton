@@ -2,6 +2,7 @@
 
 
 import "./likeSyncClient";
+import './msgSendClient';
 if (process.env.NODE_ENV !== 'production') {
   if (typeof window !== 'undefined') {
     window.addEventListener('unhandledrejection', (e)=>{

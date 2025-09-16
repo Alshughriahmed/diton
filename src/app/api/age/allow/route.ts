@@ -1,6 +1,10 @@
 import { allow, ipFrom } from "../../../../lib/ratelimit";
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function POST(req: Request) {
   const ip = ipFrom(req);
   const rl = allow(`${ip}:age-allow`, 12, 60_000);
@@ -17,3 +21,5 @@ export async function POST(req: Request) {
   });
   return res;
 }
+
+export async function GET() { return new Response(JSON.stringify({error:"method_not_allowed"}), { status: 405, headers: {"content-type":"application/json"}}); }

@@ -45,6 +45,18 @@ req: NextRequest) {
     const filterCountries = String(b.filterCountries || "ALL");
 
     await enqueue(anon, { gender, country }, { genders: filterGenders, countries: filterCountries });
+// VIP weight: bring vip to the front
+try {
+  const isVip = await requireVip();
+  if (isVip) {
+    const pri = Date.now() - 600000; // 10min earlier
+    await Promise.all([
+      zadd(`rtc:q`, pri, anon),
+      zadd(`rtc:q:gender:${gender.toLowerCase()}`, pri, anon),
+      zadd(`rtc:q:country:${country.toUpperCase()}`, pri, anon),
+    ]);
+  }
+} catch {}
     return new NextResponse(null, { status: 204 });
   } catch (e: any) {
     return NextResponse.json({ error: "enqueue-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });

@@ -33,10 +33,26 @@ export async function cleanStaleQueue(){ const cutoff=Date.now()-60_000; await z
 
 async function candidatePool(selfAttr:Attrs, selfFilt:Filters){
   const wantedC=(selfFilt.countries||"ALL").toUpperCase(); const wantedG=(selfFilt.genders||"all").toLowerCase();
-  const sets:string[][]=[];
-  if(wantedC!=="ALL"){ for(const cc of wantedC.split(",").slice(0,15)){ sets.push(await zrange(`rtc:q:country:${cc}`,0,19)); } }
-  if(wantedG!=="all"){ for(const g of wantedG.split(",").slice(0,2)){ sets.push(await zrange(`rtc:q:gender:${g}`,0,19)); } }
-  sets.push(await zrange(`rtc:q`,0,49));
+  
+    const sets:string[][] = [];
+    const add = async (key:string, a=0, b=49) => { try { sets.push(await zrange(key, a, b)); } catch {} };
+
+    // VIP first (country → gender → global)
+    if (wantedC !== "ALL") {
+      for (const cc of wantedC.split(",").slice(0,15)) {
+        await add(`rtc:q:vip:country:`, 0, 19);
+        await add(`rtc:q:country:`,      0, 19);
+      }
+    }
+    if (wantedG !== "all") {
+      for (const g of wantedG.split(",").slice(0,2)) {
+        await add(`rtc:q:vip:gender:`, 0, 19);
+        await add(`rtc:q:gender:`,     0, 19);
+      }
+    }
+    await add(`rtc:q:vip`, 0, 49);
+    await add(`rtc:q`,     0, 49);
+  
   const seen=new Set<string>(); const out:string[]=[];
   for(const arr of sets){ for(const id of arr){ if(!seen.has(id)){ seen.add(id); out.push(id); } } }
   return out;
