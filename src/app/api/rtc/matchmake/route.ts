@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractAnonId } from "@/lib/rtc/auth";
 import { matchmake, pairMapOf } from "@/lib/rtc/mm";
+import { setPx } from "@/lib/rtc/upstash";
 export const runtime = "nodejs";
 
 async function upstashGetMeta(anonId:string){
@@ -24,7 +25,18 @@ async function upstashGetMeta(anonId:string){
 export async function POST(
 _req: NextRequest) {
   const anon = extractAnonId(_req);
-  if (!anon) return NextResponse.json({ error:"anon-required" }, { status:403 });
+  if (!anon) return NextResponse.json({ error:"anon-required" }, { status:401 });
+  let prevFor:string|null=null;
+  try{
+    if(_req.headers.get("content-type")?.includes("application/json")){
+      const b:any = await _req.json().catch(()=>null);
+      prevFor = b?.prevFor || null;
+    } else {
+      prevFor = _req.nextUrl?.searchParams?.get("prevFor") || null;
+    }
+  }catch{}
+  if (prevFor) { try{ await setPx(`rtc:prev-wish:${anon}`, String(prevFor), 7000); }catch{} }
+
   const mapped = await pairMapOf(anon);
   if (mapped) return NextResponse.json({ found:true, pairId:mapped.pairId, role:mapped.role }, { status:200 });
   const res = await matchmake(anon);

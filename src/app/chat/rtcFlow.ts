@@ -111,6 +111,8 @@ interface RtcState {
   pairId: string | null;
   ac: AbortController | null;
   pc: RTCPeerConnection | null;
+  lastPeer: string | null;
+  prevForOnce: string | null;
 }
 
 let state: RtcState = {
@@ -119,7 +121,9 @@ let state: RtcState = {
   role: null,
   pairId: null,
   ac: null,
-  pc: null
+  pc: null,
+  lastPeer: null,
+  prevForOnce: null
 };
 
 // Phase callback
@@ -444,10 +448,20 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
 
     // Matchmake: support both response formats
     for (let i = 0; i < 50 && checkSession(currentSession) && !state.ac?.signal.aborted; i++) {
-      const response = await safeFetch("/api/rtc/matchmake", { 
+      // Prepare matchmake request with prevFor if available
+      const matchmakeOptions: RequestInit = {
         method: "POST", 
-        cache: "no-store" 
-      }, 'matchmake', currentSession);
+        cache: "no-store"
+      };
+      
+      if (state.prevForOnce) {
+        matchmakeOptions.headers = { "content-type": "application/json" };
+        matchmakeOptions.body = JSON.stringify({ prevFor: state.prevForOnce });
+        // Clear prevForOnce after use
+        state.prevForOnce = null;
+      }
+      
+      const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions, 'matchmake', currentSession);
       
       if (!response || !checkSession(currentSession)) return;
       
@@ -459,6 +473,10 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
           state.pairId = j.pairId;
           state.role = j.role;
           state.phase = 'matched';
+          // Save peer for potential "prev" functionality
+          if (j.peerAnonId) {
+            state.lastPeer = j.peerAnonId;
+          }
           onPhase('matched');
           
           // Store in localStorage for recovery
@@ -653,3 +671,11 @@ export function stopRtcSession(reason: string = "user") {
   logRtc('session-stop', 200, { reason });
   stop();
 }
+
+
+try{
+  window.addEventListener("ui:prev", ()=>{
+    try{ state.prevForOnce = state.lastPeer; }catch{}
+    try{ next(); }catch{}
+  });
+}catch{}
