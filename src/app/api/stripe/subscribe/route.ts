@@ -3,7 +3,9 @@ import Stripe from "stripe";
 
 export async function POST(req: NextRequest) {
   try {
-    const { plan } = (await req.json().catch(() => ({}))) as { plan?: string };
+    const body = (await req.json().catch(() => ({}))) as { plan?: string; priceId?: string };
+      const plan = body?.plan;
+      const priceIdIn = body?.priceId;
     
     // Check for Stripe configuration
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -18,9 +20,11 @@ export async function POST(req: NextRequest) {
       monthly: process.env.STRIPE_PRICE_EUR_MONTHLY,
       yearly: process.env.STRIPE_PRICE_EUR_YEARLY,
     };
-    const priceId = plan ? PRICES[plan] : undefined;
+      let priceId = priceIdIn;
+    if (priceId && !/^price_/.test(priceId)) { priceId = undefined; }
+    if (!priceId && plan) { priceId = PRICES[plan]; }
     if (!priceId) {
-      return NextResponse.json({ error: "invalid plan" }, { status: 400 });
+      return NextResponse.json({ error: "invalid priceId or plan" }, { status: 400 });
     }
 
     const url = new URL(req.url);
@@ -33,7 +37,9 @@ const session = await stripe.checkout.sessions.create({
       success_url: `${base}/api/vip/claim?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${base}/plans`,
     });
-    return NextResponse.json({ url: session.url });
+    const res = NextResponse.json({ url: session.url });
+      res.headers.set("cache-control","no-store, no-cache, must-revalidate");
+      return res;
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || "stripe_error" }, { status: 500 });
   }
