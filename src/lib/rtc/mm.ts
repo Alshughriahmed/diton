@@ -110,6 +110,47 @@ export async function matchmake(self:string){
         }
       }catch{}
       // === /prev wish ===
+      // === prev for: another user asked to reconnect with me ===
+      try{
+        const caller = await get(`rtc:prev-for:${self}`);
+        if(caller && caller !== self){
+          const cand = String(caller);
+          const alive = await exists(`rtc:attrs:${cand}`);
+          const mapped = await get(`rtc:pair:map:${cand}`);
+          if(alive && !mapped){
+            const [candAttrRaw,candFiltRaw]=await Promise.all([hgetall(`rtc:attrs:${cand}`),hgetall(`rtc:filters:${cand}`)]);
+            const candAttr: Attrs = {gender: candAttrRaw?.gender || "", country: candAttrRaw?.country || ""};
+            const candFilt: Filters = {genders: candFiltRaw?.genders, countries: candFiltRaw?.countries};
+            const okA=intersectOk(selfFilt,candAttr); const okB=intersectOk(candFilt,selfAttr);
+            if(okA && okB){
+              if(await setNxPx(`rtc:claim:${cand}`,self,6000)){
+                const pairLock=pairLockKey(self,cand);
+                if(await setNxPx(pairLock,"1",6000)){
+                  const pairId=ulid();
+                  await Promise.all([
+                    hset(`rtc:pair:${pairId}`,{a:cand,b:self,role_a:"caller",role_b:"callee",created:Date.now()}),
+                    expire(`rtc:pair:${pairId}`,150),
+                    setPx(`rtc:pair:map:${cand}`,`${pairId}|caller`,150_000),
+                    setPx(`rtc:pair:map:${self}`,`${pairId}|callee`,150_000),
+                    zrem(`rtc:q`,self), zrem(`rtc:q`,cand),
+                    zrem(`rtc:q:gender:${selfAttr.gender.toLowerCase()}`,self),
+                    zrem(`rtc:q:gender:${candAttr.gender?.toLowerCase?.()||""}`,cand),
+                    zrem(`rtc:q:country:${selfAttr.country.toUpperCase()}`,self),
+                    zrem(`rtc:q:country:${candAttr.country?.toUpperCase?.()||""}`,cand),
+                    sadd(`rtc:seen:${self}`,cand), expire(`rtc:seen:${self}`,300),
+                    sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
+                    del(`rtc:claim:${cand}`), del(pairLock),
+                  ]);
+                  await del(`rtc:prev-for:${self}`);
+                  await Promise.all([ setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000) ]);
+                  return {status:200 as const, body:{pairId, role:"callee" as const, peerAnonId:cand}};
+                } else { await del(`rtc:claim:${cand}`); }
+              }
+            }
+          }
+        }
+      }catch{}
+      // === /prev for ===
 
       const pool=await candidatePool(selfAttr,selfFilt);
     for(const cand of pool){

@@ -2,9 +2,12 @@ import { allow, ipFrom } from "../../../../lib/ratelimit";
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { requireVip } from "../../../../utils/vip";
+import { get as upGet, setPx as upSetPx } from "../../../../lib/rtc/upstash";
 
 export const runtime = "nodejs"; // نحتاج الوصول للكوكيز بثبات
 export const dynamic = "force-dynamic";
+
+function anonFromCookies(req: Request){ try{ const cookieHeader = req.headers.get("cookie") || ""; const match = cookieHeader.match(/(?:anon|ditona_anon)=([^;]+)/); return match ? match[1] : ""; }catch{ return ""; } }
 
 // hCaptcha verification function
 async function verifyHCaptcha(token: string): Promise<boolean> {
@@ -51,11 +54,19 @@ function parse(input: any) {
 export async function GET(req: Request) {
   const prev = (req.headers.get("x-ditona-prev") === "1");
   if (prev) {
-    try {
-      const { getServerSession } = await import("next-auth");
-      const session = await getServerSession();
-      if (!session) { return new Response("prev requires auth", { status: 403 }); }
-    } catch { return new Response("prev requires auth", { status: 403 }); }
+    const isVip = await requireVip();
+    if (!isVip) { return new Response("prev requires vip", { status: 403 }); }
+    const me = anonFromCookies(req);
+    if (me) {
+      try {
+        const last:any = await upGet(`rtc:last:${me}`);
+        const peer = String(last || "");
+        if (peer) {
+          const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;
+          try { await Promise.all([ upSetPx(`rtc:prev-wish:${me}`, peer, ttl), upSetPx(`rtc:prev-for:${peer}`, me, ttl) ]); } catch {}
+        }
+      } catch {}
+    }
   }
   
   try { const h = new Headers(req.headers); const _g = h.get("x-ditona-my-gender"); const _geo = h.get("x-ditona-geo"); void(_g); void(_geo); } catch {}

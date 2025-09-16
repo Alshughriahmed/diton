@@ -1,0 +1,61 @@
+bash -lc '
+set -Eeuo pipefail
+echo "=== Read-Only Audit: DitonaChat ==="
+
+echo "[GIT]"
+git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "NO_GIT"
+git -c core.quotepath=false --no-pager log -1 --oneline 2>/dev/null || echo "NO_GIT_LOG"
+
+echo; echo "[mm.ts]"
+grep -nE "prev-wish|prev-for|rtc:last" src/lib/rtc/mm.ts || echo "MISSING_mm_keys"
+MM_CONSUMES_PREV_WISH=$(grep -q "prev-wish" src/lib/rtc/mm.ts && echo 1 || echo 0)
+MM_CONSUMES_PREV_FOR=$(grep -q "prev-for" src/lib/rtc/mm.ts && echo 1 || echo 0)
+MM_SETS_LAST=$(grep -q "rtc:last:" src/lib/rtc/mm.ts && echo 1 || echo 0)
+
+echo; echo "[match/next route]"
+grep -n "x-ditona-prev" src/app/api/match/next/route.ts || true
+grep -n "prev requires vip" src/app/api/match/next/route.ts || true
+MATCH_NEXT_ENFORCES_VIP_PREV=$(grep -q "prev requires vip" src/app/api/match/next/route.ts && echo 1 || echo 0)
+REQ_VIP_IMPORT=$(grep -q "requireVip" src/app/api/match/next/route.ts && echo 1 || echo 0)
+
+echo; echo "[prev helper route]"
+test -f src/app/api/rtc/prev/for/route.ts && echo "HAS_PREV_FOR_ROUTE=1" || echo "HAS_PREV_FOR_ROUTE=0"
+
+echo; echo "[Swipe + UI events]"
+SWIPE_PREV=$(grep -q "ui:prev" -R src/app/chat && echo 1 || echo 0)
+SWIPE_NEXT=$(grep -q "ui:next" -R src/app/chat && echo 1 || echo 0)
+grep -nE "pointerdown|touchstart|touchmove" -R src/app/chat || true
+
+echo; echo "[Messaging bar]"
+grep -n "visualViewport" -R src/app/chat || echo "NO_VISUAL_VIEWPORT"
+
+echo; echo "[RTC safeAbort]"
+grep -n "safeAbort" src/app/chat/rtcFlow.ts || echo "NO_SAFE_ABORT"
+
+echo; echo "[Like API]"
+grep -nE "RL_MAX|RL_WIN" src/app/api/like/route.ts || true
+grep -n "no-store" src/app/api/like/route.ts || true
+
+echo; echo "[Message Allow API]"
+grep -nE "limit|15|vip" src/app/api/message/allow/route.ts || true
+grep -nE "no-store|no-referrer" src/app/api/message/allow/route.ts || true
+
+echo; echo "[Security headers]"
+grep -n "Permissions-Policy" next.config.mjs || echo "NO_PERMISSIONS_POLICY"
+grep -n "Content-Security-Policy" next.config.mjs || echo "NO_CSP"
+
+echo; echo "[Env presence (masked)]"
+[ -n "${UPSTASH_REDIS_REST_URL:-}" ] && echo "UPSTASH_URL_PRESENT=1" || echo "UPSTASH_URL_PRESENT=0"
+[ -n "${UPSTASH_REDIS_REST_TOKEN:-}" ] && echo "UPSTASH_TOKEN_PRESENT=1" || echo "UPSTASH_TOKEN_PRESENT=0"
+[ -n "${TWILIO_TURN_URL:-}" ] && echo "TURN_URL_PRESENT=1" || echo "TURN_URL_PRESENT=0"
+
+echo; echo "-- Acceptance --"
+echo "MM_CONSUMES_PREV_WISH=$MM_CONSUMES_PREV_WISH"
+echo "MM_CONSUMES_PREV_FOR=$MM_CONSUMES_PREV_FOR"
+echo "MM_SETS_LAST=$MM_SETS_LAST"
+echo "HAS_PREV_FOR_ROUTE=$(test -f src/app/api/rtc/prev/for/route.ts && echo 1 || echo 0)"
+echo "MATCH_NEXT_ENFORCES_VIP_PREV=$MATCH_NEXT_ENFORCES_VIP_PREV"
+echo "REQ_VIP_IMPORT=$REQ_VIP_IMPORT"
+echo "SWIPE_PREV=$SWIPE_PREV"
+echo "SWIPE_NEXT=$SWIPE_NEXT"
+'

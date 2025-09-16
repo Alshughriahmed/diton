@@ -1,0 +1,200 @@
+التعليمات للوكيل
+
+الهدف: تفعيل “Prev أحادي للطرف VIP” والتحقق من TURN وStripe ومقاييس النظام.
+
+الأسلوب: Minimal-Diff. نسخ احتياطي قبل أي تعديل. لا حذف ولا تعطيل ميزات.
+
+التنفيذ: شِل فقط. كل دفعة داخل غلاف يمنع إعادة تشغيل dev المتكرر.
+
+الإيقاف المبكر: إذا كانت مفاتيح البيئة المسببة مطلوبة وغائبة، أبلغ وتوقف.
+
+A) تدقيق قراءة-فقط أولي
+
+نفّذ واقرأ فقط.
+
+bash -lc '
+set -Eeuo pipefail
+echo "=== RO Audit: env + endpoints ==="
+BASE="http://127.0.0.1:${PORT:-3000}"
+echo "[TURN usage]";   grep -nRE "TWILIO|TURN"   src/app/api/turn || true; sed -n "1,160p" src/app/api/turn/route.ts 2>/dev/null || true
+echo "[Stripe usage]"; grep -nRE "STRIPE_"       src/app/api/stripe || true; sed -n "1,200p" src/app/api/stripe/prices/route.ts 2>/dev/null || true
+echo "[HTTP]"; echo -n "TURN: ";   curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/turn" || echo 000
+echo -n "PRICES: ";  curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/stripe/prices" || echo 000
+echo "[ENV]"; for k in TWILIO_TURN_URL TWILIO_TURN_USERNAME TWILIO_TURN_PASSWORD STRIPE_SECRET_KEY STRIPE_PUBLISHABLE_KEY STRIPE_WEBHOOK_SECRET; do v="${!k}"; echo "$k=$([ -n "$v" ] && echo SET || echo MISSING)"; done
+'
+
+
+إن كان TURN أو Stripe = MISSING → أبلغ بذلك وتوقف عن التعديلات. وإلا انتقل للخطوة B.
+
+B) تجهيز أدوات التشغيل منخفضة التكلفة
+
+أنشئ سكربتات مساعدة. كل سكربت به heredoc مستقل لحماية الاقتباس.
+
+bash -lc '
+set -Eeuo pipefail; mkdir -p _ops/bin _ops/logs _ops/backups _ops/reports
+
+# 1) غلاف دفعة واحدة يمنع تكرار إعادة التشغيل
+cat > _ops/bin/hold_once.sh <<'"EOF"'
+set -Eeuo pipefail
+PORT="${PORT:-3000}"; BASE="http://127.0.0.1:$PORT"
+LOCK="_ops/.hold_lock"; mkdir -p _ops/logs
+if mkdir "$LOCK" 2>/dev/null; then trap 'rm -rf "$LOCK"' EXIT; else echo "LOCK_HELD=1"; exit 2; fi
+pkill -f ".next|node .*next|standalone" || true
+if [ "$#" -gt 0 ]; then "$@" || { echo "PAYLOAD_FAILED=1"; exit 3; }; fi
+nohup pnpm dev -p "$PORT" -H 0.0.0.0 >"_ops/logs/dev_hold.log" 2>&1 & disown
+for i in $(seq 1 30); do code="$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)"; [ "$code" = 200 ] && { OK=1; break; }; sleep 1; done
+echo "-- Acceptance --"; echo "LOCK=1"; echo "HTTP_OK=${OK:-0}"
+"EOF"
+chmod +x _ops/bin/hold_once.sh
+
+# 2) تصحيح Prev VIP (Minimal-Diff) باستخدام sed فقط
+cat > _ops/bin/006_prev_vip_fix.sh <<'"EOF"'
+set -Eeuo pipefail
+TS="$(date -u +%Y%m%d-%H%M%S)"; BKP="_ops/backups/prev_vip_fix_${TS}"; mkdir -p "$BKP"
+cp -a src/lib/rtc/mm.ts "$BKP/mm.ts" 2>/dev/null || true
+cp -a src/app/api/match/next/route.ts "$BKP/match_next_route.ts" 2>/dev/null || true
+
+# A) إدراج كتلة prev-for إن لم تكن موجودة
+if ! grep -q "rtc:prev-for" src/lib/rtc/mm.ts; then
+  cat > _ops/tmp.prev_for.ts <<'"BLOCK"'
+      // === prev for: another user asked to reconnect with me ===
+      try{
+        const caller = await get(`rtc:prev-for:${self}`);
+        if(caller && caller !== self){
+          const cand = String(caller);
+          const alive = await exists(`rtc:attrs:${cand}`);
+          const mapped = await get(`rtc:pair:map:${cand}`);
+          if(alive && !mapped){
+            const [candAttrRaw,candFiltRaw]=await Promise.all([hgetall(`rtc:attrs:${cand}`),hgetall(`rtc:filters:${cand}`)]);
+            const candAttr: Attrs = {gender: candAttrRaw?.gender || "", country: candAttrRaw?.country || ""};
+            const candFilt: Filters = {genders: candFiltRaw?.genders, countries: candFiltRaw?.countries};
+            const okA=intersectOk(selfFilt,candAttr); const okB=intersectOk(candFilt,selfAttr);
+            if(okA && okB){
+              if(await setNxPx(`rtc:claim:${cand}`,self,6000)){
+                const pairLock=pairLockKey(self,cand);
+                if(await setNxPx(pairLock,"1",6000)){
+                  const pairId=ulid();
+                  await Promise.all([
+                    hset(`rtc:pair:${pairId}`,{a:cand,b:self,role_a:"caller",role_b:"callee",created:Date.now()}),
+                    expire(`rtc:pair:${pairId}`,150),
+                    setPx(`rtc:pair:map:${cand}`,`${pairId}|caller`,150_000),
+                    setPx(`rtc:pair:map:${self}`,`${pairId}|callee`,150_000),
+                    zrem(`rtc:q`,self), zrem(`rtc:q`,cand),
+                    zrem(`rtc:q:gender:${selfAttr.gender.toLowerCase()}`,self),
+                    zrem(`rtc:q:gender:${candAttr.gender?.toLowerCase?.()||""}`,cand),
+                    zrem(`rtc:q:country:${selfAttr.country.toUpperCase()}`,self),
+                    zrem(`rtc:q:country:${candAttr.country?.toUpperCase?.()||""}`,cand),
+                    sadd(`rtc:seen:${self}`,cand), expire(`rtc:seen:${self}`,300),
+                    sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
+                    del(`rtc:claim:${cand}`), del(pairLock),
+                  ]);
+                  await del(`rtc:prev-for:${self}`);
+                  await Promise.all([ setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000) ]);
+                  return {status:200 as const, body:{pairId, role:"callee" as const, peerAnonId:cand}};
+                } else { await del(`rtc:claim:${cand}`); }
+              }
+            }
+          }
+        }
+      }catch{}
+      // === /prev for ===
+BLOCK
+  sed -i '/\/\/ === \/prev wish ===/r _ops/tmp.prev_for.ts' src/lib/rtc/mm.ts
+  rm -f _ops/tmp.prev_for.ts
+fi
+
+# B) حفظ rtc:last* ومسح prev-for المقابل في مسار prev-wish + المسار العام
+if ! grep -q "rtc:last:" src/lib/rtc/mm.ts; then
+  sed -z -E -i 's/(await del\(`rtc:prev-wish:\$\{self\}`\);\s*)\n\s*return \{status:200 as const, body:\{pairId, role:"caller" as const, peerAnonId:cand\}\};/\1\n      try{ await del(`rtc:prev-for:${cand}`); }catch{}\n      await Promise.all([ setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000) ]);\n      return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};/g' src/lib/rtc/mm.ts
+  sed -i '0,|return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};|s||await Promise.all([ setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000) ]);\n      return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};|' src/lib/rtc/mm.ts
+fi
+
+# C) قفل Prev كـ VIP-only وكتابة prev-wish/prev-for من rtc:last:* في /api/match/next
+if ! grep -q "prev requires vip" src/app/api/match/next/route.ts; then
+  grep -q "lib/rtc/upstash" src/app/api/match/next/route.ts || sed -i 's|import { requireVip } from "../../../../utils/vip";|import { requireVip } from "../../../../utils/vip";\
+import { get as upGet, setPx as upSetPx } from "../../../../lib/rtc/upstash";|' src/app/api/match/next/route.ts
+  grep -q "function anonFromCookies" src/app/api/match/next/route.ts || sed -i 's|export const dynamic = "force-dynamic";|export const dynamic = "force-dynamic";\
+\
+function anonFromCookies(){ try{ const c=cookies(); return c.get("anon")?.value || c.get("ditona_anon")?.value || ""; }catch{ return "" } }|' src/app/api/match/next/route.ts
+  sed -z -E -i 's|const prev = \(req.headers.get\("x-ditona-prev"\) === "1"\);\s*if \(prev\) \{.*?\}|const prev = (req.headers.get("x-ditona-prev") === "1");\
+  if (prev) {\
+    const isVip = await requireVip();\
+    if (!isVip) { return new Response("prev requires vip", { status: 403 }); }\
+    const me = anonFromCookies();\
+    if (me) {\
+      try {\
+        const last:any = await upGet(`rtc:last:${me}`);\
+        const peer = String(last || "");\
+        if (peer) {\
+          const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;\
+          try { await Promise.all([ upSetPx(`rtc:prev-wish:${me}`, peer, ttl), upSetPx(`rtc:prev-for:${peer}`, me, ttl) ]); } catch {}\
+        }\
+      } catch {}\
+    }\
+  }|s' src/app/api/match/next/route.ts
+fi
+
+# تقرير سريع
+echo "MM_CONSUMES_PREV_FOR=$([ -n "$(grep -n "prev-for" src/lib/rtc/mm.ts || true)" ] && echo 1 || echo 0)"
+echo "MM_SETS_LAST_KEYS=$([ -n "$(grep -n "rtc:last:" src/lib/rtc/mm.ts || true)" ] && echo 1 || echo 0)"
+echo "MATCH_NEXT_ENFORCES_VIP_PREV=$([ -n "$(grep -n "prev requires vip" src/app/api/match/next/route.ts || true)" ] && echo 1 || echo 0)"
+echo "MATCH_NEXT_WRITES_PREV_KEYS=$([ -n "$(grep -n "rtc:prev-for" src/app/api/match/next/route.ts || true)" ] && echo 1 || echo 0)"
+"EOF"
+chmod +x _ops/bin/006_prev_vip_fix.sh
+
+# 3) اختبار قبول لطرفين عبر Upstash
+cat > _ops/bin/005_prev_vip_acc.sh <<'"EOF"'
+set -Eeuo pipefail
+PORT="${PORT:-3000}"; BASE="http://127.0.0.1:${PORT}"
+[ -n "${UPSTASH_REDIS_REST_URL:-}" ] || { echo "NO_UPSTASH_URL"; exit 1; }
+[ -n "${UPSTASH_REDIS_REST_TOKEN:-}" ] || { echo "NO_UPSTASH_TOKEN"; exit 1; }
+URL="$UPSTASH_REDIS_REST_URL/pipeline"; HDR="Authorization: Bearer $UPSTASH_REDIS_REST_TOKEN"
+TS="$(date -u +%Y%m%d-%H%M%S)"; A="anon_A_${TS}"; B="anon_B_${TS}"; GA="male"; GB="female"; CA="DE"; CB="DE"; now="$(date +%s%3N)"
+curl -sS -X POST "$URL" -H "$HDR" -H 'content-type: application/json' -d "[[\"HSET\",\"rtc:attrs:${A}\",\"gender\",\"${GA}\",\"country\",\"${CA}\"],[\"EXPIRE\",\"rtc:attrs:${A}\",\"120\"],[\"HSET\",\"rtc:filters:${A}\",\"genders\",\"all\",\"countries\",\"ALL\"],[\"EXPIRE\",\"rtc:filters:${A}\",\"120\"],[\"ZADD\",\"rtc:q\",\"${now}\",\"${A}\"],[\"ZADD\",\"rtc:q:gender:${GA}\",\"${now}\",\"${A}\"],[\"ZADD\",\"rtc:q:country:${CA}\",\"${now}\",\"${A}\"],[\"HSET\",\"rtc:attrs:${B}\",\"gender\",\"${GB}\",\"country\",\"${CB}\"],[\"EXPIRE\",\"rtc:attrs:${B}\",\"120\"],[\"HSET\",\"rtc:filters:${B}\",\"genders\",\"all\",\"countries\",\"ALL\"],[\"EXPIRE\",\"rtc:filters:${B}\",\"120\"],[\"ZADD\",\"rtc:q\",\"${now}\",\"${B}\"],[\"ZADD\",\"rtc:q:gender:${GB}\",\"${now}\",\"${B}\"],[\"ZADD\",\"rtc:q:country:${CB}\",\"${now}\",\"${B}\"]]" >/dev/null
+MA="$(curl -sS -X POST "$BASE/api/rtc/matchmake" -H "Cookie: anon=${A}" -H "content-type: application/json" -d "{}")"
+PAIR="$(printf "%s" "$MA" | sed -nE 's/.*"pairId":"([^"]+)".*/\1/p')"
+curl -sS -X POST "$URL" -H "$HDR" -H 'content-type: application/json' -d "[[\"ZADD\",\"rtc:q\",\"$((now+1))\",\"${B}\"],[\"ZADD\",\"rtc:q:gender:${GB}\",\"$((now+1))\",\"${B}\"],[\"ZADD\",\"rtc:q:country:${CB}\",\"$((now+1))\",\"${B}\"]]" >/dev/null
+C403="$(curl -s -o /dev/null -w "%{http_code}' -H 'Cookie: anon=${A}' -H 'x-ditona-prev: 1' "$BASE/api/match/next")"
+C200="$(curl -s -o /dev/null -w "%{http_code}' -H 'Cookie: anon=${A}; vip=1' -H 'x-ditona-prev: 1' "$BASE/api/match/next")"
+EXISTS="$(curl -sS -X POST "$URL" -H "$HDR" -H 'content-type: application/json' -d "[[\"EXISTS\",\"rtc:last:${A}\"],[\"EXISTS\",\"rtc:last:${B}\"],[\"EXISTS\",\"rtc:prev-wish:${A}\"],[\"EXISTS\",\"rtc:prev-for:${B}\"]]")"
+LSET=$([ "$(printf "%s" "$EXISTS" | sed -nE 's/.*\[\{"result":([01])\},\{"result":([01])\}.*/\1\2/p')" = "11" ] && echo 1 || echo 0)
+PSET=$([ "$(printf "%s" "$EXISTS" | sed -nE 's/.*\[\{"result":[01]\},\{"result":[01]\},\{"result":([01])\},\{"result":([01])\}.*/\1\2/p')" = "11" ] && echo 1 || echo 0)
+MB="$(curl -sS -X POST "$BASE/api/rtc/matchmake" -H "Cookie: anon=${B}" -H "content-type: application/json" -d "{}")"
+PEER_OF_B="$(printf "%s" "$MB" | sed -nE 's/.*"peerAnonId":"([^"]+)".*/\1/p')"
+ROLE_B="$(printf "%s" "$MB" | sed -nE 's/.*"role":"([^"]+)".*/\1/p')"
+echo "-- Acceptance --"
+echo "INITIAL_PAIR_OK=$([ -n "$PAIR" ] && echo 1 || echo 0)"
+echo "LAST_KEYS_SET=$LSET"
+echo "PREV_KEYS_WRITTEN=$PSET"
+echo "RECONNECT_OK=$([ "$PEER_OF_B" = "$A" ] && [ "$ROLE_B" = "callee" ] && echo 1 || echo 0)"
+echo "VIP_PREV_ENFORCED=$([ "$C403" = "403" ] && [ "$C200" = "200" ] && echo 1 || echo 0)"
+"EOF"
+chmod +x _ops/bin/005_prev_vip_acc.sh
+'
+
+C) التشغيل منخفض التكلفة
+
+نفّذ دفعة واحدة داخل الغلاف لتفادي اختفاء الشاشة:
+
+bash _ops/bin/hold_once.sh bash _ops/bin/006_prev_vip_fix.sh
+bash _ops/bin/005_prev_vip_acc.sh
+
+D) معايير القبول
+
+ينبغي أن ترى:
+
+-- Acceptance --
+INITIAL_PAIR_OK=1
+LAST_KEYS_SET=1
+PREV_KEYS_WRITTEN=1
+RECONNECT_OK=1
+VIP_PREV_ENFORCED=1
+
+
+إن فشل أي بند:
+
+لا تُزل ميزات. شخّص فقط مكان الفشل عبر grep -n لمواضع الإدراج المذكورة أعلاه، ثم أصلح بالحد الأدنى داخل نفس السكربت 006 دون توسيع التعديلات.
+
+E) بعد نجاح Prev VIP
+
+نفّذ تدقيق TURN/Stripe مرة أخرى فقط للقراءة. إذا كانت المفاتيح غير مضبوطة، أبلغ وانتهِ. إعداد الأسرار يتم من لوحات Replit/Vercel، لا عبر الشِل.

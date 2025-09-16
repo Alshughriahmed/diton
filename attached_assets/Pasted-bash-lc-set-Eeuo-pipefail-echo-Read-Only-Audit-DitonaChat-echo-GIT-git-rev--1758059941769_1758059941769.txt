@@ -1,0 +1,86 @@
+bash -lc '
+set -Eeuo pipefail
+echo "=== Read-Only Audit: DitonaChat ==="
+
+echo "[GIT]"
+git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "NO_GIT"
+git -c core.quotepath=false --no-pager log -1 --oneline 2>/dev/null || echo "NO_GIT_LOG"
+
+echo; echo "[Prev/VIP in code]"
+grep -nE "prev-wish|prev-for|rtc:last" src/lib/rtc/mm.ts || true
+grep -n "prev requires vip" src/app/api/match/next/route.ts || true
+grep -n "rtc:prev-for" src/app/api/match/next/route.ts || true
+test -f src/app/api/rtc/prev/for/route.ts && echo "HAS_PREV_FOR_ROUTE=1" || echo "HAS_PREV_FOR_ROUTE=0"
+
+echo; echo "[Swipe + UI]"
+grep -n "ui:prev" -R src/app/chat || true
+grep -n "ui:next" -R src/app/chat || true
+grep -nE "pointerdown|touchstart|touchmove" -R src/app/chat || true
+
+echo; echo "[Messaging bar]"
+grep -n "visualViewport" -R src/app/chat || echo "NO_VISUAL_VIEWPORT"
+
+echo; echo "[RTC safeAbort]"
+grep -n "safeAbort" src/app/chat/rtcFlow.ts || echo "NO_SAFE_ABORT"
+
+echo; echo "[Like API]"
+grep -nE "RL_MAX|RL_WIN" src/app/api/like/route.ts || true
+grep -n "no-store" src/app/api/like/route.ts || true
+
+echo; echo "[Message Allow API]"
+grep -nE "limit = 15|limit=15|limit: 15" src/app/api/message/allow/route.ts || true
+grep -nE "no-store|no-referrer" src/app/api/message/allow/route.ts || true
+
+echo; echo "[Security headers]"
+grep -n "Permissions-Policy" next.config.mjs || echo "NO_PERMISSIONS_POLICY"
+grep -n "Content-Security-Policy" next.config.mjs || echo "NO_CSP"
+
+echo; echo "[Env presence (masked)]"
+[ -n "${UPSTASH_REDIS_REST_URL:-}" ] && echo "UPSTASH_URL_PRESENT=1" || echo "UPSTASH_URL_PRESENT=0"
+[ -n "${UPSTASH_REDIS_REST_TOKEN:-}" ] && echo "UPSTASH_TOKEN_PRESENT=1" || echo "UPSTASH_TOKEN_PRESENT=0"
+[ -n "${TWILIO_TURN_URL:-}" ] && echo "TURN_URL_PRESENT=1" || echo "TURN_URL_PRESENT=0"
+[ -n "${STRIPE_SECRET_KEY:-}${STRIPE_PUBLISHABLE_KEY:-}" ] && echo "STRIPE_KEYS_PRESENT=1" || echo "STRIPE_KEYS_PRESENT=0"
+
+# Booleans
+MM_CONSUMES_PREV_WISH=$(grep -q "prev-wish" src/lib/rtc/mm.ts && echo 1 || echo 0)
+MM_CONSUMES_PREV_FOR=$(grep -q "prev-for" src/lib/rtc/mm.ts && echo 1 || echo 0)
+MM_SETS_LAST=$(grep -q "rtc:last:" src/lib/rtc/mm.ts && echo 1 || echo 0)
+MATCH_NEXT_ENFORCES_VIP_PREV=$(grep -q "prev requires vip" src/app/api/match/next/route.ts && echo 1 || echo 0)
+MATCH_NEXT_WRITES_PREV_KEYS=$(grep -q "rtc:prev-for" src/app/api/match/next/route.ts && echo 1 || echo 0)
+SWIPE_PREV=$(grep -q "ui:prev" -R src/app/chat && echo 1 || echo 0)
+SWIPE_NEXT=$(grep -q "ui:next" -R src/app/chat && echo 1 || echo 0)
+VISUAL_VP=$(grep -q "visualViewport" -R src/app/chat && echo 1 || echo 0)
+SAFE_ABORT=$(grep -q "safeAbort" src/app/chat/rtcFlow.ts && echo 1 || echo 0)
+LIKE_RL=$(grep -q "RL_MAX" src/app/api/like/route.ts && echo 1 || echo 0)
+LIKE_NO_STORE=$(grep -q "no-store" src/app/api/like/route.ts && echo 1 || echo 0)
+MSG_LIMIT_15=$(grep -q "limit = 15" src/app/api/message/allow/route.ts || grep -q "limit=15" src/app/api/message/allow/route.ts || grep -q "limit: 15" src/app/api/message/allow/route.ts && echo 1 || echo 0)
+MSG_HEADERS=$(grep -q "no-referrer" src/app/api/message/allow/route.ts && grep -q "no-store" src/app/api/message/allow/route.ts && echo 1 || echo 0)
+PERM_POLICY=$(grep -q "Permissions-Policy" next.config.mjs && echo 1 || echo 0)
+CSP_PRESENT=$(grep -q "Content-Security-Policy" next.config.mjs && echo 1 || echo 0)
+UPSTASH_URL_PRESENT=$([ -n "${UPSTASH_REDIS_REST_URL:-}" ] && echo 1 || echo 0)
+UPSTASH_TOKEN_PRESENT=$([ -n "${UPSTASH_REDIS_REST_TOKEN:-}" ] && echo 1 || echo 0)
+TURN_URL_PRESENT=$([ -n "${TWILIO_TURN_URL:-}" ] && echo 1 || echo 0)
+STRIPE_KEYS_PRESENT=$([ -n "${STRIPE_SECRET_KEY:-}${STRIPE_PUBLISHABLE_KEY:-}" ] && echo 1 || echo 0)
+
+echo; echo "-- Acceptance --"
+echo "MM_CONSUMES_PREV_WISH=$MM_CONSUMES_PREV_WISH"
+echo "MM_CONSUMES_PREV_FOR=$MM_CONSUMES_PREV_FOR"
+echo "MM_SETS_LAST=$MM_SETS_LAST"
+echo "MATCH_NEXT_ENFORCES_VIP_PREV=$MATCH_NEXT_ENFORCES_VIP_PREV"
+echo "MATCH_NEXT_WRITES_PREV_KEYS=$MATCH_NEXT_WRITES_PREV_KEYS"
+echo "HAS_PREV_FOR_ROUTE=$([ -f src/app/api/rtc/prev/for/route.ts ] && echo 1 || echo 0)"
+echo "SWIPE_PREV=$SWIPE_PREV"
+echo "SWIPE_NEXT=$SWIPE_NEXT"
+echo "VISUAL_VIEWPORT=$VISUAL_VP"
+echo "SAFE_ABORT=$SAFE_ABORT"
+echo "LIKE_RL=$LIKE_RL"
+echo "LIKE_NO_STORE=$LIKE_NO_STORE"
+echo "MSG_LIMIT_15=$MSG_LIMIT_15"
+echo "MSG_HEADERS=$MSG_HEADERS"
+echo "PERMISSIONS_POLICY=$PERM_POLICY"
+echo "CSP_PRESENT=$CSP_PRESENT"
+echo "UPSTASH_URL_PRESENT=$UPSTASH_URL_PRESENT"
+echo "UPSTASH_TOKEN_PRESENT=$UPSTASH_TOKEN_PRESENT"
+echo "TURN_URL_PRESENT=$TURN_URL_PRESENT"
+echo "STRIPE_KEYS_PRESENT=$STRIPE_KEYS_PRESENT"
+'
