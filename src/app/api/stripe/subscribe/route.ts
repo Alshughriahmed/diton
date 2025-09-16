@@ -4,11 +4,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import Stripe from "stripe";
 
-const NO_STORE_HEADERS = {
+const NO_STORE = {
   "cache-control": "no-store, no-cache, must-revalidate",
   "referrer-policy": "no-referrer",
   "content-type": "application/json"
 };
+
+function j(b: any, s?: number | { status?: number }): NextResponse {
+  return NextResponse.json(b, {
+    status: (typeof s === "number" ? s : (s?.status || 200)),
+    headers: NO_STORE
+  });
+}
 
 function resolvePriceId(inputId: string, plan: string, env: any) {
   if (inputId && /^price_/.test(inputId)) return inputId;
@@ -27,6 +34,19 @@ function resolvePriceId(inputId: string, plan: string, env: any) {
 
 export async function POST(req: NextRequest) {
   try {
+    // Dual session guard: cookie check + session validation
+    const ck = req.headers.get("cookie") || "";
+    const hasAuthCookie = ck.includes("next-auth.session-token") || ck.includes("__Secure-next-auth.session-token");
+    if (!hasAuthCookie) { return j({ error: "unauthorized" }, 401); }
+    
+    const session = await getServerSession();
+    if (!session?.user) { return j({ error: "unauthorized" }, 401); }
+
+    // Check for Stripe configuration
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return j({ error: "stripe not configured" }, 500);
+    }
+
     // Enhanced parsing for priceId and plan
     let priceId = "";
     let plan = "";
@@ -57,32 +77,12 @@ export async function POST(req: NextRequest) {
       plan = url.searchParams.get("plan") || "";
     }
 
-    // Check for Stripe configuration
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return NextResponse.json({ error: "stripe not configured" }, { 
-        status: 500, 
-        headers: NO_STORE_HEADERS 
-      });
-    }
-
-    // Session check - must have authenticated user
-    const session = await getServerSession();
-    if (!session?.user) {
-      return NextResponse.json({ error: "unauthorized" }, { 
-        status: 401, 
-        headers: NO_STORE_HEADERS 
-      });
-    }
-
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
     // Resolve final priceId
     priceId = resolvePriceId(priceId, plan, process.env);
     if (!priceId) {
-      return NextResponse.json({ error: "invalid priceId or plan" }, { 
-        status: 400, 
-        headers: NO_STORE_HEADERS 
-      });
+      return j({ error: "invalid priceId or plan" }, 400);
     }
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || (new URL(req.url)).origin || "https://www.ditonachat.com";
@@ -94,14 +94,8 @@ export async function POST(req: NextRequest) {
       cancel_url: `${base}/plans`,
     });
 
-    return NextResponse.json({ url: stripeSession.url }, { 
-      status: 200, 
-      headers: NO_STORE_HEADERS 
-    });
+    return j({ url: stripeSession.url }, 200);
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "stripe_error" }, { 
-      status: 500, 
-      headers: NO_STORE_HEADERS 
-    });
+    return j({ error: e?.message || "stripe_error" }, 500);
   }
 }
