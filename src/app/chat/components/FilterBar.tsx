@@ -2,6 +2,8 @@
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { GenderKey } from "./GenderModal";
+const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+
 
 const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
 const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });

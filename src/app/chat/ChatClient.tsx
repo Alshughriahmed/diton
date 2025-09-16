@@ -112,7 +112,7 @@ export default function ChatClient(){
     let off5=on("ui:like", async (data)=>{ 
       try {
         // Check if we have a valid pairId from current RTC connection
-        const currentPairId = pair.id;
+        const currentPairId = (data && data.pairId) || pair.id;
         if (!currentPairId) {
           toast('لا يوجد اتصال نشط للإعجاب');
           return;
@@ -130,13 +130,13 @@ export default function ChatClient(){
         
         if (response.ok) {
           const result = await response.json();
-          setLike(data?.isLiked || false); 
-          setMyLikes(result.myLikes || data?.myLikes || 0);
+          setLike(!!(result?.mine ?? data?.isLiked)); 
+          setMyLikes(result?.mine ? 1 : 0);
           
           // Update LikeSystem component
           emit("ui:likeUpdate", {
             myLikes: result.myLikes || data?.myLikes || 0,
-            peerLikes: result.peerLikes || peerLikes,
+            peerLikes: (typeof result?.count==="number" ? result.count : peerLikes),
             isLiked: data?.isLiked || false,
             canLike: true
           });
@@ -150,8 +150,8 @@ export default function ChatClient(){
         console.warn('Like failed:', error);
         // Fallback to local update only if we have valid data
         if (data) {
-          setLike(data?.isLiked || false); 
-          setMyLikes(data?.myLikes || 0);
+          setLike(!!(data?.isLiked)); 
+          setMyLikes(data?.isLiked ? 1 : 0);
           emit("ui:likeUpdate", {
             myLikes: data?.myLikes || 0,
             peerLikes: peerLikes,
@@ -187,11 +187,15 @@ export default function ChatClient(){
     });
     let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
     let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
-    let offRemoteAudio=on("ui:toggleRemoteAudio", ()=>{
-      const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
-      if(v){ v.muted = !v.muted; toast(v.muted?'🔇 صمت الطرف الثاني':'🔈 سماع الطرف الثاني'); }
-    });
-    let offTogglePlay=on("ui:togglePlay", ()=>{
+    let offRemoteAudio=on("ui:toggleRemoteAudio" as any, ()=>{
+  // حاول أولاً عبر عنصر صوت مستقل إن وُجد
+  const a=document.getElementById("remoteAudio") as HTMLAudioElement|null;
+  if(a){ a.muted = !a.muted; toast(a.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني"); return; }
+  // وإلا بدّل خاصية muted على فيديو الطرف
+  const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
+  if(v){ v.muted = !v.muted; toast(v.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني"); }
+});
+let offTogglePlay=on("ui:togglePlay", ()=>{
       setPaused(p => !p);
       toast('تبديل حالة المطابقة');
     });
@@ -244,7 +248,15 @@ export default function ChatClient(){
       const remoteVideo = document.querySelector('#remoteVideo') as HTMLVideoElement;
       if (remoteVideo && data.stream) {
         remoteVideo.srcObject = data.stream;
-        remoteVideo.play().catch(()=>{});
+try{
+  const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement|null;
+  if(remoteAudio){
+    remoteAudio.srcObject = remoteVideo.srcObject as any;
+    remoteAudio.muted = false;
+    remoteAudio.play?.().catch(()=>{});
+  }
+}catch{}
+        try{ remoteVideo.play?.().catch(()=>{}); }catch{}
       }
     });
     let off9=on("ui:toggleBeauty",async (data)=>{ 
@@ -261,6 +273,35 @@ export default function ChatClient(){
         console.warn('Beauty toggle failed:', error);
       }
     });
+    
+    // Listen for peer metadata updates
+    const handlePeerMeta = (e: any) => {
+      const meta = e.detail;
+      if (meta) {
+        // Update peer info state
+        setPeerInfo(prev => ({
+          ...prev,
+          country: meta.country || prev.country,
+          gender: meta.gender || prev.gender
+        }));
+        
+        // Update remote info state  
+        setRemoteInfo(prev => ({
+          ...prev,
+          country: meta.country || prev.country,
+          gender: meta.gender || prev.gender
+        }));
+        
+        // Update badges immediately
+        __updatePeerBadges(meta);
+      }
+    };
+    
+    // Add event listener for peer-meta updates
+    if (typeof window !== "undefined") {
+      window.addEventListener("ditona:peer-meta", handlePeerMeta);
+    }
+    
     let off10=on("ui:updateBeauty",async (data)=>{ 
       try {
         if (typeof window !== 'undefined') {
@@ -382,6 +423,10 @@ export default function ChatClient(){
       off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
       offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilterUpdate();offCountryFilter();offOpenMessaging();offCloseMessaging();offMirrorToggle();
       offRtcPhase();offRtcPair();offRtcRemoteTrack();
+      // Cleanup peer-meta listener
+      if (typeof window !== "undefined") {
+        window.removeEventListener("ditona:peer-meta", handlePeerMeta);
+      }
       unsubscribeMobile(); 
     };
   },[]);
@@ -501,7 +546,7 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
             className="w-full h-full object-cover" 
             playsInline 
             autoPlay
-            muted
+            
           />
           
           {/* Center remote area overlay - only show during searching */}

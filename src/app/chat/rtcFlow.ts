@@ -1,4 +1,8 @@
 /* Anti-leak WebRTC flow with session stamping and phase tracking */
+function safeAbort(ac?: AbortController|null){ try{ if(ac && !ac.signal?.aborted) ac.abort("stop"); }catch{} }
+if (typeof window!=="undefined" && process.env.NODE_ENV!=="production"){
+  try{ window.addEventListener("unhandledrejection",(e:any)=>{ if((e?.reason?.name||"")==="AbortError"){ e.preventDefault?.(); } }); }catch{}
+}
 import { getLocalStream } from "@/lib/media";
 import { sendRtcMetrics, type RtcMetrics } from '@/utils/metrics';
 
@@ -149,7 +153,8 @@ function clearLocalStorage() {
 }
 
 // Complete cleanup and stop
-export function stop() {
+
+export function stop(mode: "full"|"network" = "full"){
   try {
     // Update phase
     state.phase = 'stopped';
@@ -611,19 +616,21 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
   }
 }
 
-// Next function with cooldown: stop current session, wait, then start new one
+
+// Next function with cooldown: stop current session network-only, wait, then start new one
 export async function next(){
-  if(cooldownNext) return;
+  if (cooldownNext) return;
   cooldownNext = true;
-  try{ 
-    stop(); 
-    await sleep(700); 
-    const localStream = getLocalStream();
+  try {
+    try { stop("network"); } catch {}
+    await sleep(700);
+    const localStream = getLocalStream?.();
     if (localStream && onPhaseCallback) {
       await start(localStream, onPhaseCallback);
     }
+  } finally {
+    cooldownNext = false;
   }
-  finally{ cooldownNext = false; }
 }
 
 // Legacy next function for backward compatibility

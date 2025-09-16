@@ -1,0 +1,132 @@
+تذكرة الوكيل — Batch 1
+قيود صارمة
+
+لا حذف ميزات. لا تغيير سلوك منتج إلا الموضح.
+
+احتفظ بكل ترقيعاتنا السابقة.
+
+أنشئ فرعًا: hotfix/rtc-next-and-peer-ui.
+
+انسخ كل ملف تُعدله إلى /_ops/backups/<datetime>/… قبل التعديل.
+
+بعد كل تعديل: بناء محلي pnpm -s build.
+
+أعد تقريرًا ختاميًا مفصلًا.
+
+المهمة A — إصلاح بناء المشروع: rtcFlow.ts::next() + ترميم نقاط كُسرت في ChatClient.tsx
+المشكلة
+
+src/app/chat/rtcFlow.ts يحوي تعريفين لدالة next() وكتلة finally{ cooldownNext=false } معلّقة خارج try. هذا يكسر البناء عند ~621–636.
+
+src/app/chat/ChatClient.tsx تضرّر من استبدالات سابقة: أسطر من نوع localRef.current. = true; وازدواج remoteVideo.play() واحتمال كود toggle للصوت لا يبدّل .muted.
+
+المطلوب
+
+وحّد next() إلى نسخة واحدة صحيحة بهذه الصيغة حرفيًا، مع إبقاء كل المتغيرات كما هي في الملف:
+
+// Next function with cooldown: stop current session network-only, wait, then start new one
+export async function next(){
+  if (cooldownNext) return;
+  cooldownNext = true;
+  try {
+    try { stop("network"); } catch {}
+    await sleep(700);
+    const localStream = getLocalStream?.();
+    if (localStream && onPhaseCallback) {
+      await start(localStream, onPhaseCallback);
+    }
+  } finally {
+    cooldownNext = false;
+  }
+}
+
+
+احذف التعريف المكسور القديم وأي finally{…} يتبقّى خارج try{…}.
+
+تأكد أن لا يوجد إلا سطر واحد export async function next( في الملف.
+
+رمّم ChatClient.tsx نقاط الكسر فقط:
+
+في تهيئة الكاميرا المحلية: السطر المعطوب يجب أن يكون:
+
+localRef.current.muted = true;
+
+
+بعد أي تعيين remoteVideo.srcObject = ... يجب أن يوجد استدعاء واحد فقط:
+
+try { remoteVideo.play?.().catch(()=>{}); } catch {}
+
+
+معالج تبديل صوت الطرف ui:toggleRemoteAudio يجب أن يبدّل خاصية .muted على #remoteAudio إن وجد، وإلا على فيديو الطرف:
+
+let offRemoteAudio = on("ui:toggleRemoteAudio" as any, ()=>{
+  const a = document.getElementById("remoteAudio") as HTMLAudioElement|null;
+  if (a) { a.muted = !a.muted; toast(a.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني"); return; }
+  const v = document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
+  if (v) { v.muted = !v.muted; toast(v.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني"); }
+});
+
+فحوص القبول
+
+نفّذ محليًا وأرفق نتائج هذه الأوامر في التقرير:
+
+pnpm -s build
+grep -n 'export async function next' src/app/chat/rtcFlow.ts
+grep -n 'finally{ cooldownNext = false; }' src/app/chat/rtcFlow.ts || true
+grep -n 'localRef\.current\.muted\s*=\s*true' src/app/chat/ChatClient.tsx
+grep -n 'remoteVideo\.play' src/app/chat/ChatClient.tsx
+
+
+المتوقع: بناء ناجح. وجود تعريف واحد لـnext(). عدم وجود finally معلّق. استدعاء واحد فقط لـremoteVideo.play.
+
+المهمة B — تثبيت عرض بيانات الشريك والصوت
+المشكلة
+
+بطاقة أعلى اليسار وأسفل اليسار لا تتجدّد دائمًا بعد المطابقة.
+
+الصوت قد لا يعمل تلقائيًا.
+
+المطلوب
+
+peerMeta إلى الواجهة:
+
+في src/app/api/rtc/matchmake/route.ts تأكد أنك تُعيد حقلًا اختياريًا peerMeta من Redis (key: rtc:attrs:<peerAnonId>). إذا كان مطبقًا سلفًا اتركه.
+
+في src/app/chat/rtcFlow.ts بعد const j = await res.json() أطلق الحدث التالي عندما يوجد j.peerMeta:
+
+try { if (j && j.peerMeta) window.dispatchEvent(new CustomEvent("ditona:peer-meta",{ detail: j.peerMeta })); } catch {}
+
+
+في src/app/chat/ChatClient.tsx استمع لـditona:peer-meta وحدّث حالة البطاقةين فورًا.
+
+تشغيل صوت الطرف تلقائيًا:
+
+اربط remoteAudio.srcObject = remoteVideo.srcObject; remoteAudio.muted = false; remoteAudio.play()?.catch(()=>{}) بعد ضبط remoteVideo.srcObject.
+
+أبقِ زر التبديل السابق للعمل.
+
+فحوص القبول
+
+بناء ناجح.
+
+عند مطابقة حقيقية، تتغيّر الدولة/المدينة/الجنس والقلب في البطاقات فورًا.
+
+الصوت يعمل دون نقر يدوي، ويمكن كتمه وإعادته من زر التحكم.
+
+ما لا يجب تغييره
+
+منطق VIP، FREE_FOR_ALL، الـRate-limit، الـAge Gate، Stripe.
+
+عدم حذف أي سلوك قائم. لا إعادة هيكلة.
+
+تقرير نهائي مطلوب
+
+الملفات المعدّلة، مع diff لكل ملف.
+
+أوامر الفحص أعلاه ونتائجها.
+
+لقطات شاشة للمطابقة تُظهر تبدّل البطاقات وسماع الصوت.
+
+تأكيد أن كل شيء يعمل كما كان أو أفضل، بلا حذف ميزات.
+
+هذا كل المطلوب لهذه الدفعة.
