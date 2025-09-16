@@ -22,6 +22,14 @@ function getAnon(): string {
 
 async function send(text: string, pairId: string): Promise<"ok"|"limit"|"err"> {
   try {
+    // Check message allowance for non-VIP first
+    const ok = await fetch('/api/message/allow', {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify({ pairId })
+    }).then(r => r.ok).catch(()=>false);
+    if(!ok) return "limit"; // Will trigger upsell
+
     const r = await fetch("/api/message", {
       method: "POST",
       headers: {

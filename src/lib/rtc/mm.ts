@@ -68,7 +68,8 @@ export async function matchmake(self:string){
       const selfAttr: Attrs = {gender: selfAttrRaw.gender, country: selfAttrRaw.country};
       const selfFilt: Filters = {genders: selfFiltRaw?.genders, countries: selfFiltRaw?.countries};
 
-      // === prev wish single-sided ===
+      // === prev wish single-sided & dual-sided ===
+
       try{
         const wish = await get(`rtc:prev-wish:${self}`);
         if(wish && wish !== self){

@@ -159,7 +159,14 @@ function clearLocalStorage() {
 // Complete cleanup and stop
 
 export function stop(mode: "full"|"network" = "full"){
-  try {
+  
+  try{
+    const peer = (state && (state.lastPeer||null)) as any;
+    if(peer){
+      fetch('/api/rtc/prev/for', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ peer }) }).catch(()=>{});
+    }
+  }catch{}
+try {
     // Update phase
     state.phase = 'stopped';
     if (onPhaseCallback) onPhaseCallback('stopped');
@@ -523,7 +530,18 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     const iceServers = await getIceServers();
     state.pc = new RTCPeerConnection({ iceServers });
     
+    // Setup DataChannel for real-time communication
+    if (state.role === 'caller') {
+      const dc = state.pc.createDataChannel('likes');
+      setupDataChannel(dc);
+    }
+    
     // Setup connection state monitoring
+    // Handle incoming DataChannel
+    state.pc.ondatachannel = (event) => {
+      setupDataChannel(event.channel);
+    };
+    
     state.pc.onconnectionstatechange = () => {
       if (!checkSession(currentSession) || !state.pc) return;
       
@@ -657,6 +675,36 @@ export async function nextWithMedia(media: MediaStream) {
   if (onPhaseCallback) {
     await start(media, onPhaseCallback);
   }
+}
+
+// DataChannel setup for real-time likes
+function setupDataChannel(dc: RTCDataChannel) {
+  dc.onopen = () => {
+    logRtc('datachannel-open', 200);
+    // Store reference for sending data
+    (globalThis as any).__ditonaDataChannel = dc;
+  };
+  
+  dc.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.t === "like" && msg.pairId === state.pairId) {
+        // Broadcast like event to UI
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent('rtc:peer-like', { detail: { liked: !!msg.liked } }));
+        }
+      }
+    } catch {}
+  };
+  
+  dc.onerror = (error) => {
+    console.warn('[rtc] DataChannel error:', error);
+  };
+  
+  dc.onclose = () => {
+    logRtc('datachannel-close', 200);
+    (globalThis as any).__ditonaDataChannel = null;
+  };
 }
 
 // Legacy compatibility

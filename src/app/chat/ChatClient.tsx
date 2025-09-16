@@ -118,48 +118,22 @@ export default function ChatClient(){
           return;
         }
 
-        // Send like to backend using new API
-        const response = await fetch('/api/like', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            pairId: currentPairId, 
-            action: data?.isLiked ? 'like' : 'unlike' 
-          })
-        });
+        // Optimistic update
+        const newLikeState = !like;
+        setLike(newLikeState);
         
-        if (response.ok) {
-          const result = await response.json();
-          setLike(!!(result?.mine ?? data?.isLiked)); 
-          setMyLikes(result?.mine ? 1 : 0);
-          
-          // Update LikeSystem component
-          emit("ui:likeUpdate", {
-            myLikes: result.myLikes || data?.myLikes || 0,
-            peerLikes: (typeof result?.count==="number" ? result.count : peerLikes),
-            isLiked: data?.isLiked || false,
-            canLike: true
-          });
-          
-          toast(`تم الإعجاب ${data?.isLiked ? '❤️' : '💔'}`);
-        } else {
-          const errorData = await response.json().catch(() => ({}));
-          toast(`خطأ في إرسال الإعجاب: ${errorData.error || 'خطأ غير معروف'}`);
+        // Send via DataChannel for instant peer update
+        const dc = (globalThis as any).__ditonaDataChannel;
+        if (dc && dc.readyState === 'open') {
+          dc.send(JSON.stringify({ t:"like", pairId: currentPairId, liked: newLikeState }));
         }
+        
+        // Send to backend for persistence
+        fetch(`/api/like?pairId=${encodeURIComponent(currentPairId)}&op=toggle`, { method:'POST' }).catch(()=>{});
+        
+        toast(`تم الإعجاب ${newLikeState ? '❤️' : '💔'}`);
       } catch (error) {
         console.warn('Like failed:', error);
-        // Fallback to local update only if we have valid data
-        if (data) {
-          setLike(!!(data?.isLiked)); 
-          setMyLikes(data?.isLiked ? 1 : 0);
-          emit("ui:likeUpdate", {
-            myLikes: data?.myLikes || 0,
-            peerLikes: peerLikes,
-            isLiked: data?.isLiked || false,
-            canLike: true
-          });
-        }
-        toast('خطأ في الاتصال - تم الحفظ محلياً');
       }
     });
     let off6=on("ui:report", async ()=>{ 
@@ -300,6 +274,15 @@ try{
     // Add event listener for peer-meta updates
     if (typeof window !== "undefined") {
       window.addEventListener("ditona:peer-meta", handlePeerMeta);
+      
+      // Listen for peer likes via DataChannel
+      window.addEventListener("rtc:peer-like", (e: any) => {
+        const detail = e.detail;
+        if (detail && typeof detail.liked === 'boolean') {
+          setPeerLikes(detail.liked ? 1 : 0);
+          toast(`${detail.liked ? 'أعجب' : 'ألغى الإعجاب'} بك الشريك ${detail.liked ? '❤️' : '💔'}`);
+        }
+      });
     }
     
     let off10=on("ui:updateBeauty",async (data)=>{ 
@@ -423,9 +406,10 @@ try{
       off1();off2();off3();off4();off5();off6();off7();off8();off9();off10();off11(); 
       offRemoteAudio();offTogglePlay();offToggleMasks();offUpsell();offGenderFilterUpdate();offCountryFilter();offOpenMessaging();offCloseMessaging();offMirrorToggle();
       offRtcPhase();offRtcPair();offRtcRemoteTrack();
-      // Cleanup peer-meta listener
+      // Cleanup event listeners
       if (typeof window !== "undefined") {
         window.removeEventListener("ditona:peer-meta", handlePeerMeta);
+        // Remove peer-like listener if needed
       }
       unsubscribeMobile(); 
     };
