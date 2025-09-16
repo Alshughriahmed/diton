@@ -7,7 +7,7 @@ import { get as upGet, setPx as upSetPx } from "../../../../lib/rtc/upstash";
 export const runtime = "nodejs"; // نحتاج الوصول للكوكيز بثبات
 export const dynamic = "force-dynamic";
 
-function anonFromCookies(req: Request){ try{ const cookieHeader = req.headers.get("cookie") || ""; const match = cookieHeader.match(/(?:anon|ditona_anon)=([^;]+)/); return match ? match[1] : ""; }catch{ return ""; } }
+async function anonFromCookies(req: Request){ try{ const cookieHeader = req.headers.get("cookie") || ""; const match = cookieHeader.match(/(?:anon|ditona_anon)=([^;]+)/); return match ? match[1] : ""; }catch{ return ""; } }
 
 // hCaptcha verification function
 async function verifyHCaptcha(token: string): Promise<boolean> {
@@ -56,14 +56,24 @@ export async function GET(req: Request) {
   if (prev) {
     const isVip = await requireVip();
     if (!isVip) { return new Response("prev requires vip", { status: 403 }); }
-    const me = anonFromCookies(req);
+    const me = await anonFromCookies(req);
     if (me) {
       try {
-        const last:any = await upGet(`rtc:last:${me}`);
+        // Try both ID formats for compatibility
+        const base = me.split(".")[0];
+        const last:any = await upGet(`rtc:last:${me}`) || await upGet(`rtc:last:${base}`);
         const peer = String(last || "");
         if (peer) {
+          const peerBase = peer.split(".")[0];
           const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;
-          try { await Promise.all([ upSetPx(`rtc:prev-wish:${me}`, peer, ttl), upSetPx(`rtc:prev-for:${peer}`, me, ttl) ]); } catch {}
+          try { 
+            await Promise.all([ 
+              upSetPx(`rtc:prev-wish:${me}`, peer, ttl), 
+              upSetPx(`rtc:prev-wish:${base}`, peer, ttl),
+              upSetPx(`rtc:prev-for:${peer}`, me, ttl),
+              upSetPx(`rtc:prev-for:${peerBase}`, me, ttl)
+            ]); 
+          } catch {}
         }
       } catch {}
     }
