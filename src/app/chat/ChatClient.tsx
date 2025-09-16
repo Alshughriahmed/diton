@@ -80,15 +80,24 @@ export default function ChatClient(){
   const [isMirrored, setIsMirrored] = useState(true); // MIRROR_DEFAULT=1
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
-    isVip: Math.random() > 0.7,
-    likes: Math.floor(Math.random() * 500),
+    isVip: false,
+    likes: 0,
     isOnline: true,
-    country: "US",
-    city: "New York", 
-    gender: "female",
-    age: 24
+    country: "",
+    city: "", 
+    gender: "",
+    age: 0
   });
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>('');
+
+  // Light pinning when pair.id changes
+  useEffect(() => { 
+    if (!pair.id) return;
+    fetch(`/api/like?pairId=${encodeURIComponent(pair.id)}`, { method: 'GET' })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (j && typeof j.isLiked === 'boolean') setLike(!!j.isLiked); })
+      .catch(() => {});
+  }, [pair.id]);
 
   useKeyboardShortcuts();
 

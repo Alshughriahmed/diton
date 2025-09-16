@@ -160,6 +160,13 @@ function clearLocalStorage() {
 
 export function stop(mode: "full"|"network" = "full"){
   
+  // Collect metrics before cleanup
+  if (state.pairId && state.pc) {
+    try {
+      collectAndSendMetrics();
+    } catch {}
+  }
+  
   try{
     const peer = (state && (state.lastPeer||null)) as any;
     if(peer){
@@ -205,6 +212,58 @@ try {
     logRtc('stop', 200);
   } catch (e) {
     console.warn('[rtc] stop error:', e);
+  }
+}
+
+// Collect and send metrics
+async function collectAndSendMetrics() {
+  if (!state.pc || !state.pairId) return;
+  
+  try {
+    const stats = await state.pc.getStats();
+    let candidateType = '';
+    let rtt = 0;
+    let turn443Used = false;
+    
+    stats.forEach((stat) => {
+      if (stat.type === 'candidate-pair' && stat.state === 'succeeded') {
+        candidateType = stat.remoteCandidateId || '';
+      }
+      if (stat.type === 'remote-candidate') {
+        if (stat.port === 443 || stat.relayProtocol) turn443Used = true;
+        if (stat.candidateType) candidateType = stat.candidateType;
+      }
+      if (stat.type === 'transport' && typeof stat.currentRoundTripTime === 'number') {
+        rtt = stat.currentRoundTripTime * 1000; // Convert to ms
+      }
+    });
+
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const ttfm = __kpi.tFirstRemote ? (now - __kpi.tFirstRemote) : 0;
+    const duration = __kpi.tMatched ? (now - __kpi.tMatched) : 0;
+
+    const metrics = {
+      ts: Date.now(),
+      sessionId: __kpi.sessionId,
+      pairId: state.pairId,
+      role: state.role,
+      matchMs: duration,
+      ttfmMs: ttfm,
+      reconnectMs: 0,
+      iceOk: candidateType !== '',
+      iceTries: 1,
+      turns443: turn443Used,
+      prevUsed: !!state.lastPeer
+    };
+
+    await fetch('/api/monitoring/metrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(metrics)
+    }).catch(() => {});
+
+  } catch (error) {
+    console.warn('[rtc] Failed to collect metrics:', error);
   }
 }
 
@@ -688,6 +747,10 @@ function setupDataChannel(dc: RTCDataChannel) {
   dc.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
+      if (msg?.t === "chat" && msg?.pairId === state.pairId) {
+        window.dispatchEvent(new CustomEvent('ditona:chat:recv', { detail: { text: String(msg.text || "") } }));
+        return;
+      }
       if (msg.t === "like" && msg.pairId === state.pairId) {
         // Broadcast like event to UI
         if (typeof window !== "undefined") {

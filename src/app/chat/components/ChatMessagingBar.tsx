@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 
 export default function ChatMessagingBar() {
+  const [text,setText]=useState("");
+  const [pairId,setPairId]=useState<string>("");
+
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -11,8 +14,19 @@ export default function ChatMessagingBar() {
   useEffect(() => {
     const off1 = on("ui:openMessaging" as any, () => setOpen(true));
     const off2 = on("ui:closeMessaging" as any, () => setOpen(false));
-    return () => { try { off1?.(); off2?.(); } catch {} };
+    const off3 = on("rtc:pair" as any, (d: any) => { if (d?.pairId) setPairId(String(d.pairId)); });
+    return () => { try { off1?.(); off2?.(); off3?.(); } catch {} };
   }, []);
+
+  async function sendMessage() {
+    const msg = (text || "").trim(); if (!msg) return;
+    const ok = await fetch('/api/message/allow', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pairId }) }).then(r => r.ok).catch(() => false);
+    if (!ok) { try { window.dispatchEvent(new CustomEvent('ui:upsell', { detail: { feature: 'messages' } })); } catch {} return; }
+    const dc = (globalThis as any).__ditonaDataChannel;
+    if (dc?.readyState === 'open') { dc.send(JSON.stringify({ t: 'chat', pairId, text: msg })); }
+    try { window.dispatchEvent(new CustomEvent('ditona:chat:sent', { detail: { text: msg } })); } catch {}
+    setText("");
+  }
 
   // دعم أزرار قديمة لا تطلق events (data-ui="msg-toggle")
   useEffect(() => {
@@ -47,18 +61,23 @@ export default function ChatMessagingBar() {
   if (!open) return null;
 
   return (
-    <div ref={ref} className="fixed inset-x-0 bottom-0 z-[60] pointer-events-auto">
+    <div ref={ref} className="fixed inset-x-0 bottom-0 z-[70] pointer-events-auto">
       <div className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
         <div className="flex gap-2 items-center">
           <input
             data-ui="msg-input"
             className="flex-1 rounded-xl bg-black/40 text-white placeholder-white/60 px-3 py-2 outline-none"
             placeholder="Type a message…"
+            value={text} 
+            onChange={e => setText(e.target.value)} 
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+            onFocus={() => { try { emit("ui:typing" as any, "on"); } catch {} }}
+            onBlur={() => { try { emit("ui:typing" as any, "off"); } catch {} }}
           />
           <button
             data-ui="msg-send"
             className="rounded-xl px-3 py-2 bg-blue-600 text-white"
-            onClick={() => {/* TODO: hook send */}}
+            onClick={() => sendMessage()}
           >Send</button>
           <button
             data-ui="msg-close"

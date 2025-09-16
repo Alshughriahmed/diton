@@ -10,6 +10,7 @@ interface UpsellModalProps {
 export default function UpsellModal({ onClose }: UpsellModalProps) {
   const router = useRouter();
   const [selectedPlan, setSelectedPlan] = useState<string>('monthly');
+  const [isDebouncing, setIsDebouncing] = useState(false);
 
   const plans = [
     { id: 'daily', name: 'Daily', price: '$4.99', duration: '24 hours' },
@@ -30,11 +31,19 @@ export default function UpsellModal({ onClose }: UpsellModalProps) {
   ];
 
   const handleUpgrade = () => {
+    if (isDebouncing) return;
+    setIsDebouncing(true);
+    setTimeout(() => setIsDebouncing(false), 500); // 500ms debounce
     router.push(`/api/stripe/subscribe?plan=${selectedPlan}`);
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div 
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
+    >
       <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full m-4 overflow-hidden">
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-6 text-white">

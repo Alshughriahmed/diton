@@ -8,6 +8,14 @@ export function useNextPrev() {
   const COOLDOWN_MS = 700;
 
   const canProceed = useCallback(() => {
+    // Check if user is typing in message input
+    if (typeof document !== "undefined") {
+      const activeElement = document.activeElement;
+      if (activeElement && activeElement.closest('[data-ui="msg-input"]')) {
+        return false; // Don't trigger while typing
+      }
+    }
+
     const now = Date.now();
     if (now - lastTimestamp.current < COOLDOWN_MS) {
       return false; // Still in cooldown

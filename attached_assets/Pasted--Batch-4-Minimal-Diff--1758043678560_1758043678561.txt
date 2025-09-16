@@ -1,0 +1,190 @@
+توجيه الوكيل — Batch 4 (نهائي إطلاق)
+القيود
+
+Minimal-Diff. لا حذف ميزات ولا منطق قائم.
+
+نسخ احتياطي قبل كل تعديل تحت _ops/backups/BATCH4_<ts>/….
+
+بُنى قليلة: 4 مراحل كحد أقصى. تحقق قبول بعد كل مرحلة.
+
+بيئة الإنتاج تبقى FREE_FOR_ALL=1 الآن. لا تغيّر المتغيّرات.
+
+المرحلة 1 — شريط الرسائل وإرسال DC (Build #1)
+الهدف
+
+إصلاح خطأ sendMessage وربط الإرسال بالـDataChannel.
+
+رفع الشريط فوق لوحة المفاتيح على الجوال. تعطيل السحب أثناء الكتابة.
+
+الملفات
+
+src/app/chat/components/ChatMessagingBar.tsx
+
+src/app/chat/rtcFlow.ts
+
+تعديلات دقيقة
+
+ChatMessagingBar.tsx
+
+فوق return مباشرة عرّف:
+
+const [text,setText]=useState("");
+const [pairId,setPairId]=useState<string>("");
+useEffect(()=>{ const off=on("rtc:pair" as any,(d:any)=>{ if(d?.pairId) setPairId(String(d.pairId)); }); return ()=>off?.(); },[]);
+async function sendMessage(){
+  const msg=(text||"").trim(); if(!msg) return;
+  const ok = await fetch('/api/message/allow',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pairId})}).then(r=>r.ok).catch(()=>false);
+  if(!ok){ try{ window.dispatchEvent(new CustomEvent('ui:upsell',{detail:{feature:'messages'}})); }catch{}; return; }
+  const dc=(globalThis as any).__ditonaDataChannel;
+  if(dc?.readyState==='open'){ dc.send(JSON.stringify({t:'chat',pairId,text:msg})); }
+  try{ window.dispatchEvent(new CustomEvent('ditona:chat:sent',{detail:{text:msg}})); }catch{}
+  setText("");
+}
+
+
+اربط الإدخال:
+
+value={text} onChange={e=>setText(e.target.value)}
+onKeyDown={e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); } }}
+
+
+زر الإرسال: onClick={()=>sendMessage()}
+
+z-index للشريط من z-[60] إلى z-[70].
+
+عند focus على الحقل أطلِق حدث ui:typing=on وعند blur ui:typing=off.
+
+rtcFlow.ts
+
+في تهيئة الـDataChannel الحالية أضف داخل onmessage:
+
+if(msg?.t==="chat" && msg?.pairId===state.pairId){
+  window.dispatchEvent(new CustomEvent('ditona:chat:recv',{detail:{text:String(msg.text||"")}}));
+  return;
+}
+
+
+عند focus/blur في الشريط، عالج ui:typing بإيقاف إيماءة السحب مؤقتًا إن كان لديك Hook للسحب.
+
+قبول
+
+Build ينجح.
+
+على الجوال: الشريط فوق الأزرار. Enter يرسل. HUD يُظهر sent/recv.
+
+أثناء الكتابة لا تعمل إيماءة السحب.
+
+المرحلة 2 — بيانات الطرف + لايك متزامن وتثبيت خفيف (Build #2)
+الهدف
+
+إزالة البيانات العشوائية في بطاقات الطرف.
+
+لايك عبر DC موجود؛ أضف تثبيت خفيف عند تغيّر الـpair.
+
+الملفات
+
+src/app/chat/ChatClient.tsx
+
+تعديلات
+
+اجعل peerInfo وremoteInfo افتراضيات محايدة دون أرقام عشوائية.
+
+مستمع ditona:peer-meta موجود. تأكد من تحديث الحقول country/gender/city فورًا.
+
+عند تغير pair.id: نفّذ محاولة تثبيت:
+
+useEffect(()=>{ if(!pair.id) return;
+  fetch(`/api/like?pairId=${encodeURIComponent(pair.id)}`,{method:'GET'})
+    .then(r=>r.ok?r.json():null)
+    .then(j=>{ if(j&&typeof j.isLiked==='boolean') setLike(!!j.isLiked); })
+    .catch(()=>{});
+},[pair.id]);
+
+
+إن لم يدعم الـAPI GET اترك الحالة كما هي (لا ترمي خطأ).
+
+قبول
+
+عند المطابقة تتغير شارات الدولة/الجنس فورًا.
+
+زر ❤️ يعكس الحالة فورًا لدى الطرفين ولا يحدث “قفز”.
+
+المرحلة 3 — سحب Next/Prev + حارس in-flight (Build #3)
+الهدف
+
+إيماءة سحب على طبقة الفيديو فقط. احترام تبريد 700ms. تعطيل أثناء الكتابة.
+
+تجاهل ردود matchmake القديمة.
+
+الملفات
+
+src/hooks/useNextPrev.ts
+
+src/app/chat/rtcFlow.ts
+
+تعديلات
+
+في Hook: إن كان document.activeElement داخل [data-ui="msg-input"] فلا تُطلق.
+
+في rtcFlow.ts لديك Token حالي للمطابقة؛ تأكد من مقارنة token قبل تطبيق أي نتيجة matchmake.
+
+قبول
+
+السحب يمين/يسار يعمل بلا إطلاق مزدوج.
+
+أثناء الكتابة لا يحدث Next/Prev.
+
+المرحلة 4 — توحيد Upsell/Plans + قياسات نهائية (Build #4)
+الهدف
+
+Dialog Upsell موحّد ويُستخدم في /plans وداخل الشات.
+
+قياسات TTFM/ICE تُرسل عند نهاية كل جلسة.
+
+الملفات
+
+src/components/chat/UpsellModal.tsx و/أو /plans لاستدعاء نفس المكوّن.
+
+src/app/api/monitoring/metrics/route.ts
+
+src/app/chat/rtcFlow.ts
+
+تعديلات
+
+Upsell: تأكد من role="dialog", aria-modal, focus-trap, Esc, debounce 500ms.
+
+في rtcFlow.ts عند stop() أو transition إلى disconnected/failed/closed:
+
+من pc.getStats() استخرج candidateType، RTT، TTFM، duration.
+
+POST إلى /api/monitoring/metrics مع pairId, prevUsed, turn443Used.
+
+لا تغيّر سياسة FREE_FOR_ALL.
+
+قبول
+
+/plans والـUpsell داخل الشات يستخدمان نفس الـDialog.
+
+سجلات القياس تُخزن في Upstash وتُرى عبر endpointك الحالي.
+
+اختبارات قبول مجمّعة
+
+جلسة حقيقية 60s ثم 3×Next لكل طرف بلا فقد صوت/كاميرا.
+
+الرسائل: Enter يرسل، HUD يظهر sent/recv، على الجوال الشريط فوق الأزرار.
+
+Prev أحادي وثنائي يعمل ضمن 7s كما هو الآن.
+
+نسبة ICE من السجلات ≥ 95% بعد عدة جلسات تجريبية.
+
+التسليمات
+
+تقرير BATCH4_REPORT.md:
+
+قائمة الملفات المعدلة + مسارات النسخ الاحتياطية.
+
+نتائج كل Build وأزمنته.
+
+لقطات قبول مختصرة: success/fail لكل بند.
+
+لا تغييرات في المتغيرات البيئية. لا تعطيل لأي ميزة قائمة.
