@@ -159,6 +159,14 @@ function clearLocalStorage() {
 // Complete cleanup and stop
 
 export function stop(mode: "full"|"network" = "full"){
+  // partial-stop for network rematch
+  try { safeAbort(state.ac); } catch {}
+  state.ac = null;
+  try { state.pc?.close(); } catch {}
+  state.pc = null;
+  try { state.remoteStream?.getTracks().forEach(t=>t.stop()); } catch {}
+  state.remoteStream = null;
+  if (mode !== "full") return;
   
   // Collect metrics before cleanup
   if (state.pairId && state.pc) {
@@ -184,7 +192,7 @@ try {
     }
 
     // Abort any ongoing requests
-    if (state.ac) { try { if (!state.ac.signal || !state.ac.signal.aborted) state.ac.abort("stop"); } catch {} }
+    try{ safeAbort(state.ac); }catch{} state.ac=null;
     state.ac = null;
 
     // Close peer connection and stop tracks

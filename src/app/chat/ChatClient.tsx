@@ -1,5 +1,7 @@
 "use client";
 
+import "./freeForAllBridge";
+
 
 import "./likeSyncClient";
 import './msgSendClient';
