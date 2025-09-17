@@ -71,7 +71,8 @@ export async function matchmake(self:string){
       // === prev wish single-sided & dual-sided ===
 
       try{
-        const wish = await get(`rtc:prev-wish:${self}`);
+        const selfBase = self.split(".")[0];
+        const wish = await get(`rtc:prev-wish:${self}`) || await get(`rtc:prev-wish:${selfBase}`);
         if(wish && wish !== self){
           const cand = String(wish);
           const alive = await exists(`rtc:attrs:${cand}`);
@@ -119,7 +120,8 @@ export async function matchmake(self:string){
       // === /prev wish ===
       // === prev for: another user asked to reconnect with me ===
       try{
-        const caller = await get(`rtc:prev-for:${self}`);
+        const selfBase = self.split(".")[0];
+        const caller = await get(`rtc:prev-for:${self}`) || await get(`rtc:prev-for:${selfBase}`);
         if(caller && caller !== self){
           const cand = String(caller);
           const alive = await exists(`rtc:attrs:${cand}`);

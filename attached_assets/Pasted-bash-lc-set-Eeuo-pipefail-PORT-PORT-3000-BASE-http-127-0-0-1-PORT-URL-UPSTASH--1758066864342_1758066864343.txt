@@ -1,0 +1,83 @@
+bash -lc '
+set -Eeuo pipefail
+PORT="${PORT:-3000}"; BASE="http://127.0.0.1:$PORT"
+URL="${UPSTASH_REDIS_REST_URL}/pipeline"; AUTH="Authorization: Bearer ${UPSTASH_REDIS_REST_TOKEN}"
+
+# تأكد أن الخادم يعمل
+[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)" = 200 ] || { nohup pnpm dev -p "$PORT" -H 0.0.0.0 >_ops/logs/dev.log 2>&1 & sleep 8; }
+
+# ملتقط كوكي robust: يبحث عن ditona_anon أو anon بين جميع Set-Cookie
+get_cookie(){
+  curl -sS -D - -o /dev/null "$BASE/api/anon/init" \
+  | awk "/^[Ss]et-[Cc]ookie:/{sub(/^Set-Cookie:[[:space:]]*/,\"\",\$0); print \$0}" \
+  | sed -nE "s/^((ditona_anon|anon)=[^;]+).*/\1/p" \
+  | head -n1
+}
+
+CKA="$(get_cookie)"; CKB="$(get_cookie)"
+ANA="$(printf "%s" "$CKA" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+ANB="$(printf "%s" "$CKB" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+echo "ANON_A=${ANA:-EMPTY}"; echo "ANON_B=${ANB:-EMPTY}"
+
+now="$(date +%s%3N)"; GA=male; GB=female; CA=DE; CB=DE
+
+# زرع خصائص وطوابير
+PAY=$(cat <<EOF
+[
+ ["HSET","rtc:attrs:${ANA}","gender","${GA}","country","${CA}"],["EXPIRE","rtc:attrs:${ANA}","120"],
+ ["HSET","rtc:filters:${ANA}","genders","all","countries","ALL"],["EXPIRE","rtc:filters:${ANA}","120"],
+ ["ZADD","rtc:q","${now}","${ANA}"],["ZADD","rtc:q:gender:${GA}","${now}","${ANA}"],["ZADD","rtc:q:country:${CA}","${now}","${ANA}"],
+ ["HSET","rtc:attrs:${ANB}","gender","${GB}","country","${CB}"],["EXPIRE","rtc:attrs:${ANB}","120"],
+ ["HSET","rtc:filters:${ANB}","genders","all","countries","ALL"],["EXPIRE","rtc:filters:${ANB}","120"],
+ ["ZADD","rtc:q","${now}","${ANB}"],["ZADD","rtc:q:gender:${GB}","${now}","${ANB}"],["ZADD","rtc:q:country:${CB}","${now}","${ANB}"]
+]
+EOF
+)
+curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAY" >/dev/null
+
+# مطابقة أولى لـ A
+MM1_CODE="$(curl -s -o /tmp/mm1.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKA" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR1="$(sed -nE "s/.*\"pairId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+PEER1="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+echo "MM1_HTTP=$MM1_CODE  PAIR=$PAIR1  PEER=$PEER1"
+
+# تنظيف mapping وإعادة إدراج B
+PAY=$(cat <<EOF
+[
+ ["DEL","rtc:pair:map:${ANA}"],["DEL","rtc:pair:map:${ANB}"],
+ ["ZADD","rtc:q","$((now+1))","${ANB}"],
+ ["ZADD","rtc:q:gender:${GB}","$((now+1))","${ANB}"],
+ ["ZADD","rtc:q:country:${CB}","$((now+1))","${ANB}"]
+]
+EOF
+)
+curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAY" >/dev/null
+
+# طلب Prev من A كـ VIP
+P200="$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $CKA; vip=1" -H "x-ditona-prev: 1" "$BASE/api/match/next" || echo 000)"
+echo "PREV_HTTP=$P200"
+
+# فحص مفاتيح prev
+EXPREV="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:prev-wish:${ANA}\"],[\"EXISTS\",\"rtc:prev-for:${ANB}\"]]")"
+echo "EXISTS_PREV=$EXPREV"
+
+# مطابقة B كـ callee
+MM2_CODE="$(curl -s -o /tmp/mm2.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKB" -H "content-type: application/json" -d "{}" || echo 000)"
+ROLE2="$(sed -nE "s/.*\"role\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+PEER2="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+echo "MM2_HTTP=$MM2_CODE  ROLE=$ROLE2  PEER=$PEER2"
+
+# فحص مفاتيح last
+EXLAST="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:last:${ANA}\"],[\"EXISTS\",\"rtc:last:${ANB}\"]]")"
+echo "EXISTS_LAST=$EXLAST"
+
+# قبول رقمي
+ok_prev="$(echo "$EXPREV" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n")"
+ok_last="$(echo "$EXLAST" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n")"
+echo "-- Acceptance --"
+echo "INITIAL_PAIR_OK=$([ -n "$PAIR1" ] && [ "$MM1_CODE" = 200 ] && echo 1 || echo 0)"
+echo "LAST_KEYS_SET=$([ "$ok_last" = "11" ] && echo 1 || echo 0)"
+echo "PREV_KEYS_WRITTEN=$([ "$ok_prev" = "11" ] && echo 1 || echo 0)"
+echo "RECONNECT_OK=$([ "$MM2_CODE" = 200 ] && [ "$ROLE2" = callee ] && [ "$PEER2" = "$ANA" ] && echo 1 || echo 0)"
+echo "VIP_PREV_ENFORCED=$([ "$P200" = 200 ] && echo 1 || echo 0)"
+'

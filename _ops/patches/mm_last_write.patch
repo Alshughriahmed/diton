@@ -1,0 +1,13 @@
+--- a/src/lib/rtc/mm.ts
++++ b/src/lib/rtc/mm.ts
+@@ -125,6 +125,10 @@ export async function matchmake(me:string, want:{gender:string,country:string})
+       // cleanup
+       del(`rtc:claim:${cand}`), del(pairLock),
+     ]);
++    await Promise.all([
++      setPx(`rtc:last:${self}`, cand, 90_000),
++      setPx(`rtc:last:${cand}`, self, 90_000),
++    ]);
+     return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
+   }
+   return {status:204 as const};

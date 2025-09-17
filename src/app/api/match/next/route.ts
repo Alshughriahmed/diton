@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { requireVip } from "../../../../utils/vip";
 import { get as upGet, setPx as upSetPx } from "../../../../lib/rtc/upstash";
+import { extractAnonId } from "../../../../lib/rtc/auth";
 
 export const runtime = "nodejs"; // نحتاج الوصول للكوكيز بثبات
 export const dynamic = "force-dynamic";
@@ -56,7 +57,7 @@ export async function GET(req: Request) {
   if (prev) {
     const isVip = await requireVip();
     if (!isVip) { return new Response("prev requires vip", { status: 403 }); }
-    const me = await anonFromCookies(req);
+    const me = extractAnonId(req);
     if (me) {
       try {
         // Try both ID formats for compatibility

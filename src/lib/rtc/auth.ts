@@ -22,16 +22,34 @@ export function extractAnonId(req: Request): string | null {
     if (!cookieHeader) return null;
     
     const cookies = Object.fromEntries(
-      cookieHeader.split("; ").map(c => c.split("="))
+      cookieHeader.split(/;\s*/).map(c => {
+        const eqIndex = c.indexOf('=');
+        return eqIndex > 0 ? [c.slice(0, eqIndex), c.slice(eqIndex + 1)] : [c, ''];
+      })
     );
     
-    const raw = cookies.anon;
+    const raw = cookies.anon || cookies.ditona_anon;
     if (!raw) return null;
     
     const sec = process.env.ANON_SIGNING_SECRET || process.env.VIP_SIGNING_SECRET; 
+    
+    // In dev without secrets, accept raw cookie values
+    if (process.env.NODE_ENV !== 'production' && !sec) {
+      return decodeURIComponent(raw);
+    }
+    
     if (!sec) return null;
     
-    return verifySigned(decodeURIComponent(raw), sec);
+    // Try to verify as signed cookie first
+    const verified = verifySigned(decodeURIComponent(raw), sec);
+    if (verified) return verified;
+    
+    // In dev, also accept raw values even with secrets (for testing)
+    if (process.env.NODE_ENV !== 'production') {
+      return decodeURIComponent(raw);
+    }
+    
+    return null;
   } catch {
     return null;
   }

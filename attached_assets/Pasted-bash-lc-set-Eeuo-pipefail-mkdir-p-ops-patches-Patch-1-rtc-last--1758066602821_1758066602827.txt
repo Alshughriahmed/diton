@@ -1,0 +1,82 @@
+bash -lc '
+set -Eeuo pipefail
+mkdir -p _ops/patches
+
+# Patch 1: إضافة كتابة rtc:last في فرع المطابقة العامة بـ mm.ts (Minimal-Diff)
+cat > _ops/patches/mm_last_write.patch << "EOF"
+*** src/lib/rtc/mm.ts.orig
+--- src/lib/rtc/mm.ts
+***************
+*** 128,136 ****
+        del(`rtc:claim:${cand}`), del(pairLock),
+      ]);
+-     return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
++     await Promise.all([
++       setPx(`rtc:last:${self}`, cand, 90_000),
++       setPx(`rtc:last:${cand}`, self, 90_000),
++     ]);
++     return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
+    }
+    return {status:204 as const};
+  }catch(e:any){
+EOF
+
+# Patch 2: كتابة prev-wish/prev-for في match/next/route.ts عند prev مع backticks وضمان anonFromCookies
+cat > _ops/patches/route_prev_write.patch << "EOF"
+*** src/app/api/match/next/route.ts.orig
+--- src/app/api/match/next/route.ts
+***************
+*** 18,24 ****
+  export const dynamic = "force-dynamic";
+  
+  // hCaptcha verification function
+--- 18,31 ----
+  export const dynamic = "force-dynamic";
++ 
++ import { cookies } from "next/headers";
++ import { get as upGet, setPx as upSetPx } from "../../../../lib/rtc/upstash";
++ function anonFromCookies(): string {
++   try {
++     const c = cookies();
++     return c.get("anon")?.value || c.get("ditona_anon")?.value || "";
++   } catch { return ""; }
++ }
+  
+  // hCaptcha verification function
+***************
+*** 64,72 ****
+    const prev = (req.headers.get("x-ditona-prev") === "1");
+    if (prev) {
+-     try {
+-       const { getServerSession } = await import("next-auth");
+-       const session = await getServerSession();
+-       if (!session) { return new Response("prev requires auth", { status: 403 }); }
+-     } catch { return new Response("prev requires auth", { status: 403 }); }
++     const isVip = await requireVip();
++     if (!isVip) { return new Response("prev requires vip", { status: 403 }); }
++     const me = anonFromCookies();
++     if (me) {
++       try {
++         const last:any = await upGet(`rtc:last:${me}`);
++         const peer = String(last||"");
++         if (peer) {
++           const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;
++           await Promise.all([
++             upSetPx(`rtc:prev-wish:${me}`, peer, ttl),
++             upSetPx(`rtc:prev-for:${peer}`, me, ttl)
++           ]);
++         }
++       } catch {}
++     }
+    }
+EOF
+
+# تحقّق قابلية التطبيق بدون تعديل الملفات
+echo "== dry-run check =="
+for p in _ops/patches/mm_last_write.patch _ops/patches/route_prev_write.patch; do
+  if [ -f "$p" ]; then
+    echo "[CHECK] $p"
+    git apply --check "$p" || true
+  fi
+done
+'

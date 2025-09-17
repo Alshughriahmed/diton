@@ -38,7 +38,56 @@ _req: NextRequest) {
   if (prevFor) { try{ await setPx(`rtc:prev-wish:${anon}`, String(prevFor), 7000); }catch{} }
 
   const mapped = await pairMapOf(anon);
-  if (mapped) return NextResponse.json({ found:true, pairId:mapped.pairId, role:mapped.role }, { status:200 });
+  if (mapped) {
+    // Fetch peer info from the pair record
+    let peerAnonId = null;
+    try {
+      const url = process.env.UPSTASH_REDIS_REST_URL;
+      const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+      if (url && token) {
+        const endpoint = url.endsWith('/pipeline') ? url : `${url}/pipeline`;
+        const pairKey = `rtc:pair:${mapped.pairId}`;
+        const r = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+          body: JSON.stringify([["HGET", pairKey, "a"], ["HGET", pairKey, "b"]]),
+          cache: "no-store"
+        });
+        const jr: any = await r.json().catch(() => null);
+        const arr = Array.isArray(jr?.result) ? jr.result : (Array.isArray(jr) ? jr : []);
+        const userA = arr[0]?.result ?? null;
+        const userB = arr[1]?.result ?? null;
+        
+        // Determine peer based on role
+        if (mapped.role === "caller") {
+          peerAnonId = userB;
+        } else {
+          peerAnonId = userA;
+        }
+        
+        // Fallback: try to get from rtc:last if pair fetch failed
+        if (!peerAnonId) {
+          const lastKey = `rtc:last:${anon}`;
+          const lr = await fetch(endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+            body: JSON.stringify([["GET", lastKey]]),
+            cache: "no-store"
+          });
+          const lj: any = await lr.json().catch(() => null);
+          const lastArr = Array.isArray(lj?.result) ? lj.result : (Array.isArray(lj) ? lj : []);
+          peerAnonId = lastArr[0]?.result ?? null;
+        }
+      }
+    } catch {}
+    
+    return NextResponse.json({ 
+      found: true, 
+      pairId: mapped.pairId, 
+      role: mapped.role,
+      peerAnonId: peerAnonId || "" 
+    }, { status: 200 });
+  }
   const res = await matchmake(anon);
   
 if (res.status === 200) {
