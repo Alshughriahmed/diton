@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 BASE="${1:-https://www.ditonachat.com}"
-set -e
+set -euo pipefail
+
+# تحميل حماية alternate screen
+source ./disable_alt_screen.sh 2>/dev/null || {
+    # fallback إذا لم يوجد الملف
+    export TERM=dumb NO_COLOR=1 CI=1
+    cleanup_terminal() { 
+        printf '\e[?1049l\e[2J\e[H\ec' 2>/dev/null || true
+    }
+    trap cleanup_terminal EXIT INT TERM
+}
 
 echo "-- Acceptance --"
 
