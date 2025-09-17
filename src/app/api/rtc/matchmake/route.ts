@@ -104,7 +104,7 @@ if (res.status === 200) {
         cache:"no-store"
       });
       const j:any = await r.json().catch(()=>null);
-      const arr:any = j?.[0]?.result;
+      const arr:any = j?.result;
       let map: any = null;
       if (Array.isArray(arr)) { map = {}; for (let i=0;i<arr.length;i+=2) map[arr[i]] = arr[i+1]; }
       else if (arr && typeof arr==="object") { map = arr; }
@@ -115,23 +115,7 @@ if (res.status === 200) {
     const url = process.env.UPSTASH_REDIS_REST_URL;
     const token = process.env.UPSTASH_REDIS_REST_TOKEN;
     if (url && token && body.peerAnonId){
-      // (أ) القراءة الحالية لـ peerMeta تبقى كما هي
-      {
-        const key = `rtc:attrs:${body.peerAnonId}`;
-        const r = await fetch(url, {
-          method:"POST",
-          headers:{ "content-type":"application/json", "authorization":`Bearer ${token}` },
-          body: JSON.stringify([["HGETALL", key]]),
-          cache:"no-store"
-        });
-        const j=await r.json().catch(()=>null);
-        const arr=j?.[0]?.result;
-        let map: any = null;
-        if (Array.isArray(arr)) { map={}; for (let i=0;i<arr.length;i+=2) map[arr[i]]=arr[i+1]; }
-        else if (arr && typeof arr==="object") { map=arr; }
-        if (map) body.peerMeta = { country: map.country ?? null, gender: map.gender ?? null };
-      }
-      // (ب) كتابة مفاتيح last لكلا الطرفين (TTL ~ 90s)
+      // Set last connection records for both users (TTL ~ 90s)
       try{
         const setBody = JSON.stringify([
           ["SET", `rtc:last:${anon}`, body.peerAnonId, "PX", "90000"],

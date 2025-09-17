@@ -47,16 +47,21 @@ export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
       }
     };
 
+    // Store cleanup functions
+    let offMatch: (() => void) | null = null;
+    let offLike: (() => void) | null = null;
+
     // Import event system dynamically to avoid SSR issues
     import("@/utils/events").then(({ on }) => {
-      const offMatch = on("match:update" as any, handleMatchUpdate);
-      const offLike = on("ui:likeUpdate", handleLikeUpdate);
-      
-      return () => {
-        offMatch();
-        offLike();
-      };
+      offMatch = on("match:update" as any, handleMatchUpdate);
+      offLike = on("ui:likeUpdate", handleLikeUpdate);
     });
+
+    // Return cleanup function from the outer useEffect
+    return () => {
+      if (offMatch) offMatch();
+      if (offLike) offLike();
+    };
   }, []);
 
   useEffect(() => {
