@@ -138,7 +138,9 @@ export default function LikeSystem() {
     // Trigger animations
     setIsAnimating(true);
     if (newIsLiked) {
-      setShowHeart(true);
+      
+      try { if (typeof window !== "undefined") window.dispatchEvent(new Event("user:liked")); } catch(e) {}
+setShowHeart(true);
       setTimeout(() => setShowHeart(false), 1000);
     }
     setTimeout(() => setIsAnimating(false), 300);

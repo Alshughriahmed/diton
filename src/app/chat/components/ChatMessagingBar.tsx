@@ -58,10 +58,36 @@ export default function ChatMessagingBar() {
     return () => { vv.removeEventListener("resize", adjust); vv.removeEventListener("scroll", adjust); };
   }, []);
 
+  useEffect(() => {
+    const prevent = (e:any)=>{ try{ const a=document.activeElement as any; if(a && (a.tagName==="INPUT"||a.tagName==="TEXTAREA")) e.preventDefault(); }catch{} };
+    const onF=()=>{ try{ window.addEventListener("touchmove", prevent, {passive:false}); }catch{} };
+    const onB=()=>{ try{ window.removeEventListener("touchmove", prevent); }catch{} };
+    document.addEventListener("focusin", onF);
+    document.addEventListener("focusout", onB);
+    return ()=>{ document.removeEventListener("focusin", onF); document.removeEventListener("focusout", onB); window.removeEventListener("touchmove", prevent); };
+  }, []);
+
+}, []);
+  useEffect(() => {
+    const preventNavIfTyping = (e:any) => {
+      try {
+        const a=document.activeElement as any; const t=e.target as HTMLElement | null;
+        const typing = a && (a.tagName==="INPUT"||a.tagName==="TEXTAREA");
+        if (!typing || !t) return;
+        const hit = t.closest?.('[data-ui="btn-next"]', '[data-ui="btn-prev"]');
+        if (hit) { e.preventDefault(); e.stopPropagation(); }
+      } catch {}
+    };
+    document.addEventListener("click", preventNavIfTyping, true);
+    return ()=> document.removeEventListener("click", preventNavIfTyping, true);
+  }, []);
+
+
+
   if (!open) return null;
 
   return (
-    <div ref={ref} className="fixed inset-x-0 bottom-0 z-[70] pointer-events-auto">
+    data-ui=
       <div className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
         <div className="flex gap-2 items-center">
           <input
