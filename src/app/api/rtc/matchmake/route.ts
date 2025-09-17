@@ -111,7 +111,42 @@ if (res.status === 200) {
       if (map) body.peerMeta = { country: map.country ?? null, gender: map.gender ?? null };
     }
   }catch{}
-  return NextResponse.json(body, { status:200 });
+  try{
+    const url = process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    if (url && token && body.peerAnonId){
+      // (أ) القراءة الحالية لـ peerMeta تبقى كما هي
+      {
+        const key = `rtc:attrs:${body.peerAnonId}`;
+        const r = await fetch(url, {
+          method:"POST",
+          headers:{ "content-type":"application/json", "authorization":`Bearer ${token}` },
+          body: JSON.stringify([["HGETALL", key]]),
+          cache:"no-store"
+        });
+        const j=await r.json().catch(()=>null);
+        const arr=j?.[0]?.result;
+        let map=null;
+        if (Array.isArray(arr)) { map={}; for (let i=0;i<arr.length;i+=2) map[arr[i]]=arr[i+1]; }
+        else if (arr && typeof arr==="object") { map=arr; }
+        if (map) body.peerMeta = { country: map.country ?? null, gender: map.gender ?? null };
+      }
+      // (ب) كتابة مفاتيح last لكلا الطرفين (TTL ~ 90s)
+      try{
+        const setBody = JSON.stringify([
+          ["SET", `rtc:last:${anon}`, body.peerAnonId, "PX", "90000"],
+          ["SET", `rtc:last:${body.peerAnonId}`, anon, "PX", "90000"]
+        ]);
+        await fetch(url + "/pipeline", {
+          method:"POST",
+          headers:{ "content-type":"application/json", "authorization":`Bearer ${token}` },
+          body: setBody, cache:"no-store"
+        });
+      }catch{}
+    }
+  }catch{}
+
+  return NextResponse.json(body, { status: 200 });
 }
 
   if (res.status === 204) return new NextResponse(null, { status:204 });

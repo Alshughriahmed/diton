@@ -1,0 +1,60 @@
+bash -lc '
+set -Eeuo pipefail
+PORT="${PORT:-3000}"; BASE="http://127.0.0.1:$PORT"
+URL="${UPSTASH_REDIS_REST_URL:-}/pipeline"; AUTH="Authorization: Bearer ${UPSTASH_REDIS_REST_TOKEN:-}"
+mkdir -p _ops/reports; REP="_ops/reports/prev_vip_verify_$(date -u +%Y%m%d-%H%M%S).log"
+
+# خدمة
+[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)" = 200 ] || { nohup pnpm dev -p "$PORT" -H 0.0.0.0 >_ops/logs/dev.log 2>&1 & sleep 8; }
+
+# كوكي بجِرّين
+AJ=/tmp/a.jar; BJ=/tmp/b.jar; rm -f "$AJ" "$BJ"
+curl -sS -c "$AJ" -o /dev/null "$BASE/api/anon/init"
+curl -sS -c "$BJ" -o /dev/null "$BASE/api/anon/init"
+A="$(awk '\$6==\"/\" && \$7==\"anon\"{print \$8}' "$AJ" | tail -n1)"
+B="$(awk '\$6==\"/\" && \$7==\"anon\"{print \$8}' "$BJ" | tail -n1)"
+echo "A=$A B=$B" | tee "$REP"
+
+# إدراج عبر API
+curl -s -b "$AJ" -X POST "$BASE/api/rtc/enqueue" -H "content-type: application/json" -d "{\"gender\":\"male\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+curl -s -b "$BJ" -X POST "$BASE/api/rtc/enqueue" -H "content-type: application/json" -d "{\"gender\":\"female\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+
+# مطابقة أولى
+MM1="$(curl -s -b "$AJ" -o /tmp/mm1.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR1="$(sed -nE "s/.*\"pairId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+echo "MM1=$MM1 PAIR1=$PAIR1" | tee -a "$REP"
+
+# إعادة إدراج B
+curl -s -b "$BJ" -X POST "$BASE/api/rtc/enqueue" -H "content-type: application/json" -d "{\"gender\":\"female\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+
+# طلب prev كـ VIP
+P200="$(curl -s -b "$AJ" -o /dev/null -w "%{http_code}" -H "Cookie: vip=1" -H "x-ditona-prev: 1" "$BASE/api/match/next" || echo 000)"
+echo "PREV_HTTP=$P200" | tee -a "$REP"
+
+# مطابقة ثانية لـ B
+MM2="$(curl -s -b "$BJ" -o /tmp/mm2.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "content-type: application/json" -d "{}" || echo 000)"
+ROLE2="$(sed -nE "s/.*\"role\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+PEER2="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+echo "MM2=$MM2 ROLE2=$ROLE2 PEER2=$PEER2" | tee -a "$REP"
+
+# فحص مفاتيح prev/last لو توفرت بيئة Upstash
+if [ -n "$URL" ] && [ -n "${UPSTASH_REDIS_REST_TOKEN:-}" ]; then
+  EXPREV="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:prev-wish:${A}\"],[\"EXISTS\",\"rtc:prev-for:${B}\"]]")"
+  EXLAST="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:last:${A}\"],[\"EXISTS\",\"rtc:last:${B}\"]]")"
+else
+  EXPREV="[{\"result\":null},{\"result\":null}]"; EXLAST="[{\"result\":null},{\"result\":null}]"
+fi
+echo "EXPREV=$EXPREV" | tee -a "$REP"
+echo "EXLAST=$EXLAST" | tee -a "$REP"
+
+# قبول
+ok_prev="$(echo "$EXPREV" | grep -o \"result\":[01] | grep -o [01] | tr -d "\n")"
+ok_last="$(echo "$EXLAST" | grep -o \"result\":[01] | grep -o [01] | tr -d "\n")"
+echo "-- Acceptance --" | tee -a "$REP"
+echo "INITIAL_PAIR_OK=$([ -n "$PAIR1" ] && [ "$MM1" = 200 ] && echo 1 || echo 0)" | tee -a "$REP"
+echo "LAST_KEYS_SET=$([ "$ok_last" = 11 ] && echo 1 || echo 0)" | tee -a "$REP"
+echo "PREV_KEYS_WRITTEN=$([ "$ok_prev" = 11 ] && echo 1 || echo 0)" | tee -a "$REP"
+echo "RECONNECT_OK=$([ "$MM2" = 200 ] && [ "$ROLE2" = callee ] && [ "$PEER2" = "$A" ] && echo 1 || echo 0)" | tee -a "$REP"
+echo "VIP_PREV_ENFORCED=$([ "$P200" = 200 ] && echo 1 || echo 0)" | tee -a "$REP"
+echo "REPORT=$REP"
+'

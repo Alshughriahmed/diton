@@ -101,7 +101,9 @@ export async function matchmake(self:string){
                     sadd(`rtc:seen:${self}`,cand), expire(`rtc:seen:${self}`,300),
                     sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
                     del(`rtc:claim:${cand}`), del(pairLock),
-                  ]);
+                  ,
+        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000)
+      ]);
                   await del(`rtc:prev-wish:${self}`);
                   // Write rtc:last for both ID formats for compatibility
       const selfBase = self.split(".")[0];
@@ -110,7 +112,10 @@ export async function matchmake(self:string){
         setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${selfBase}`, candBase, 90_000),
         setPx(`rtc:last:${cand}`, self, 90_000), setPx(`rtc:last:${candBase}`, selfBase, 90_000)
       ]);
-                  return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
+                  await Promise.all([
+                    setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000)
+                  ]);
+return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
                 } else { await del(`rtc:claim:${cand}`); }
               }
             }
