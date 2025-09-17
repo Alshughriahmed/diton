@@ -16,9 +16,8 @@ interface PeerInfoCardProps {
 }
 
 import usePeerMeta from "@/hooks/usePeerMeta";
-export default function PeerInfoCard({ 
+export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
   const meta = usePeerMeta();
-peerInfo }: PeerInfoCardProps) {
   const hydrated = useHydrated();
   const [peer, setPeer] = useState<PeerInfo>(peerInfo || {
     name: "Connecting...",

@@ -105,7 +105,7 @@ if (res.status === 200) {
       });
       const j:any = await r.json().catch(()=>null);
       const arr:any = j?.[0]?.result;
-      let map:any = null;
+      let map: any = null;
       if (Array.isArray(arr)) { map = {}; for (let i=0;i<arr.length;i+=2) map[arr[i]] = arr[i+1]; }
       else if (arr && typeof arr==="object") { map = arr; }
       if (map) body.peerMeta = { country: map.country ?? null, gender: map.gender ?? null };
@@ -126,7 +126,7 @@ if (res.status === 200) {
         });
         const j=await r.json().catch(()=>null);
         const arr=j?.[0]?.result;
-        let map=null;
+        let map: any = null;
         if (Array.isArray(arr)) { map={}; for (let i=0;i<arr.length;i+=2) map[arr[i]]=arr[i+1]; }
         else if (arr && typeof arr==="object") { map=arr; }
         if (map) body.peerMeta = { country: map.country ?? null, gender: map.gender ?? null };
