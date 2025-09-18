@@ -67,30 +67,14 @@ export default function ChatMessagingBar() {
     return ()=>{ document.removeEventListener("focusin", onF); document.removeEventListener("focusout", onB); window.removeEventListener("touchmove", prevent); };
   }, []);
 
-  useEffect(() => {
-    const preventNavIfTyping = (e:any) => {
-      try {
-        const a=document.activeElement as any; const t=e.target as HTMLElement | null;
-        const typing = a && (a.tagName==="INPUT"||a.tagName==="TEXTAREA");
-        if (!typing || !t) return;
-        const hit = t.closest?.('[data-ui="btn-next"], [data-ui="btn-prev"]');
-        if (hit) { e.preventDefault(); e.stopPropagation(); }
-      } catch {}
-    };
-    document.addEventListener("click", preventNavIfTyping, true);
-    return ()=> document.removeEventListener("click", preventNavIfTyping, true);
-  }, []);
-
-
-
   if (!open) return null;
 
   return (
-    "<".div." "."ref={ref} className="fixed bottom-0 left-0 right-0 z-[70] fixed inset-x-0 bottom-0 z-[70] pointer-events-auto"" data-ui="messages-fixed">
-      "<".div." "."className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2 fixed inset-x-0 bottom-0 z-[70] pointer-events-auto"">
-        "<".div." "."className="flex gap-2 items-center fixed inset-x-0 bottom-0 z-[70] pointer-events-auto"">
-          "<".input." "."data-ui="msg-input"
-            className="flex-1 rounded-xl bg-black/40 text-white placeholder-white/60 px-3 py-2 outline-none fixed inset-x-0 bottom-0 z-[70] pointer-events-auto""
+      <div data-ui="messages-fixed" className="fixed inset-x-0 bottom-0 z-[70] pointer-events-auto mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
+        <div className="flex gap-2 items-center">
+          <input
+            data-ui="msg-input"
+            className="flex-1 rounded-xl bg-black/40 text-white placeholder-white/60 px-3 py-2 outline-none"
             placeholder="Type a message…"
             value={text} 
             onChange={e => setText(e.target.value)} 
@@ -98,16 +82,17 @@ export default function ChatMessagingBar() {
             onFocus={() => { try { emit("ui:typing" as any, "on"); } catch {} }}
             onBlur={() => { try { emit("ui:typing" as any, "off"); } catch {} }}
           />
-          "<".button." "."data-ui="msg-send"
-            className="rounded-xl px-3 py-2 bg-blue-600 text-white fixed inset-x-0 bottom-0 z-[70] pointer-events-auto""
+          <button
+            data-ui="msg-send"
+            className="rounded-xl px-3 py-2 bg-blue-600 text-white"
             onClick={() => sendMessage()}
           >Send</button>
-          "<".button." "."data-ui="msg-close"
-            className="rounded-xl px-3 py-2 bg-black/40 text-white fixed inset-x-0 bottom-0 z-[70] pointer-events-auto""
+          <button
+            data-ui="msg-close"
+            className="rounded-xl px-3 py-2 bg-black/40 text-white"
             onClick={() => { setOpen(false); emit("ui:closeMessaging" as any); }}
           >Close</button>
         </div>
       </div>
-    </div>
   );
 }
