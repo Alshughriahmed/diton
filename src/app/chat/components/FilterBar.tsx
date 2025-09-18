@@ -1,8 +1,9 @@
 "use client";
+import { isFFA } from "@/utils/ffa";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { GenderKey } from "./GenderModal";
-const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+const freeForAll = isFFA();
 
 
 const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
