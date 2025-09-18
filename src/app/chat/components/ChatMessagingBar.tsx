@@ -86,7 +86,7 @@ export default function ChatMessagingBar() {
   if (!open) return null;
 
   return (
-    <div ref={ref} className="fixed bottom-0 left-0 right-0 z-70" data-ui="messages-fixed">
+    <div ref={ref} className="fixed bottom-0 left-0 right-0 z-[70]" data-ui="messages-fixed">
       <div className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
         <div className="flex gap-2 items-center">
           <input
