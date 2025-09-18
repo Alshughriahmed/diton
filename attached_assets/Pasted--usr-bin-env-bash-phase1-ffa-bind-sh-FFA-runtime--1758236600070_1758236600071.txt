@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# phase1_ffa_bind.sh — ربط FFA على الواجهة (runtime) وتحقق قبول
+# الهدف: تمكين Prev/الفلاتر/الجماليات عند FREE_FOR_ALL=1 دون VIP
+# التشغيل عبر: _ops/bin/run ./_ops/scripts/phase1_ffa_bind.sh
+
+. _ops/bin/disable_alt_screen.sh || true
+set -Eeuo pipefail
+export TERM="${TERM:-dumb}" CI="${CI:-1}" NO_COLOR=1 FORCE_COLOR=0 PAGER=cat GIT_PAGER=cat LESS=FRX
+
+ts() { date -u +%Y%m%d-%H%M%S; }
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+STAMP="$(ts)"
+BACKUP_DIR="${ROOT}/_ops/backups/phase1_ffa_${STAMP}"
+REPORT="${ROOT}/_ops/reports/phase1_ffa_${STAMP}.log"
+TMP_DIR="${ROOT}/_ops/tmp/phase1_ffa_${STAMP}"
+mkdir -p "$BACKUP_DIR" "${REPORT%/*}" "$TMP_DIR"
+
+echo "[i] ROOT=$ROOT" | tee "$REPORT"
+echo "[i] BACKUP=$BACKUP_DIR" | tee -a "$REPORT"
+
+# 0) نسخة احتياطية
+rsync -a --exclude ".git" --exclude "node_modules" "$ROOT"/ "$BACKUP_DIR"/ | sed 's/^/[backup] /' || true
+
+# 1) تحديد مجلد الباتشات
+ALL_ZIP="${ALL_ZIP:-all.zip}"
+PATCH_DIR=""
+if [ -f "$ALL_ZIP" ]; then
+  unzip -oq "$ALL_ZIP" -d "$TMP_DIR" || true
+  # ابحث عن مجلد يحوي *.diff
+  PATCH_DIR="$(find "$TMP_DIR" -type f -name '*.diff' -printf '%h\n' | sort -u | head -n1 || true)"
+fi
+# بدائل شائعة
+[ -z "${PATCH_DIR}" ] && [ -d "${ROOT}/diton_patches_min" ] && PATCH_DIR="${ROOT}/diton_patches_min"
+[ -z "${PATCH_DIR}" ] && [ -d "${ROOT}/patches" ] && PATCH_DIR="${ROOT}/patches"
+
+if [ -z "${PATCH_DIR}" ]; then
+  echo "[!] لم أعثر على مجلد باتشات. وفّر all.zip أو مجلد diton_patches_min." | tee -a "$REPORT"
+fi
+echo "[i] PATCH_DIR=${PATCH_DIR:-<none>}" | tee -a "$REPORT"
+
+# 2) تطبيق باتشات FFA (Minimal-Diff، idempotent)
+apply_patch() {
+  local p="$1"
+  [ ! -f "$p" ] && return 0
+  if git apply --check "$p" >/dev/null 2>&1; then
+    git apply --whitespace=nowarn "$p"
+    echo "[patch] applied: $(basename "$p")" | tee -a "$REPORT"
+  else
+    echo "[patch] skipped (already applied?): $(basename "$p")" | tee -a "$REPORT"
+  fi
+}
+
+if [ -n "${PATCH_DIR}" ]; then
+  # أسماء شائعة حسب تقرير الخبير
+  CANDIDATES=(
+    "02_env_include_ffa.diff"
+    "03a_filters_runtime_ffa.diff"
+    "03b_toolbar_runtime_ffa.diff"
+    "03c_filterbar_runtime_ffa.diff"
+    "06a_genderselect_ffa.diff"
+    "06b_countryselect_ffa.diff"
+    "06c_beauty_ffa.diff"
+    "06d_messages_ffa.diff"
+  )
+  for f in "${CANDIDATES[@]}"; do
+    [ -f "${PATCH_DIR}/${f}" ] && apply_patch "${PATCH_DIR}/${f}"
+  done
+  # التقط أي باتش FFA إضافي
+  while IFS= read -r p; do apply_patch "$p"; done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name '*ffa*.diff' | sort)
+fi
+
+# 3) فحوص ثابتة في الكود (بدون تشغيل بناء)
+ok_env=0
+ok_prev=0
+ok_filters=0
+ok_utils=0
+
+# 3.1 env route يُظهر FREE_FOR_ALL/NEXT_PUBLIC_FREE_FOR_ALL
+if rg -n --hidden --glob '!node_modules' -e 'FREE_FOR_ALL' -e 'NEXT_PUBLIC_FREE_FOR_ALL' src/app/api/rtc/env/route.ts >/dev/null 2>&1; then
+  ok_env=1
+fi
+
+# 3.2 util isFFA() أو ما يكافئه موجود
+if rg -n --hidden --glob '!node_modules' -e 'export function isFFA\(' -e '__DITONA_FFA' src >/dev/null 2>&1; then
+  ok_utils=1
+fi
+
+# 3.3 تمكين Prev بشرط ffa || isVip
+if rg -n --hidden --glob '!node_modules' -g 'src/**/ChatToolbar*.tsx' -e 'isFFA\(\)\s*\|\|\s*isVip' -e '\bffa\b.*\|\|\s*isVip' >/dev/null 2>&1; then
+  ok_prev=1
+fi
+
+# 3.4 تمكين الفلاتر والجماليات بشرط ffa || isVip
+if rg -n --hidden --glob '!node_modules' -e 'isFFA\(\)\s*\|\|\s*isVip' -g 'src/**/FilterBar*.tsx' \
+   -e 'GenderSelect' -e 'CountrySelect' -e 'Beauty' -e 'Effects'  >/dev/null 2>&1; then
+  ok_filters=1
+fi
+
+# 4) قبول — طباعة كتلة قياس واضحة
+FFA_PATCH_APPLIED=1
+FFA_ENV_RUNTIME_OK=$ok_env
+FFA_UTIL_OK=$ok_utils
+FFA_PREV_ENABLED=$ok_prev
+FFA_FILTERS_ENABLED=$ok_filters
+
+{
+  echo "-- Acceptance --"
+  echo "FFA_PATCH_APPLIED=${FFA_PATCH_APPLIED}"
+  echo "FFA_ENV_RUNTIME_OK=${FFA_ENV_RUNTIME_OK}"
+  echo "FFA_UTIL_OK=${FFA_UTIL_OK}"
+  echo "FFA_PREV_ENABLED=${FFA_PREV_ENABLED}"
+  echo "FFA_FILTERS_ENABLED=${FFA_FILTERS_ENABLED}"
+} | tee -a "$REPORT"
+
+# 5) تلميح متابعة
+echo "[i] تقرير القبول: $REPORT"

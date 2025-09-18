@@ -1,3 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+F="src/app/api/stripe/prices/route.ts"
+[ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/stripe_${TS}.ts"
+mkdir -p _ops/backups _ops/reports; cp -a "$F" "$BK"
+
+cat > "$F" <<'TS'
 import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,3 +33,9 @@ export async function GET() {
     return NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } });
   }
 }
+TS
+
+OUT="_ops/reports/build_$(date -u +%Y%m%d-%H%M%S).log"
+if command -v pnpm >/dev/null 2>&1; then pnpm -s run build >"$OUT" 2>&1 || { tail -n 80 "$OUT"; exit 1; }
+fi
+echo "-- Acceptance --"; echo "STRIPE_ROUTE_FIXED=1"; echo "BACKUP=$BK"
