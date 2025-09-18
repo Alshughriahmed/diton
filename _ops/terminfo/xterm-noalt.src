@@ -1,0 +1,3 @@
+xterm-noalt|xterm with no alternate screen,
+    smcup@, rmcup@,
+    use=xterm,

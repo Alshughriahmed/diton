@@ -1,0 +1,557 @@
+=== rtcFlow.ts: aborts ===
+=== rtcFlow.ts: stop() body ===
+161: export function stop(mode: "full"|"network" = "full"){
+162:   // partial-stop for network rematch
+163:   try { safeAbort(state.ac); } catch {}
+164:   state.ac = null;
+165:   try { state.pc?.close(); } catch {}
+166:   state.pc = null;
+167:   try { state.remoteStream?.getTracks().forEach(t=>t.stop()); } catch {}
+168:   state.remoteStream = null;
+169:   if (mode !== "full") return;
+170:   
+171:   // Collect metrics before cleanup
+172:   if (state.pairId && state.pc) {
+173:     try {
+174:       collectAndSendMetrics();
+175:     } catch {}
+176:   }
+177:   
+178:   try{
+179:     const peer = (state && (state.lastPeer||null)) as any;
+180:     if(peer){
+181:       fetch('/api/rtc/prev/for', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ peer }) }).catch(()=>{});
+182:     }
+183:   }catch{}
+184: try {
+185:     // Update phase
+186:     state.phase = 'stopped';
+187:     if (onPhaseCallback) onPhaseCallback('stopped');
+188:     
+189:     // Broadcast phase event
+190:     if (typeof window !== "undefined") {
+191:       window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'idle',role:null}}));
+192:     }
+193: 
+194:     // Abort any ongoing requests
+195:     try{ safeAbort(state.ac); }catch{} state.ac=null;
+196:     state.ac = null;
+197: 
+198:     // Close peer connection and stop tracks
+199:     if (state.pc) {
+200:       try {
+201:         state.pc.getSenders?.().forEach(sender => {
+202:           try {
+203:             if (sender.track) sender.track.stop();
+204:           } catch {}
+205:         });
+206:         state.pc.close();
+207:       } catch {}
+208:       state.pc = null;
+209:     }
+210: 
+211:     // Clear localStorage
+212:     clearLocalStorage();
+213: 
+214:     // Reset state
+215:     state.sid = 0;
+216:     state.phase = 'idle';
+217:     state.role = null;
+218:     state.pairId = null;
+219: 
+220:     logRtc('stop', 200);
+221:   } catch (e) {
+222:     console.warn('[rtc] stop error:', e);
+223:   }
+224: }
+=== rtcFlow.ts: restartIce occurrences ===
+=== ChatClient.tsx: start/stop hooks ===
+19:import { useNextPrev } from "@/hooks/useNextPrev";
+39:import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
+60:  const { next, prev } = useNextPrev();
+171:      tryPrevOrRandom();
+     1	"use client";
+     2	
+     3	import "./freeForAllBridge";
+     4	
+     5	
+     6	import "./likeSyncClient";
+     7	import './msgSendClient';
+     8	if (process.env.NODE_ENV !== 'production') {
+     9	  if (typeof window !== 'undefined') {
+    10	    window.addEventListener('unhandledrejection', (e)=>{
+    11	      const r=e.reason; const msg=String((r&&r.message)||'');
+    12	      if ((r&&r.name==='AbortError') || /aborted/i.test(msg)) e.preventDefault();
+    13	    });
+    14	  }
+    15	}
+    16	import { useEffect, useRef, useState } from "react";
+    17	import { on, emit } from "@/utils/events";
+    18	import * as rtc from "./rtcFlow";
+    19	import { useNextPrev } from "@/hooks/useNextPrev";
+    20	import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+    21	import { useHydrated } from "@/hooks/useHydrated";
+    22	import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
+    23	import { useFilters } from "@/state/filters";
+    24	import type { GenderOpt } from "@/utils/filters";
+    25	import ChatComposer from "@/components/chat/ChatComposer";
+    26	import LikeSystem from "@/components/chat/LikeSystem";
+    27	import PeerInfoCard from "@/components/chat/PeerInfoCard";
+    28	import PeerMetadata from "@/components/chat/PeerMetadata";
+    29	import MyControls from "@/components/chat/MyControls";
+    30	import UpsellModal from "@/components/chat/UpsellModal";
+    31	import ChatToolbar from "./components/ChatToolbar";
+    32	import ChatMessagingBar from "./components/ChatMessagingBar";
+    33	import MessageHud from "./components/MessageHud";
+    34	import FilterBar from "./components/FilterBar";
+    35	import LikeHud from "./LikeHud";
+    36	// import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
+    37	import { getMobileOptimizer } from "@/lib/mobile";
+    38	import { toast } from "@/lib/ui/toast";
+    39	import { nextMatch, tryPrevOrRandom } from "@/lib/match/controls";
+    40	import { useProfile } from "@/state/profile";
+    41	
+    42	type MatchEcho={ ts:number; gender:string; countries:string[] };
+    43	
+    44	const NEXT_COOLDOWN_MS = 700;
+    45	
+    46	export default function ChatClient(){
+    47	  function __updatePeerBadges(meta:any){
+    48	    try{
+    49	      if(!meta || typeof document==="undefined") return;
+    50	      const g = document.querySelector('[data-ui="peer-gender"]');
+    51	      const ctry = document.querySelector('[data-ui="peer-country"]');
+    52	      const cty = document.querySelector('[data-ui="peer-city"]');
+    53	      if(g) (g as HTMLElement).textContent = meta.gender ? String(meta.gender) : '—';
+    54	      if(ctry) (ctry as HTMLElement).textContent = meta.country ? String(meta.country) : '—';
+    55	      if(cty) (cty as HTMLElement).textContent = meta.city ? String(meta.city) : '';
+    56	    }catch{}
+    57	  }
+    58	
+    59	  const hydrated = useHydrated();
+    60	  const { next, prev } = useNextPrev();
+    61	  const lastTsRef = useRef(0);
+    62	  const busyRef = useRef(false);
+    63	  const lastNextTsRef = useRef(0);
+    64	  const localRef = useRef<HTMLVideoElement>(null);
+    65	  const [ready,setReady]=useState(false);
+    66	  const [like,setLike]=useState(false);
+    67	  const [myLikes,setMyLikes]=useState(0);
+    68	  const [peerLikes,setPeerLikes]=useState(123);
+    69	  const [match,setMatch]=useState<MatchEcho|null>(null);
+    70	  const { gender, countries, setGender, setCountries, isVip: vip, setVip } = useFilters();
+    71	  const [beauty,setBeauty]=useState(false);
+    72	  const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
+    73	  const [isGuest, setIsGuest] = useState(false);
+    74	  const [paused, setPaused] = useState(false);
+    75	  const [showMessaging, setShowMessaging] = useState(false);
+    76	  const [showUpsell, setShowUpsell] = useState(false);
+    77	  const { profile } = useProfile();
+    78	  const [rtcPhase, setRtcPhase] = useState<'idle' | 'searching' | 'matched' | 'connected' | 'stopped'>('idle');
+    79	  const [phase, setPhase] = useState<'idle'|'searching'|'matched'|'connected'>('idle');
+    80	  const [pair, setPair] = useState<{id?:string, role?:'caller'|'callee'}>({});
+    81	  const [remoteInfo, setRemoteInfo] = useState<{name?:string; likes?:number; country?:string; city?:string; gender?:string}>({});
+    82	  const [isMirrored, setIsMirrored] = useState(true); // MIRROR_DEFAULT=1
+    83	  const [peerInfo, setPeerInfo] = useState({
+    84	    name: "Anonymous",
+    85	    isVip: false,
+    86	    likes: 0,
+    87	    isOnline: true,
+    88	    country: "",
+    89	    city: "", 
+    90	    gender: "",
+    91	    age: 0
+    92	  });
+    93	  const [cameraPermissionHint, setCameraPermissionHint] = useState<string>('');
+    94	
+    95	  // Light pinning when pair.id changes
+    96	  useEffect(() => { 
+    97	    if (!pair.id) return;
+    98	    fetch(`/api/like?pairId=${encodeURIComponent(pair.id)}`, { method: 'GET' })
+    99	      .then(r => r.ok ? r.json() : null)
+   100	      .then(j => { if (j && typeof j.isLiked === 'boolean') setLike(!!j.isLiked); })
+   101	      .catch(() => {});
+   102	  }, [pair.id]);
+   103	
+   104	  useKeyboardShortcuts();
+   105	
+   106	  useEffect(()=>{
+   107	    // Enqueue moved to rtcFlow.ts to avoid duplication
+   108	    
+   109	    let off1=on("ui:toggleMic",()=>{ toggleMic(); });
+   110	    let off2=on("ui:toggleCam",()=>{ toggleCam(); });
+   111	    let off3=on("ui:switchCamera",async ()=>{ 
+   112	      try {
+   113	        const newStream = await switchCamera();
+   114	        if(localRef.current && newStream) {
+   115	          localRef.current.srcObject = newStream;
+   116	          localRef.current.play().catch(()=>{});
+   117	        }
+   118	      } catch(error) {
+   119	        console.warn('Camera switch failed:', error);
+   120	      }
+   121	    });
+   122	    let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
+   123	    let off5=on("ui:like", async (data)=>{ 
+   124	      try {
+   125	        // Check if we have a valid pairId from current RTC connection
+   126	        const currentPairId = (data && data.pairId) || pair.id;
+   127	        if (!currentPairId) {
+   128	          toast('لا يوجد اتصال نشط للإعجاب');
+   129	          return;
+   130	        }
+   131	
+   132	        // Optimistic update
+   133	        const newLikeState = !like;
+   134	        setLike(newLikeState);
+   135	        
+   136	        // Send via DataChannel for instant peer update
+   137	        const dc = (globalThis as any).__ditonaDataChannel;
+   138	        if (dc && dc.readyState === 'open') {
+   139	          dc.send(JSON.stringify({ t:"like", pairId: currentPairId, liked: newLikeState }));
+   140	        }
+   141	        
+   142	        // Send to backend for persistence
+   143	        fetch(`/api/like?pairId=${encodeURIComponent(currentPairId)}&op=toggle`, { method:'POST' }).catch(()=>{});
+   144	        
+   145	        toast(`تم الإعجاب ${newLikeState ? '❤️' : '💔'}`);
+   146	      } catch (error) {
+   147	        console.warn('Like failed:', error);
+   148	      }
+   149	    });
+   150	    let off6=on("ui:report", async ()=>{ 
+   151	      try{ 
+   152	        await fetch('/api/moderation/report',{method:'POST'}); 
+   153	        toast('🚩 تم إرسال البلاغ وجاري الانتقال'); 
+   154	      }catch{}
+   155	      // RTC bridge: use new flow
+   156	      rtc.next();
+   157	    });
+   158	    let off7=on("ui:next",()=>{ 
+   159	      // Next button cooldown/debounce
+   160	      const now = Date.now();
+   161	      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) {
+   162	        return; // Ignore rapid consecutive Next button presses
+   163	      }
+   164	      lastNextTsRef.current = now;
+   165	      
+   166	      // RTC bridge: use new flow
+   167	      rtc.next();
+   168	    });
+   169	    let off8=on("ui:prev",()=>{ 
+   170	      // Use proper previous functionality
+   171	      tryPrevOrRandom();
+   172	    });
+   173	    let offOpenMessaging=on("ui:openMessaging" as any, ()=>{ setShowMessaging(true); });
+   174	    let offCloseMessaging=on("ui:closeMessaging" as any, ()=>{ setShowMessaging(false); });
+   175	    let offRemoteAudio=on("ui:toggleRemoteAudio" as any, ()=>{
+   176	  // حاول أولاً عبر عنصر صوت مستقل إن وُجد
+   177	  const a=document.getElementById("remoteAudio") as HTMLAudioElement|null;
+   178	  if(a){ a.muted = !a.muted; toast(a.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني"); return; }
+   179	  // وإلا بدّل خاصية muted على فيديو الطرف
+   180	  const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
+   181	  if(v){ v.muted = !v.muted; toast(v.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني"); }
+   182	});
+   183	let offTogglePlay=on("ui:togglePlay", ()=>{
+   184	      setPaused(p => !p);
+   185	      toast('تبديل حالة المطابقة');
+   186	    });
+   187	    let offToggleMasks=on("ui:toggleMasks", ()=>{
+   188	      toast('🤡 تفعيل/إلغاء الأقنعة');
+   189	    });
+   190	    let offMirrorToggle=on("ui:toggleMirror", ()=>{
+   191	      setIsMirrored(prev => {
+   192	        const newState = !prev;
+   193	        toast(newState ? '🪞 تفعيل المرآة' : '📹 إلغاء المرآة');
+   194	        return newState;
+   195	      });
+   196	    });
+   197	    let offUpsell=on("ui:upsell", (feature)=>{
+   198	      const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+   199	      if (freeForAll) {
+   200	        // In free mode, don't show upsell, just show notification
+   201	        toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
+   202	        return;
+   203	      }
+   204	      setShowUpsell(true);
+   205	      toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
+   206	    });
+   207	    let offCountryFilter=on("filters:country", (value)=>{
+   208	      // Trigger new match with updated filters
+   209	      rtc.next();
+   210	    });
+   211	    let offGenderFilterUpdate=on("filters:gender", (value)=>{
+   212	      // Trigger new match with updated filters
+   213	      rtc.next();
+   214	    });
+   215	    
+   216	    // RTC event listeners
+   217	    let offRtcPhase=on("rtc:phase" as any, (data)=>{
+   218	      setPhase(data.phase);
+   219	      setRtcPhase(data.phase); // Keep compatibility with existing code
+   220	    });
+=== stripe prices route.ts ===
+     1	import { FALLBACK_PLANS } from '@/lib/plans';
+     2	import Stripe from 'stripe';
+     3	import { NextResponse } from 'next/server';
+     4	
+     5	export const runtime = "nodejs";
+     6	
+     7	export async function GET() {
+     8	  try {
+     9	    const key = process.env.STRIPE_SECRET_KEY;
+    10	    const ids = [
+    11	      process.env.STRIPE_PRICE_EUR_DAILY,
+    12	      process.env.STRIPE_PRICE_EUR_WEEKLY,
+    13	      process.env.STRIPE_PRICE_EUR_MONTHLY,
+    14	      process.env.STRIPE_PRICE_EUR_YEARLY,
+    15	    ].filter(Boolean) as string[];
+    16	
+    17	    if (!key || ids.length !== 4) {
+    18	      return NextResponse.json({ plans: FALLBACK_PLANS }, { status: 200 });
+    19	    }
+    20	
+    21	    const stripe = new Stripe(key);
+    22	    const prices = await Promise.all(ids.map(id => stripe.prices.retrieve(id)));
+    23	    const plans = prices.map(p => ({
+    24	      id: p.id,
+    25	      priceId: p.id,
+    26	      nickname: p.nickname ?? (p.recurring?.interval ?? 'plan'),
+    27	      interval: p.recurring?.interval ?? 'month',
+    28	      amount: p.unit_amount ?? 0,
+    29	      currency: p.currency ?? 'eur',
+    30	    }));
+    31	
+    32	    // ترتيب: day, week, month, year
+    33	    const order = { day: 0, week: 1, month: 2, year: 3 } as any;
+    34	    plans.sort((a,b) => (order[a.interval] ?? 9) - (order[b.interval] ?? 9));
+    35	
+    36	    return NextResponse.json({ plans }, { status: 200 });
+    37	  } catch {
+    38	    return NextResponse.json({ plans: FALLBACK_PLANS }, { status: 200 });
+    39	  }
+    40	}
+=== matchmake route.ts: dynamic/runtime + response ===
+     1	import { NextRequest, NextResponse } from "next/server";
+     2	import { extractAnonId } from "@/lib/rtc/auth";
+     3	import { matchmake, pairMapOf } from "@/lib/rtc/mm";
+     4	import { setPx } from "@/lib/rtc/upstash";
+     5	export const runtime = "nodejs";
+     6	
+     7	async function upstashGetMeta(anonId:string){
+     8	  try{
+     9	    const url = process.env.UPSTASH_REDIS_REST_URL;
+    10	    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    11	    if(!url||!token||!anonId) return null;
+    12	    const key = `rtc:user:${anonId}`;
+    13	    const r = await fetch(url, {
+    14	      method:'POST',
+    15	      headers:{'content-type':'application/json','authorization':`Bearer ${token}`},
+    16	      body: JSON.stringify([["HGET", key, "meta"]]),
+    17	      cache:'no-store'
+    18	    }).catch(()=>null);
+    19	    const j = r? await r.json().catch(()=>null) : null;
+    20	    const raw = Array.isArray(j?.result) ? j.result[0] : j?.result;
+    21	    return raw ? JSON.parse(raw) : null;
+    22	  }catch{ return null; }
+    23	}
+    24	
+    25	export async function POST(
+    26	_req: NextRequest) {
+    27	  const anon = extractAnonId(_req);
+    28	  if (!anon) return NextResponse.json({ error:"anon-required" }, { status:401 });
+    29	  let prevFor:string|null=null;
+    30	  try{
+    31	    if(_req.headers.get("content-type")?.includes("application/json")){
+    32	      const b:any = await _req.json().catch(()=>null);
+    33	      prevFor = b?.prevFor || null;
+    34	    } else {
+    35	      prevFor = _req.nextUrl?.searchParams?.get("prevFor") || null;
+    36	    }
+    37	  }catch{}
+    38	  if (prevFor) { try{ await setPx(`rtc:prev-wish:${anon}`, String(prevFor), 7000); }catch{} }
+    39	
+    40	  const mapped = await pairMapOf(anon);
+    41	  if (mapped) {
+    42	    // Fetch peer info from the pair record
+    43	    let peerAnonId = null;
+    44	    try {
+    45	      const url = process.env.UPSTASH_REDIS_REST_URL;
+    46	      const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    47	      if (url && token) {
+    48	        const endpoint = url.endsWith('/pipeline') ? url : `${url}/pipeline`;
+    49	        const pairKey = `rtc:pair:${mapped.pairId}`;
+    50	        const r = await fetch(endpoint, {
+    51	          method: "POST",
+    52	          headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    53	          body: JSON.stringify([["HGET", pairKey, "a"], ["HGET", pairKey, "b"]]),
+    54	          cache: "no-store"
+    55	        });
+    56	        const jr: any = await r.json().catch(() => null);
+    57	        const arr = Array.isArray(jr?.result) ? jr.result : (Array.isArray(jr) ? jr : []);
+    58	        const userA = arr[0]?.result ?? null;
+    59	        const userB = arr[1]?.result ?? null;
+    60	        
+    61	        // Determine peer based on role
+    62	        if (mapped.role === "caller") {
+    63	          peerAnonId = userB;
+    64	        } else {
+    65	          peerAnonId = userA;
+    66	        }
+    67	        
+    68	        // Fallback: try to get from rtc:last if pair fetch failed
+    69	        if (!peerAnonId) {
+    70	          const lastKey = `rtc:last:${anon}`;
+    71	          const lr = await fetch(endpoint, {
+    72	            method: "POST",
+    73	            headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    74	            body: JSON.stringify([["GET", lastKey]]),
+    75	            cache: "no-store"
+    76	          });
+    77	          const lj: any = await lr.json().catch(() => null);
+    78	          const lastArr = Array.isArray(lj?.result) ? lj.result : (Array.isArray(lj) ? lj : []);
+    79	          peerAnonId = lastArr[0]?.result ?? null;
+    80	        }
+    81	      }
+    82	    } catch {}
+    83	    
+    84	    return NextResponse.json({ 
+    85	      found: true, 
+    86	      pairId: mapped.pairId, 
+    87	      role: mapped.role,
+    88	      peerAnonId: peerAnonId || "" 
+    89	    }, { status: 200 });
+    90	  }
+    91	  const res = await matchmake(anon);
+    92	  
+    93	if (res.status === 200) {
+    94	  const body:any = res.body || {};
+    95	  try{
+    96	    const url = process.env.UPSTASH_REDIS_REST_URL;
+    97	    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    98	    if (url && token && body.peerAnonId){
+    99	      const key = `rtc:attrs:${body.peerAnonId}`;
+   100	      const r = await fetch(url, {
+   101	        method:"POST",
+   102	        headers:{ "content-type":"application/json", "authorization":`Bearer ${token}` },
+   103	        body: JSON.stringify([["HGETALL", key]]),
+   104	        cache:"no-store"
+   105	      });
+   106	      const j:any = await r.json().catch(()=>null);
+   107	      const arr:any = j?.result;
+   108	      let map: any = null;
+   109	      if (Array.isArray(arr)) { map = {}; for (let i=0;i<arr.length;i+=2) map[arr[i]] = arr[i+1]; }
+   110	      else if (arr && typeof arr==="object") { map = arr; }
+   111	      if (map) body.peerMeta = { country: map.country ?? null, gender: map.gender ?? null };
+   112	    }
+   113	  }catch{}
+   114	  try{
+   115	    const url = process.env.UPSTASH_REDIS_REST_URL;
+   116	    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+   117	    if (url && token && body.peerAnonId){
+   118	      // Set last connection records for both users (TTL ~ 90s)
+   119	      try{
+   120	        const setBody = JSON.stringify([
+   121	          ["SET", `rtc:last:${anon}`, body.peerAnonId, "PX", "90000"],
+   122	          ["SET", `rtc:last:${body.peerAnonId}`, anon, "PX", "90000"]
+   123	        ]);
+   124	        await fetch(url + "/pipeline", {
+   125	          method:"POST",
+   126	          headers:{ "content-type":"application/json", "authorization":`Bearer ${token}` },
+   127	          body: setBody, cache:"no-store"
+   128	        });
+   129	      }catch{}
+   130	    }
+   131	  }catch{}
+   132	
+   133	  return NextResponse.json(body, { status: 200 });
+   134	}
+   135	
+   136	  if (res.status === 204) return new NextResponse(null, { status:204 });
+   137	  return NextResponse.json(res.body || { error:"mm-fail" }, { status: res.status || 500 });
+   138	}
+=== mm.ts: around last-writes ===
+    96	                    zrem(`rtc:q`,self), zrem(`rtc:q`,cand),
+    97	                    zrem(`rtc:q:gender:${selfAttr.gender.toLowerCase()}`,self),
+    98	                    zrem(`rtc:q:gender:${candAttr.gender?.toLowerCase?.()||""}`,cand),
+    99	                    zrem(`rtc:q:country:${selfAttr.country.toUpperCase()}`,self),
+   100	                    zrem(`rtc:q:country:${candAttr.country?.toUpperCase?.()||""}`,cand),
+   101	                    sadd(`rtc:seen:${self}`,cand), expire(`rtc:seen:${self}`,300),
+   102	                    sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
+   103	                    del(`rtc:claim:${cand}`), del(pairLock),
+   104	                  ,
+   105	        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000)
+   106	      ]);
+   107	                  await del(`rtc:prev-wish:${self}`);
+   108	                  // Write rtc:last for both ID formats for compatibility
+   109	      const selfBase = self.split(".")[0];
+   110	      const candBase = cand.split(".")[0];
+   111	      await Promise.all([ 
+   112	        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${selfBase}`, candBase, 90_000),
+   113	        setPx(`rtc:last:${cand}`, self, 90_000), setPx(`rtc:last:${candBase}`, selfBase, 90_000)
+   114	      ]);
+   115	                  await Promise.all([
+   116	                    setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000)
+   117	                  ]);
+   118	return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
+   119	                } else { await del(`rtc:claim:${cand}`); }
+   120	              }
+   121	            }
+   122	          }
+   123	        }
+   124	      }catch{}
+   125	      // === /prev wish ===
+   126	      // === prev for: another user asked to reconnect with me ===
+   127	      try{
+   128	        const selfBase = self.split(".")[0];
+   129	        const caller = await get(`rtc:prev-for:${self}`) || await get(`rtc:prev-for:${selfBase}`);
+   130	        if(caller && caller !== self){
+   131	          const cand = String(caller);
+   132	          const alive = await exists(`rtc:attrs:${cand}`);
+   133	          const mapped = await get(`rtc:pair:map:${cand}`);
+   134	          if(alive && !mapped){
+   135	            const [candAttrRaw,candFiltRaw]=await Promise.all([hgetall(`rtc:attrs:${cand}`),hgetall(`rtc:filters:${cand}`)]);
+   136	            const candAttr: Attrs = {gender: candAttrRaw?.gender || "", country: candAttrRaw?.country || ""};
+   137	            const candFilt: Filters = {genders: candFiltRaw?.genders, countries: candFiltRaw?.countries};
+   138	            const okA=intersectOk(selfFilt,candAttr); const okB=intersectOk(candFilt,selfAttr);
+   139	            if(okA && okB){
+   140	              if(await setNxPx(`rtc:claim:${cand}`,self,6000)){
+   141	                const pairLock=pairLockKey(self,cand);
+   142	                if(await setNxPx(pairLock,"1",6000)){
+   143	                  const pairId=ulid();
+   144	                  await Promise.all([
+   145	                    hset(`rtc:pair:${pairId}`,{a:cand,b:self,role_a:"caller",role_b:"callee",created:Date.now()}),
+   146	                    expire(`rtc:pair:${pairId}`,150),
+   147	                    setPx(`rtc:pair:map:${cand}`,`${pairId}|caller`,150_000),
+   148	                    setPx(`rtc:pair:map:${self}`,`${pairId}|callee`,150_000),
+   149	                    zrem(`rtc:q`,self), zrem(`rtc:q`,cand),
+   150	                    zrem(`rtc:q:gender:${selfAttr.gender.toLowerCase()}`,self),
+   151	                    zrem(`rtc:q:gender:${candAttr.gender?.toLowerCase?.()||""}`,cand),
+   152	                    zrem(`rtc:q:country:${selfAttr.country.toUpperCase()}`,self),
+   153	                    zrem(`rtc:q:country:${candAttr.country?.toUpperCase?.()||""}`,cand),
+   154	                    sadd(`rtc:seen:${self}`,cand), expire(`rtc:seen:${self}`,300),
+   155	                    sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
+   156	                    del(`rtc:claim:${cand}`), del(pairLock),
+   157	                  ]);
+   158	                  await del(`rtc:prev-for:${self}`);
+   159	                  // Write rtc:last for both ID formats for compatibility
+   160	      const selfBase = self.split(".")[0];
+   161	      const candBase = cand.split(".")[0];
+   162	      await Promise.all([ 
+   163	        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${selfBase}`, candBase, 90_000),
+   164	        setPx(`rtc:last:${cand}`, self, 90_000), setPx(`rtc:last:${candBase}`, selfBase, 90_000)
+   165	      ]);
+   166	                  return {status:200 as const, body:{pairId, role:"callee" as const, peerAnonId:cand}};
+   167	                } else { await del(`rtc:claim:${cand}`); }
+   168	              }
+   169	            }
+   170	          }
+   171	        }
+   172	      }catch{}
+-- Acceptance --
+HEALTH_OK=1
+TURN_443_OK=1
+STRIPE_JSON_OK=0
+STRIPE_PLANS_OK=0
+ENV_FFA_OK=0
+BASE=https://www.ditonachat.com

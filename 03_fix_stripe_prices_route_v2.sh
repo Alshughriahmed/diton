@@ -1,3 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/03_stripe_${TS}"; mkdir -p "$BK"
+FILE="src/app/api/stripe/prices/route.ts"
+[ -f "$FILE" ] && cp -a "$FILE" "$BK/" || mkdir -p "$(dirname "$FILE")"
+cat > "$FILE" <<'TS'
 import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,3 +23,6 @@ export async function GET() {
   ];
   return NextResponse.json({ plans }, { headers: { "Cache-Control": "no-store" } });
 }
+TS
+grep -q "unit_amount" "$FILE" || { echo "STRIPE_ROUTE_WRITE_FAILED=1"; exit 2; }
+echo "-- Acceptance --"; echo "STRIPE_ROUTE_PATCHED=1"; echo "BACKUP_DIR=$BK"
