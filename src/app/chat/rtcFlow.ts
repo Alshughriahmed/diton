@@ -105,7 +105,8 @@ type Phase = 'idle' | 'searching' | 'matched' | 'connected' | 'stopped';
 
 // State machine
 interface RtcState {
-  sid: number;
+    remoteStream: MediaStream | null;
+sid: number;
   phase: Phase;
   role: 'caller' | 'callee' | null;
   pairId: string | null;
@@ -116,7 +117,8 @@ interface RtcState {
 }
 
 let state: RtcState = {
-  sid: 0,
+    remoteStream: null,
+sid: 0,
   phase: 'idle',
   role: null,
   pairId: null,
