@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+F="src/app/chat/rtcFlow.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/fix_stop_${TS}.ts"
+mkdir -p _ops/backups _ops/reports
+cp -a "$F" "$BK"
+
+perl -0777 -i -pe '
+  s{
+    //\s*Complete\s+cleanup\s+and\s+stop.*?      # تعليق بداية الدالة المكسورة
+    //\s*Collect\s+and\s+send\s+metrics          # تعليق القسم التالي
+  }{
+    // Complete cleanup and stop
+export function stop(mode: "full"|"network" = "full"){
+  try{
+    // abort any pending ops
+    try{ safeAbort(state.ac); }catch{} 
+    state.ac = null;
+
+    // network-only partial stop: close pc + remote, keep local preview
+    if (mode !== "full"){
+      try{ state.pc?.close(); }catch{}
+      state.pc = null;
+      try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+      state.remoteStream = null;
+      logRtc("stop", 206);
+      return;
+    }
+
+    // full stop: send metrics while pc is still alive
+    try{ if (state.pairId && state.pc){ collectAndSendMetrics(); } }catch{}
+
+    // close peer and stop remote tracks
+    try{ state.pc?.getSenders?.().forEach(s=>{ try{ s.track?.stop(); }catch{} }); }catch{}
+    try{ state.pc?.close(); }catch{}
+    state.pc = null;
+    try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+    state.remoteStream = null;
+
+    // hint prev-for once
+    try{
+      const peer = (state && (state.lastPeer||null)) as any;
+      if(peer){
+        fetch("/api/rtc/prev/for", {
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify({ peer })
+        }).catch(()=>{});
+      }
+    }catch{}
+
+    // phase + event
+    state.phase = "stopped";
+    try{ onPhaseCallback?.("stopped"); }catch{}
+    if (typeof window !== "undefined"){
+      window.dispatchEvent(new CustomEvent("rtc:phase",{ detail:{ phase:"idle", role:null }}));
+    }
+
+    // clear and reset
+    clearLocalStorage();
+    state.sid = 0;
+    state.phase = "idle";
+    state.role = null;
+    state.pairId = null;
+
+    logRtc("stop", 200);
+  }catch(e){
+    console.warn("[rtc] stop error:", e);
+  }
+}
+
+\n// Collect and send metrics
+  }gsx;
+' "$F"
+
+echo "-- Acceptance --"
+echo "STOP_BLOCK_FIXED=$([ "$(grep -n 'export function stop' "$F" | wc -l)" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP=$BK"

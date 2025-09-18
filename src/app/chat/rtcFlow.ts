@@ -156,74 +156,69 @@ function clearLocalStorage() {
   }
 }
 
-// Complete cleanup and stopexport function stop(mode: "full"|"network" = "full"){
-      safeAbort(state.ac); state.ac = null;
-safeAbort(state.ac); state.ac = null;
-// partial-stop for network rematch
-  try { safeAbort(state.ac);  state.ac = null;} catch {}
-  state.ac = null;
-  try { state.pc?.close(); } catch {}
-  state.pc = null;
-  try { state.remoteStream?.getTracks().forEach(t=>t.stop()); } catch {}
-  state.remoteStream = null;
-  if (mode !== "full") return;
-  
-  // Collect metrics before cleanup
-  if (state.pairId && state.pc) {
-    try {
-      collectAndSendMetrics();
-    } catch {}
-  }
-  
-  try{
-    const peer = (state && (state.lastPeer||null)) as any;
-    if(peer){
-      fetch('/api/rtc/prev/for', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ peer }) }).catch(()=>{});
-    }
-  }catch{}
-try {
-    // Update phase
-    state.phase = 'stopped';
-    if (onPhaseCallback) onPhaseCallback('stopped');
-    
-    // Broadcast phase event
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'idle',role:null}}));
-    }
 
-    // Abort any ongoing requests
-    try{ safeAbort(state.ac); }catch{} state.ac=null;
+    // Complete cleanup and stop
+export function stop(mode: "full"|"network" = "full"){
+  try{
+    // abort any pending ops
+    try{ safeAbort(state.ac); }catch{} 
     state.ac = null;
 
-    // Close peer connection and stop tracks
-    if (state.pc) {
-      try {
-        state.pc.getSenders?.().forEach(sender => {
-          try {
-            if (sender.track) sender.track.stop();
-          } catch {}
-        });
-        state.pc.close();
-      } catch {}
+    // network-only partial stop: close pc + remote, keep local preview
+    if (mode !== "full"){
+      try{ state.pc?.close(); }catch{}
       state.pc = null;
+      try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+      state.remoteStream = null;
+      logRtc("stop", 206);
+      return;
     }
 
-    // Clear localStorage
-    clearLocalStorage();
+    // full stop: send metrics while pc is still alive
+    try{ if (state.pairId && state.pc){ collectAndSendMetrics(); } }catch{}
 
-    // Reset state
+    // close peer and stop remote tracks
+    try{ state.pc?.getSenders?.().forEach(s=>{ try{ s.track?.stop(); }catch{} }); }catch{}
+    try{ state.pc?.close(); }catch{}
+    state.pc = null;
+    try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+    state.remoteStream = null;
+
+    // hint prev-for once
+    try{
+      const peer = (state && (state.lastPeer||null)) as any;
+      if(peer){
+        fetch("/api/rtc/prev/for", {
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify({ peer })
+        }).catch(()=>{});
+      }
+    }catch{}
+
+    // phase + event
+    state.phase = "stopped";
+    try{ onPhaseCallback?.("stopped"); }catch{}
+    if (typeof window !== "undefined"){
+      window.dispatchEvent(new CustomEvent("rtc:phase",{ detail:{ phase:"idle", role:null }}));
+    }
+
+    // clear and reset
+    clearLocalStorage();
     state.sid = 0;
-    state.phase = 'idle';
+    state.phase = "idle";
     state.role = null;
     state.pairId = null;
 
-    logRtc('stop', 200);
-  } catch (e) {
-    console.warn('[rtc] stop error:', e);
+    logRtc("stop", 200);
+  }catch(e){
+    console.warn("[rtc] stop error:", e);
   }
 }
 
+
 // Collect and send metrics
+  
 async function collectAndSendMetrics() {
   if (!state.pc || !state.pairId) return;
   
