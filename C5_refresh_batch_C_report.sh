@@ -6,9 +6,8 @@ getv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit
 last(){ ls -1t _ops/reports/"$1".*.log 2>/dev/null | head -1; }
 L1=$(last C1_matchmake_dynamic_peer.sh)
 L2=$(last C2_mm_last_guard_ttls.sh)
-L3=$(last C3b_msgbar_hard_fix.sh)
-[ -z "$L3" ] && L3=$(last C3_msgbar_zfix.sh)
-L4=$(last C4b_mark_prevnext_chatclient.sh); [ -z "$L4" ] && L4=$(last C4_chatclient_mark_buttons.sh)
+L3=$(last C3c_msgbar_find_and_fix.sh); [ -z "$L3" ] && L3=$(last C3b_msgbar_hard_fix.sh); [ -z "$L3" ] && L3=$(last C3_msgbar_zfix.sh)
+L4=$(last C4c_mark_prevnext_anywhere.sh); [ -z "$L4" ] && L4=$(last C4b_mark_prevnext_chatclient.sh); [ -z "$L4" ] && L4=$(last C4_chatclient_mark_buttons.sh)
 echo "-- Acceptance --" | tee -a "$OUT"
 echo "MATCHMAKE_DYNAMIC_OK=$(getv MATCHMAKE_DYNAMIC_OK "$L1")" | tee -a "$OUT"
 echo "MATCHMAKE_PEERID_PRESENT=$(getv MATCHMAKE_PEERID_PRESENT "$L1")" | tee -a "$OUT"

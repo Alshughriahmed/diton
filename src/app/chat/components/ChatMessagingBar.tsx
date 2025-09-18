@@ -86,12 +86,11 @@ export default function ChatMessagingBar() {
   if (!open) return null;
 
   return (
-    <div ref={ref} className="fixed bottom-0 left-0 right-0 z-[70]" data-ui="messages-fixed">
-      <div className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
-        <div className="flex gap-2 items-center">
-          <input
-            data-ui="msg-input"
-            className="flex-1 rounded-xl bg-black/40 text-white placeholder-white/60 px-3 py-2 outline-none"
+    "<".div." "."ref={ref} className="fixed bottom-0 left-0 right-0 z-[70] fixed inset-x-0 bottom-0 z-[70] pointer-events-auto"" data-ui="messages-fixed">
+      "<".div." "."className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2 fixed inset-x-0 bottom-0 z-[70] pointer-events-auto"">
+        "<".div." "."className="flex gap-2 items-center fixed inset-x-0 bottom-0 z-[70] pointer-events-auto"">
+          "<".input." "."data-ui="msg-input"
+            className="flex-1 rounded-xl bg-black/40 text-white placeholder-white/60 px-3 py-2 outline-none fixed inset-x-0 bottom-0 z-[70] pointer-events-auto""
             placeholder="Type a message…"
             value={text} 
             onChange={e => setText(e.target.value)} 
@@ -99,14 +98,12 @@ export default function ChatMessagingBar() {
             onFocus={() => { try { emit("ui:typing" as any, "on"); } catch {} }}
             onBlur={() => { try { emit("ui:typing" as any, "off"); } catch {} }}
           />
-          <button
-            data-ui="msg-send"
-            className="rounded-xl px-3 py-2 bg-blue-600 text-white"
+          "<".button." "."data-ui="msg-send"
+            className="rounded-xl px-3 py-2 bg-blue-600 text-white fixed inset-x-0 bottom-0 z-[70] pointer-events-auto""
             onClick={() => sendMessage()}
           >Send</button>
-          <button
-            data-ui="msg-close"
-            className="rounded-xl px-3 py-2 bg-black/40 text-white"
+          "<".button." "."data-ui="msg-close"
+            className="rounded-xl px-3 py-2 bg-black/40 text-white fixed inset-x-0 bottom-0 z-[70] pointer-events-auto""
             onClick={() => { setOpen(false); emit("ui:closeMessaging" as any); }}
           >Close</button>
         </div>
