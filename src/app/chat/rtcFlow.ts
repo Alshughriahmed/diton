@@ -798,3 +798,25 @@ try{
     try{ next(); }catch{}
   });
 }catch{}
+/** Debounced ICE restart on transient drops */
+let __iceRestartTimer: any = null;
+function scheduleRestartIce() {
+  try {
+    if (__iceRestartTimer) return;
+    __iceRestartTimer = setTimeout(async () => {
+      __iceRestartTimer = null;
+      try {
+        if (!state?.pc || state?.ac?.signal?.aborted) return;
+        if (typeof state.pc.restartIce === 'function') {
+          await state.pc.restartIce();
+        } else {
+          try {
+            await state.pc.setLocalDescription(
+              await state.pc.createOffer({ iceRestart: true })
+            );
+          } catch {}
+        }
+      } catch(e) { try{ swallowAbort(e); }catch{} }
+    }, 700);
+  } catch {}
+}
