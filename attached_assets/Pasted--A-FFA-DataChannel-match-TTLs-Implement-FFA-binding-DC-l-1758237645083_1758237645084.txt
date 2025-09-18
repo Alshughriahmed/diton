@@ -1,0 +1,61 @@
+دفعة A — تنفيذ الميزات الحرجة (FFA + DataChannel + match/TTLs)
+
+العنوان: Implement FFA binding, DC lifecycle, and match/TTLs (Minimal-Diff)
+
+التعليمات للوكيل:
+
+المسار: /home/runner/workspace
+
+بيئة ثابتة: TERM=dumb CI=1 NO_COLOR=1 FORCE_COLOR=0 PAGER=cat GIT_PAGER=cat LESS=FRX
+
+لا أدوات تفاعلية. لا حذف أو تعطيل لميزات قائمة. نسخ احتياطي قبل أي تعديل.
+
+استخدم الباتشات من all.zip إن وُجدت. إن تعارضت، اطبع سبب التعارض ولا تُجري تعديلات واسعة.
+
+الأوامر:
+
+_ops/bin/disable_alt_screen.sh bash -lc '
+set -Eeuo pipefail; export TERM=dumb CI=1 NO_COLOR=1 FORCE_COLOR=0 PAGER=cat GIT_PAGER=cat LESS=FRX;
+STAMP=$(date -u +%Y%m%d-%H%M%S); ROOT=$(git rev-parse --show-toplevel || pwd);
+BK="_ops/backups/agentA_$STAMP"; RPT="_ops/reports/agentA_$STAMP.log"; mkdir -p "$BK" "${RPT%/*}";
+rsync -a --exclude .git --exclude node_modules ./ "$BK"/ || true;
+
+# فك الحزمة إن وُجدت
+[ -f all.zip ] && unzip -oq all.zip -d _ops/tmp/agentA_all || true
+PATCH_DIR=$(find _ops/tmp/agentA_all -type f -name "*.diff" -printf "%h\n" | sort -u | head -n1 || true)
+[ -z "$PATCH_DIR" ] && [ -d diton_patches_min ] && PATCH_DIR=diton_patches_min
+
+apply(){ [ -f "$1" ] || return 0; if git apply --check "$1" >/dev/null 2>&1; then git apply --whitespace=nowarn "$1"; echo "[patch] applied $(basename "$1")" | tee -a "$RPT"; else echo "[patch] skipped $(basename "$1")" | tee -a "$RPT"; fi; }
+
+# 1) ربط FFA على الواجهة (runtime)
+for f in 02_env_include_ffa.diff 03a_filters_runtime_ffa.diff 03b_toolbar_runtime_ffa.diff 03c_filterbar_runtime_ffa.diff 06a_genderselect_ffa.diff 06b_countryselect_ffa.diff 06c_beauty_ffa.diff 06d_messages_ffa.diff; do
+  [ -n "$PATCH_DIR" ] && apply "$PATCH_DIR/$f";
+done
+
+# 2) دورة حياة DataChannel + الجسر وتمكين send/like عند dc.open
+for f in 04_chatclient_bridge_ffa.diff 05_msgsend_dc_send.diff 07_chatclient_like_bridge.diff; do
+  [ -n "$PATCH_DIR" ] && apply "$PATCH_DIR/$f";
+done
+
+# 3) matchmake: peerAnonId/peerMeta دائمًا + dynamic, وترتيب prev-wish→prev-for وSETNX PX مزدوج وTTLs
+[ -n "$PATCH_DIR" ] && apply "$PATCH_DIR/01_matchmake_mapped_peer_meta.diff"
+
+# فحوص ثابتة سريعة
+ok_env=0; rg -n "FREE_FOR_ALL|NEXT_PUBLIC_FREE_FOR_ALL" src/app/api/rtc/env/route.ts >/dev/null 2>&1 && ok_env=1
+ok_prev=0; rg -n "isFFA\\(\\).*\\|\\|.*isVip" src/**/ChatToolbar*.tsx >/dev/null 2>&1 && ok_prev=1
+ok_filters=0; rg -n "isFFA\\(\\).*\\|\\|.*isVip" src/**/FilterBar*.tsx src/**/GenderSelect*.tsx src/**/CountrySelect*.tsx >/dev/null 2>&1 && ok_filters=1
+ok_dc=0; rg -n "createDataChannel|ondatachannel" src/app/chat/rtcFlow.ts src/app/chat/ChatClient.tsx >/dev/null 2>&1 && ok_dc=1
+
+# فحص TTLs
+TTLS_OK=0; BASE="https://www.ditonachat.com" _ops/bin/ttls_check.sh >/dev/null 2>&1 && TTLS_OK=1
+
+printf "%s\n%s\n" "-- Acceptance --" \
+"FFA_OK=$((ok_env & ok_prev & ok_filters)); DC_WIRING_OK=$ok_dc; TTLS_OK=$TTLS_OK" | tee -a "$RPT"
+echo "[i] Report: $RPT"
+'
+
+
+معيار القبول لدفعة A:
+
+في التقرير:
+FFA_OK=1 وDC_WIRING_OK=1 وTTLS_OK=1.
