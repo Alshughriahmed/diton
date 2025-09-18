@@ -77,3 +77,4 @@ export async function GET() {
   
   return NextResponse.json({ iceServers });
 }
+export const dynamic="force-dynamic";

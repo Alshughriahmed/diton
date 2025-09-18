@@ -38,4 +38,4 @@ export async function GET(req: NextRequest) {
   if (!items || items.length === 0) return new NextResponse(null, { status: 204 });
   await ltrim(key, items.length, -1); await expire(`rtc:pair:${pairId}`, 150);
   return NextResponse.json(items.map(s => JSON.parse(s)), { status: 200 });
-}
+}export const dynamic="force-dynamic";

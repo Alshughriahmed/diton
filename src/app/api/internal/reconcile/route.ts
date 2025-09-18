@@ -54,4 +54,5 @@ export async function POST(req: NextRequest) {
     console.error("[RECONCILE_ERROR]", error);
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

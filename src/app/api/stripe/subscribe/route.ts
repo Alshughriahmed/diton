@@ -98,4 +98,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return j({ error: e?.message || "stripe_error" }, 500);
   }
-}
+}export const dynamic="force-dynamic";

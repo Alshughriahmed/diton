@@ -8,3 +8,5 @@ export async function GET() {
     headers: { "content-type": "application/json" } 
   });
 }
+export const runtime="nodejs";
+export const dynamic="force-dynamic";

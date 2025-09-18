@@ -55,4 +55,5 @@ export async function GET() {
     ok: false,
     error: "Provider not configured"
   }, { status: 501 });
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

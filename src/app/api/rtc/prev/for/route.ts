@@ -17,3 +17,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok:false, error:String(e?.message||e).slice(0,140) }, { status:500 });
   }
 }
+export const runtime="nodejs";
+export const dynamic="force-dynamic";

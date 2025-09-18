@@ -12,3 +12,5 @@ export async function GET(req: Request) {
   };
   return NextResponse.json(data, { status: 200 });
 }
+export const runtime="nodejs";
+export const dynamic="force-dynamic";

@@ -1,0 +1,46 @@
+اعمل في /home/runner/workspace. هدف واحد: BUILD_OK=1 بلا أخطاء، Minimal-Diff فقط. إن فشل أي جزء، أصلحه أنت مباشرة ثم أعد المحاولة؛ عند العجز اطبع أوّل وآخر 80 سطرًا من اللوج.
+
+# 0) تحضير
+pnpm -v || corepack enable && corepack prepare pnpm@latest --activate
+pnpm install --frozen-lockfile || pnpm install
+
+# 1) فحص سريع وتصحيح تلقائي قبل البناء
+# 1.1 ChatMessagingBar.tsx: أزل أي تشويه مثل "<".div." " أو className="" المزدوج
+#    وأكد: "use client" في السطر الأول، data-ui="messages-fixed"، وثوابت fixed inset-x-0 bottom-0 z-[70] pointer-events-auto، و visualViewport hook.
+#    إن وُجد تلف شديد، استرجع من أحدث نسخة داخل _ops/backups/C3*/C3c*/ ثم أعد حقن z-[70] وvisualViewport.
+
+# 1.2 rtcFlow.ts:
+#    تأكد من وجود: export function stop(mode:"full"|"network"="full"){...} بالشكل السليم الذي يعيد partial stop وcollectAndSendMetrics قبل الإغلاق الكامل.
+#    تأكد من وجود الحقل remoteStream في RtcState وتهيئته في state وتصفيره بعد stop("network") أو "full".
+#    تأكد من safeAbort(state.ac); state.ac=null; وعدم وجود تكرارات أو أسطر تالفة قرب stop().
+#    تأكد من hasTurns443First() وترتيب ICE.
+
+# 1.3 ملفات عميل معدّلة: "use client" سطر 1.
+
+# 1.4 middleware.ts: أول سطر في الدالة: if (request.nextUrl.pathname.startsWith("/api")) return NextResponse.next();
+
+# 1.5 كل src/app/api/**/route.ts الحساسة: 
+#    export const runtime="nodejs"; export const dynamic="force-dynamic";
+#    وخاصة /api/rtc/env يعيد JSON ويضع Cache-Control: no-store.
+
+# 2) تحقق تايبسكربت قبل البناء
+pnpm exec tsc -p . --noEmit || true
+
+# 3) بناء
+BUILD_LOG="_ops/reports/build_$(date -u +%Y%m%d-%H%M%S).log"; mkdir -p _ops/reports
+if pnpm run build >"$BUILD_LOG" 2>&1; then
+  echo "-- Acceptance --"
+  echo "BUILD_OK=1"
+  echo "BUILD_LOG=$BUILD_LOG"
+else
+  echo "-- Acceptance --"
+  echo "BUILD_OK=0"
+  echo "BUILD_LOG=$BUILD_LOG"
+  echo "--- HEAD(80) ---"; head -n 80 "$BUILD_LOG"
+  echo "--- TAIL(80) ---"; tail -n 80 "$BUILD_LOG"
+  exit 1
+fi
+
+# 4) تقرير جاهزية محلية سريع
+#   h()/t()/s()/e() على BASE=http://127.0.0.1:${PORT:-3000} إذا كان dev server متاحًا؛ وإلا تخطَّ هذه الخطوة.
+

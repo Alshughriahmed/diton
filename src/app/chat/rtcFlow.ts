@@ -607,7 +607,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     };
     
     state.pc.onconnectionstatechange = () => {
-       try{const st=(state.pc as any).connectionState; if(st==="disconnected"||st==="failed"){ scheduleRestartIce(1100); }}catch{} if (!checkSession(currentSession) || !state.pc) return;
+       try{const st=(state.pc as any).connectionState; if(st==="disconnected"||st==="failed"){ scheduleRestartIce(); }}catch{} if (!checkSession(currentSession) || !state.pc) return;
       
       const connectionState = state.pc.connectionState;
       logRtc('connection-state', 200, { connectionState });

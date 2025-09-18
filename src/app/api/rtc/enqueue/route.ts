@@ -62,3 +62,4 @@ try {
     return NextResponse.json({ error: "enqueue-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });
   }
 }
+export const dynamic="force-dynamic";

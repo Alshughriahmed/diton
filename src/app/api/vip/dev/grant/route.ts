@@ -12,4 +12,5 @@ export async function POST() {
     `vip=1; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`
   );
   return res;
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

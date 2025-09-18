@@ -67,4 +67,5 @@ export async function POST(req: NextRequest) {
       error: "Internal server error" 
     }, { status: 500 });
   }
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

@@ -10,4 +10,5 @@ const mockFriends = [
 export async function GET() {
   // استرجع مصفوفة عرض فقط من LIKES المؤقتة
   return NextResponse.json({ friends: mockFriends });
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

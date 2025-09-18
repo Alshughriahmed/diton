@@ -24,3 +24,4 @@ export async function GET() {
   res.cookies.set("anon", cookie, { httpOnly:true, secure:true, sameSite:"lax", path:"/", maxAge:60*60*24*180 });
   return res;
 }
+export const dynamic="force-dynamic";

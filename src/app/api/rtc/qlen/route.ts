@@ -10,4 +10,4 @@ export async function GET() {
   } catch (e: any) {
     return NextResponse.json({ mode: MODE === "redis" ? "redis-fail" : "memory", len: 0, error: String(e?.message||e).slice(0,120) }, { status: 200 });
   }
-}
+}export const dynamic="force-dynamic";
