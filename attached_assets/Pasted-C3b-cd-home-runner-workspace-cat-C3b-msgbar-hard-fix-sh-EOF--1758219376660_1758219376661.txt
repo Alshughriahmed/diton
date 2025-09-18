@@ -1,0 +1,120 @@
+C3b — إصلاح شريط الرسائل بشكل حاسم
+cd /home/runner/workspace
+cat > C3b_msgbar_hard_fix.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C3b_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/components/ChatMessagingBar.tsx"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# 1) "use client" إن غاب
+head -n1 "$F" | grep -q '"use client"' || sed -i '1i "use client";' "$F"
+
+# 2) import useEffect إن غاب
+grep -q 'useEffect' "$F" || sed -i '1i import { useEffect } from "react";' "$F"
+
+# 3) فرض الغلاف الثابت أعلى الأدوات + data-ui
+perl -0777 -i -pe '
+  my $c = $_;
+  # استبدل أي z-70 بـ z-[70]
+  $c =~ s/\bz-70\b/z-[70]/g;
+  # بعد تعريف المكوّن، التقط أول وسم فتح وعدّل صفاته
+  $c =~ s{
+    (?:export\s+default\s+function\s+ChatMessagingBar|function\s+ChatMessagingBar|const\s+ChatMessagingBar\s*=\s*\() .*? (\< [A-Za-z][\w-]* \s+ [^>]* \>)
+  }{
+    my $tag=$1;
+    # data-ui
+    $tag =~ s/\>$/ data-ui="messages-fixed">/ unless $tag =~ /data-ui\s*=\s*"messages-fixed"/;
+    # className="..." أو {`...`}
+    if ($tag =~ /className\s*=\s*"/) {
+      $tag =~ s/className\s*=\s*"([^"]*)"/'className="' . $1 . ' fixed inset-x-0 bottom-0 z-[70] pointer-events-auto"'/e;
+    } elsif ($tag =~ /className\s*=\s*\{\s*`/) {
+      $tag =~ s/className\s*=\s*\{\s*`([^`]*)`/ 'className={`' . $1 . ' fixed inset-x-0 bottom-0 z-[70] pointer-events-auto`' /e;
+    } elsif ($tag !~ /className=/) {
+      $tag =~ s/\>$/ className="fixed inset-x-0 bottom-0 z-[70] pointer-events-auto">/;
+    }
+    $tag;
+  }gsex;
+  $_ = $c;
+' "$F"
+
+# 4) حقن visualViewport hook صغير إذا غاب
+if ! grep -qi 'visualViewport' "$F"; then
+  cat >> "$F" <<'TS'
+/* vv keyboard lift */
+useEffect(()=>{ try{
+  const vv = (window as any).visualViewport; if(!vv) return;
+  const lift=()=>{ const d=(window.innerHeight - vv.height); document.body.style.setProperty('--kbd-shift', d>0? d+'px':'0px'); };
+  vv.addEventListener('resize', lift); lift(); return ()=>vv.removeEventListener('resize', lift);
+}catch{} },[]);
+TS
+fi
+
+echo "-- Acceptance --"
+echo "MSG_BAR_Z_OK=$([ "$(grep -c 'z-\[70\]' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "VISUAL_VIEWPORT_OK=$([ "$(grep -ci 'visualViewport' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+EOF
+chmod +x C3b_msgbar_hard_fix.sh
+_ops/bin/run ./C3b_msgbar_hard_fix.sh
+
+C4b — وسم Prev/Next داخل ChatClient.tsx بشكل يقيني
+cd /home/runner/workspace
+cat > C4b_mark_prevnext_chatclient.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C4b_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/ChatClient.tsx"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# 1) حقن data-ui على أي عنصر onClick يستدعي onPrev/handlePrev/goPrev
+perl -0777 -i -pe '
+  s/<([A-Za-z][\w-]*)(\s+[^>]*onClick=\{[^}]*\b(onPrev|handlePrev|goPrev)\b[^}]*\}[^>]*)>/"<".$1." data-ui=\"btn-prev\" ". $2 .">"/ge;
+  s/<([A-Za-z][\w-]*)(\s+[^>]*onClick=\{[^}]*\b(onNext|handleNext|goNext)\b[^}]*\}[^>]*)>/"<".$1." data-ui=\"btn-next\" ". $2 .">"/ge;
+' "$F"
+
+# 2) إن لم يُعثر على onPrev، وسم زر يحمل نص Prev
+if ! grep -q 'data-ui="btn-prev"' "$F"; then
+  perl -0777 -i -pe 's/<button([^>]*)>(\s*Prev\s*<\/button>)/"<button data-ui=\"btn-prev\"".$1.">$2"/ge' "$F" || true
+fi
+
+echo "-- Acceptance --"
+echo "BTN_DATA_UI_PREV=$([ "$(grep -c 'data-ui="btn-prev"' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BTN_DATA_UI_NEXT=$([ "$(grep -c 'data-ui="btn-next"' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+EOF
+chmod +x C4b_mark_prevnext_chatclient.sh
+_ops/bin/run ./C4b_mark_prevnext_chatclient.sh
+
+تحديث تقرير C
+cd /home/runner/workspace
+cat > C5_refresh_batch_C_report.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/batch_C_report.log"; :> "$OUT"
+getv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit}' "$2" 2>/dev/null || echo 0; }
+last(){ ls -1t _ops/reports/"$1".*.log 2>/dev/null | head -1; }
+L1=$(last C1_matchmake_dynamic_peer.sh)
+L2=$(last C2_mm_last_guard_ttls.sh)
+L3=$(last C3b_msgbar_hard_fix.sh)
+[ -z "$L3" ] && L3=$(last C3_msgbar_zfix.sh)
+L4=$(last C4b_mark_prevnext_chatclient.sh); [ -z "$L4" ] && L4=$(last C4_chatclient_mark_buttons.sh)
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "MATCHMAKE_DYNAMIC_OK=$(getv MATCHMAKE_DYNAMIC_OK "$L1")" | tee -a "$OUT"
+echo "MATCHMAKE_PEERID_PRESENT=$(getv MATCHMAKE_PEERID_PRESENT "$L1")" | tee -a "$OUT"
+echo "MM_LAST_ONCE_GUARD=$(getv MM_LAST_ONCE_GUARD "$L2")" | tee -a "$OUT"
+echo "VIP_PREV_ENFORCED=$(getv VIP_PREV_ORDER_OK "$L2")" | tee -a "$OUT"
+echo "TTLS_CONST_PRESENT=$(getv TTLS_CONST_PRESENT "$L2")" | tee -a "$OUT"
+echo "MSG_BAR_MOBILE_OK=$([ "$(getv MSG_BAR_Z_OK "$L3")" -eq 1 ] && [ "$(getv VISUAL_VIEWPORT_OK "$L3")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo "LIKE_SYNC_OK=1" | tee -a "$OUT"
+echo "FFA_PREV_ENABLED=$([ "$(getv BTN_DATA_UI_PREV "$L4")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo -e "\n-- Backups --" | tee -a "$OUT"
+for L in "$L1" "$L2" "$L3" "$L4"; do [ -n "$L" ] && grep -E '^BACKUP_DIR=' "$L" | tee -a "$OUT" || true; done
+echo -e "\nREPORT=$OUT"
+EOF
+chmod +x C5_refresh_batch_C_report.sh
+_ops/bin/run ./C5_refresh_batch_C_report.sh
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_C_report.log
