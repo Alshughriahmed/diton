@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -euo pipefail
 export LANG=C LC_ALL=C TERM=dumb
 

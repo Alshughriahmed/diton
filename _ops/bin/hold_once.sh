@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -Eeuo pipefail
 PORT="${PORT:-3000}"; BASE="http://127.0.0.1:$PORT"
 LOCK="_ops/.hold_lock"; mkdir -p _ops/logs

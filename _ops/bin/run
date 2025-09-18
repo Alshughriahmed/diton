@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="${ROOT:-/home/runner/workspace}"; cd "$ROOT"
+source _ops/bin/shell_guard.sh || true
+[[ $# -ge 1 ]] || { echo "usage: _ops/bin/run <script> [args...]"; exit 2; }
+TARGET="$1"; shift || true
+[[ -f "$TARGET" ]] || { echo "script_not_found:$TARGET"; exit 3; }
+( while true; do echo "[HB] $(date -u +%H:%M:%S)"; sleep 10; done ) & HB=$!
+trap 'kill $HB 2>/dev/null || true' EXIT
+TS=$(date -u +%Y%m%d-%H%M%S); LOG="_ops/reports/$(basename "$TARGET").${TS}.log"
+bash -lc "set -euo pipefail; source _ops/bin/shell_guard.sh || true; bash \"$TARGET\" \"$@\"" </dev/null 2>&1 | stdbuf -oL -eL tee "$LOG"

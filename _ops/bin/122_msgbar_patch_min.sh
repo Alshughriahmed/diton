@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -euo pipefail
 TS=$(date -u +%Y%m%d-%H%M%S)
 BK="_ops/backups/msgbar_min_${TS}"; REP="_ops/reports/msgbar_min_${TS}.log"

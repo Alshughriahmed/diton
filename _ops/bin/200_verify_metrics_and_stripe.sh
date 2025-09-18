@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -euo pipefail
 TS=$(date -u +%Y%m%d-%H%M%S); REP="_ops/reports/verify_metrics_stripe_${TS}.log"
 mkdir -p _ops/reports

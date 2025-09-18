@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -euo pipefail
 BASE="${BASE:-https://www.ditonachat.com}"
 REP="_ops/reports/release_gate_$(date -u +%Y%m%d-%H%M%S).log"; mkdir -p _ops/reports

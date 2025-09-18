@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -euo pipefail
 . _ops/bin/_hold.sh; hold_begin; pulse_start
 TS=$(date -u +%Y%m%d-%H%M%S)
