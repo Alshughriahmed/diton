@@ -26,7 +26,7 @@ export default function ChatToolbar(){
         disabled={!isVip && !freeForAll}
         title={!isVip && !freeForAll ? "VIP only" : "Previous match"}
         className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!isVip ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
-      <button data-ui="btn-next" onClick={()=>emit("ui:next")} data-ui="btn-next"
+      <button data-ui="btn-next" onClick={()=>emit("ui:next")}
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[50] text-3xl sm:text-4xl select-none">⏭️</button>
 
       {/* Bottom toolbar fixed forever */}
