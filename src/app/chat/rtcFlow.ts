@@ -160,7 +160,7 @@ function clearLocalStorage() {
 
 export function stop(mode: "full"|"network" = "full"){
   // partial-stop for network rematch
-  try { safeAbort(state.ac); } catch {}
+  try { safeAbort(state.ac);  state.ac = null;} catch {}
   state.ac = null;
   try { state.pc?.close(); } catch {}
   state.pc = null;
@@ -610,7 +610,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     };
     
     state.pc.onconnectionstatechange = () => {
-      if (!checkSession(currentSession) || !state.pc) return;
+       try{const st=(state.pc as any).connectionState; if(st==="disconnected"||st==="failed"){ scheduleRestartIce(1100); }}catch{} if (!checkSession(currentSession) || !state.pc) return;
       
       const connectionState = state.pc.connectionState;
       logRtc('connection-state', 200, { connectionState });
