@@ -156,10 +156,10 @@ function clearLocalStorage() {
   }
 }
 
-// Complete cleanup and stop
-
-export function stop(mode: "full"|"network" = "full"){
-  // partial-stop for network rematch
+// Complete cleanup and stopexport function stop(mode: "full"|"network" = "full"){
+      safeAbort(state.ac); state.ac = null;
+safeAbort(state.ac); state.ac = null;
+// partial-stop for network rematch
   try { safeAbort(state.ac);  state.ac = null;} catch {}
   state.ac = null;
   try { state.pc?.close(); } catch {}
