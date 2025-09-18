@@ -1,0 +1,3 @@
+xterm-noaltscr|xterm without alternate screen,
+  rmcup@, smcup@,
+  use=xterm-256color,

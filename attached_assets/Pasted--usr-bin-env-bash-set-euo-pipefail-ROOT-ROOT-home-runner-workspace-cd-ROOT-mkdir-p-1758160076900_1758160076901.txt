@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="${ROOT:-/home/runner/workspace}"; cd "$ROOT"
+mkdir -p _ops/terminfo _ops/backups _ops/reports _ops/bin
+
+# 1) تحديد TERM الحالي وبناء نسخة بلا smcup/rmcup
+BASE_TERM="${TERM:-xterm-256color}"
+SRC="_ops/terminfo/${BASE_TERM}.src"
+NEW="${BASE_TERM}-noalt"
+
+if command -v infocmp >/dev/null 2>&1 && command -v tic >/dev/null 2>&1; then
+  infocmp -1 "$BASE_TERM" > "$SRC"
+  cp -a "$SRC" "_ops/backups/${BASE_TERM}.src.$(date -u +%Y%m%d-%H%M%S)"
+
+  # احذف smcup/rmcup وسمِّ الإدخال الجديد NEW
+  awk '!/^[ \t]*(smcup|rmcup)=/' "$SRC" | \
+    awk 'NR==1{ sub(/^'"$BASE_TERM"'\|?/, "'"$NEW"'|"); } {print}' \
+    > "_ops/terminfo/${NEW}.src"
+
+  tic -x -o "_ops/terminfo" "_ops/terminfo/${NEW}.src"
+else
+  echo "ERROR: infocmp/tic not available"; exit 2
+fi
+
+# 2) حدّث حارس الطرفية ليستخدم TERMINFO+TERM الجديدين تلقائيًا
+GUARD="_ops/bin/shell_guard.sh"
+if [ -f "$GUARD" ]; then
+  cp -a "$GUARD" "_ops/backups/shell_guard.sh.$(date -u +%Y%m%d-%H%M%S)"
+else
+  touch "$GUARD"; chmod +x "$GUARD"
+fi
+
+# أضف/ثبّت التصدير دون تكرار
+grep -q 'DITONA_NOALT_GUARD' "$GUARD" 2>/dev/null || cat >> "$GUARD" <<'EOF'
+# DITONA_NOALT_GUARD
+export TERMINFO="${ROOT:-/home/runner/workspace}/_ops/terminfo"
+if infocmp "${TERM:-xterm-256color}-noalt" >/dev/null 2>&1; then
+  export TERM="${TERM:-xterm-256color}-noalt"
+fi
+# لا ألوان ولا pagers تفاعلية
+export TERM=dumb CI=1 NO_COLOR=1 FORCE_COLOR=0 PAGER=cat MANPAGER=cat GIT_PAGER=cat LESS=FRX
+# أخرج من أي شاشة بديلة إن فُعِّلت
+printf '\e[?1049l' 2>/dev/null || true; tput rmcup 2>/dev/null || true
+trap 'stty sane 2>/dev/null || true; printf "\e[?1049l\ec" 2>/dev/null || true; tput rmcup 2>/dev/null || true' EXIT
+EOF
+
+# 3) مُشغِّل موحّد (إن لم يكن موجودًا) يضمن البيئة غير التفاعلية
+RUNNER="_ops/bin/run"
+if [ ! -x "$RUNNER" ]; then
+  cat > "$RUNNER" <<'EOR'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="${ROOT:-/home/runner/workspace}"; cd "$ROOT"
+source _ops/bin/shell_guard.sh || true
+[[ $# -ge 1 ]] || { echo "usage: _ops/bin/run <script> [args...]"; exit 2; }
+TARGET="$1"; shift || true
+( while true; do echo "[HB] $(date -u +%H:%M:%S)"; sleep 10; done ) & HB=$!
+trap 'kill $HB 2>/dev/null || true' EXIT
+TS=$(date -u +%Y%m%d-%H%M%S); LOG="_ops/reports/$(basename "$TARGET").${TS}.log"
+bash -lc "set -euo pipefail; source _ops/bin/shell_guard.sh || true; bash \"$TARGET\" \"$@\"" </dev/null 2>&1 | stdbuf -oL -eL tee "$LOG"
+EOR
+  chmod +x "$RUNNER"
+fi
+
+# 4) طباعة القبول
+echo "-- Acceptance --"
+echo "NO_ALT_TERM_INSTALLED=$([ -f "_ops/terminfo/${NEW}.src" ] && echo 1 || echo 0)"
+echo "TERMINFO_DIR=_ops/terminfo"
+echo "NEW_TERM=${NEW}"
