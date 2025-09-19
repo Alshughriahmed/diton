@@ -1,0 +1,49 @@
+أعمل في /home/runner/workspace. المطلوب إنهاء بند FFA_PREV_ENABLED=1 بدون أي كسر. طبّق أدناه بتسلسل، ولو فشل القبول اطبع لي مقاطع الشيفرة المرشّحة.
+
+الهدف:
+- وسم أزرار/عناصر الانتقال Prev/Next مهما كانت تسميتها أو أيقونتها بـ:
+  data-ui="btn-prev" و data-ui="btn-next"
+- تحديث تقرير C.
+
+القيود:
+- Minimal-Diff. نسخ احتياطي تحت _ops/backups/<stamp>/.
+- لا تغييرات سلوكية غير ضرورية.
+- إذا كانت الملاحة بالإيماءة أو لوحة المفاتيح فقط، وُسِم العنصر الحاوي الذي يلتقط النقر/اللمس/المفاتيح.
+
+الخطوات:
+
+1) فحص شامل لتحديد مواقع عناصر Prev/Next:
+- امسح src/app/chat/**/*.tsx عن أي من الأنماط:
+  onPrev|handlePrev|goPrev|prevPeer|doPrev|previous
+  onNext|handleNext|goNext|nextPeer|doNext|next
+  aria-label="Prev|Previous|Back" أو "Next|Forward"
+  نص زر "Prev|Previous|Back" أو "Next|Forward"
+  أيقونات شائعة: ChevronLeft|ChevronRight|ArrowLeft|ArrowRight|SkipBack|SkipForward
+- أعطني قائمة الملفات + أرقام الأسطر لكل تطابق.
+
+2) الوسم الآمن:
+- ضع data-ui="btn-prev" على العنصر القابل للنقر الذي يطلق prev.
+- ضع data-ui="btn-next" على العنصر القابل للنقر الذي يطلق next.
+- إن كان onClick على عنصر أب/حاوية يغلّف الأيقونة، ضع الوسم على هذا الأب.
+- إن كانت الملاحة عبر hotkeys فقط، أضف وسم data-ui إلى الحاوية التي تلتقط المفاتيح في شاشة المحادثة.
+- لا تكرّر الوسم إن كان موجودًا.
+
+3) أمثلة مواضع مرجّحة للفحص أولًا:
+- src/app/chat/components/Toolbar*.tsx
+- src/app/chat/ChatClient.tsx
+- أي ملفات Buttons/Actions داخل components.
+
+4) تنفيذ تلقائي (إن رغبت) عبر سكربت وسم واسع الاستخدام:
+- يمكنك استخدام ما يشبه C4d_mark_prevnext_wide.sh الذي وُضع سابقًا، مع توسيع الأنماط إن لزم، ثم مراجعة الفرق يدويًا قبل الحفظ.
+
+5) تحديث التقرير:
+- شغّل C5_refresh_batch_C_report.sh أو أنشئ تقريرًا مماثلًا يطبع:
+  -- Acceptance --
+  FFA_PREV_ENABLED=1
+  مع مسارات النسخ الاحتياطية.
+
+معيار القبول:
+- ظهور FFA_PREV_ENABLED=1 في _ops/reports/batch_C_report.log.
+
+عند أي تعذّر:
+- اطبع لي مقطعًا من كل ملف مرشّح يبيّن سطر onClick/الأيقونة/التسمية حول Prev/Next مع 20 سطر سياق لكل موضع، وسأعطيك باتش موضعي.

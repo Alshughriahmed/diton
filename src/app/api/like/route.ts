@@ -104,3 +104,4 @@ export async function POST(req: NextRequest) {
   }
   return j({ error: "op must be inc or dec" }, { status: 400 });
 }
+export const dynamic="force-dynamic";

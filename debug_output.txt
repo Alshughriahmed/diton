@@ -1,0 +1,27 @@
+# 1) rtcFlow.ts: نقاط الإيقاف وإعادة التشغيل
+echo "=== rtcFlow.ts: aborts ==="
+grep -n "state\.ac\.abort" src/app/chat/rtcFlow.ts || true
+echo "=== rtcFlow.ts: stop() body ==="
+awk '/function stop\(/,/^\}/ {print NR": "$0}' src/app/chat/rtcFlow.ts
+echo "=== rtcFlow.ts: restartIce occurrences ==="
+grep -n "restartIce" src/app/chat/rtcFlow.ts || true
+
+# 2) ChatClient.tsx: مواضع start/stop
+echo "=== ChatClient.tsx: start/stop hooks ==="
+grep -nE "startRtcFlowOnce|stopRtcSession|on\(Next|Prev|Cancel\)" src/app/chat/ChatClient.tsx || true
+nl -ba src/app/chat/ChatClient.tsx | sed -n '1,220p'
+
+# 3) stripe/prices: لمعالجة فشل STRIPE_JSON_OK
+echo "=== stripe prices route.ts ==="
+nl -ba src/app/api/stripe/prices/route.ts
+
+# 4) matchmake env + peer fields
+echo "=== matchmake route.ts: dynamic/runtime + response ==="
+nl -ba src/app/api/rtc/matchmake/route.ts | sed -n '1,200p'
+
+# 5) mm.ts: للتأكد من تكرار setPx(last) الظاهر في السطور 105–117 و160–165
+echo "=== mm.ts: around last-writes ==="
+nl -ba src/lib/rtc/mm.ts | sed -n '96,172p'
+
+# 6) بوابة القبول بعد النشر الأخير
+bash -lc 'set -euo pipefail; bash ./01_gate_check.sh' | sed -n "/-- Acceptance --/,\$p"

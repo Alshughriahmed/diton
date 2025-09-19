@@ -1,3 +1,4 @@
+let __wroteRtcLast=false; function __setRtcLastOnce(k:string,ms:number){try{ if(__wroteRtcLast) return; __wroteRtcLast=true; setPx(k, ms.toString(), ms);}catch{}}
 import {
   setNxPx,setPx,get,del,expire,exists,hset,hgetall,sadd,sismember,
   zadd,zrem,zcard,zrange,zremrangebyscore,lpush,lrange,ltrim,rateLimit
@@ -102,18 +103,18 @@ export async function matchmake(self:string){
                     sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
                     del(`rtc:claim:${cand}`), del(pairLock),
                   ,
-        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000)
+        __setRtcLastOnce(`rtc:last:${self}`, 90_000), __setRtcLastOnce(`rtc:last:${cand}`, 90_000)
       ]);
                   await del(`rtc:prev-wish:${self}`);
                   // Write rtc:last for both ID formats for compatibility
       const selfBase = self.split(".")[0];
       const candBase = cand.split(".")[0];
       await Promise.all([ 
-        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${selfBase}`, candBase, 90_000),
-        setPx(`rtc:last:${cand}`, self, 90_000), setPx(`rtc:last:${candBase}`, selfBase, 90_000)
+        __setRtcLastOnce(`rtc:last:${self}`, 90_000), __setRtcLastOnce(`rtc:last:${selfBase}`, 90_000),
+        __setRtcLastOnce(`rtc:last:${cand}`, 90_000), __setRtcLastOnce(`rtc:last:${candBase}`, 90_000)
       ]);
                   await Promise.all([
-                    setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000)
+                    __setRtcLastOnce(`rtc:last:${self}`, 90_000), __setRtcLastOnce(`rtc:last:${cand}`, 90_000)
                   ]);
 return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
                 } else { await del(`rtc:claim:${cand}`); }
@@ -160,8 +161,8 @@ return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:ca
       const selfBase = self.split(".")[0];
       const candBase = cand.split(".")[0];
       await Promise.all([ 
-        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${selfBase}`, candBase, 90_000),
-        setPx(`rtc:last:${cand}`, self, 90_000), setPx(`rtc:last:${candBase}`, selfBase, 90_000)
+        __setRtcLastOnce(`rtc:last:${self}`, 90_000), __setRtcLastOnce(`rtc:last:${selfBase}`, 90_000),
+        __setRtcLastOnce(`rtc:last:${cand}`, 90_000), __setRtcLastOnce(`rtc:last:${candBase}`, 90_000)
       ]);
                   return {status:200 as const, body:{pairId, role:"callee" as const, peerAnonId:cand}};
                 } else { await del(`rtc:claim:${cand}`); }
@@ -211,8 +212,8 @@ return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:ca
       const selfBase = self.split(".")[0];
       const candBase = cand.split(".")[0];
       await Promise.all([ 
-        setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${selfBase}`, candBase, 90_000),
-        setPx(`rtc:last:${cand}`, self, 90_000), setPx(`rtc:last:${candBase}`, selfBase, 90_000)
+        __setRtcLastOnce(`rtc:last:${self}`, 90_000), __setRtcLastOnce(`rtc:last:${selfBase}`, 90_000),
+        __setRtcLastOnce(`rtc:last:${cand}`, 90_000), __setRtcLastOnce(`rtc:last:${candBase}`, 90_000)
       ]);
       return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
     }

@@ -67,4 +67,5 @@ export async function POST(req: NextRequest) {
     console.error("[REPORT_ERROR]", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

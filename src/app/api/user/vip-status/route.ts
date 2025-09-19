@@ -10,3 +10,5 @@ export async function GET() {
   const vipExp = Number((session as any)?.vipExp || 0);
   return Response.json({ cookieVip, sessionVip, vipExp });
 }
+export const runtime="nodejs";
+export const dynamic="force-dynamic";

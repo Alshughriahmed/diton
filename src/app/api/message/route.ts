@@ -51,3 +51,4 @@ export async function POST(req: Request) {
   if (row.n > 10) return NextResponse.json({ ok:false, error:"rate limit" }, { status: 429 });
   return NextResponse.json({ ok:true });
 }
+export const dynamic="force-dynamic";

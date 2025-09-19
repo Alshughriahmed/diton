@@ -1,0 +1,91 @@
+أعمل في /home/runner/workspace. أصلِح ChatMessagingBar.tsx ثم تحقّق من البناء ليكون جاهز للنشر على Vercel بلا أخطاء. نفّذ سكربت واحد شامل ثم أعد القبول ومقتطفات فشل عند اللزوم.
+
+cat > E_fix_msgbar_and_verify.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+mkdir -p _ops/backups _ops/reports
+TS="$(date -u +%Y%m%d-%H%M%S)"
+F="src/app/chat/components/ChatMessagingBar.tsx"
+[ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+
+# 1) نسخ احتياطي قبل التعديل
+BK="_ops/backups/E_msgbar_${TS}.tsx"; cp -a "$F" "$BK"
+
+# 2) إن كان الملف متخرّبًا (وجود "<\".div.") استرجع آخر نسخة سليمة من أي نسخة احتياطية سابقة
+if grep -q '"<".div.' "$F"; then
+  CANDIDATE="$(grep -RIl --include='*.tsx' 'ChatMessagingBar' _ops/backups 2>/dev/null | sort -r | head -1 || true)"
+  if [ -n "$CANDIDATE" ]; then
+    cp -a "$CANDIDATE" "$F"
+  else
+    echo "NO_CLEAN_BACKUP_FOUND=1"
+  fi
+fi
+
+# 3) ثبّت "use client" أعلى الملف
+head -n1 "$F" | grep -q '"use client"' || sed -i '1i "use client";' "$F"
+
+# 4) أضف data-ui="messages-fixed" إلى الغلاف الرئيسي إن غاب
+#   واكتب الطبقات المطلوبة دون إعادة تركيب الوسم
+if ! grep -q 'data-ui="messages-fixed"' "$F"; then
+  perl -0777 -i -pe '
+    s/(<\s*[A-Za-z][\w-]*)(\s[^>]*className=)/$1 data-ui="messages-fixed"$2/ or
+    s/(<\s*[A-Za-z][\w-]*)(\s*>)/$1 data-ui="messages-fixed"$2/;
+  ' "$F"
+fi
+
+# 5) أضف الطبقات: fixed inset-x-0 bottom-0 z-[70] pointer-events-auto إلى أي className للجذر
+perl -0777 -i -pe '
+  s/className=\s*"\s*([^"]*)\s*"/
+    my $c=$1;
+    for my $t (qw(fixed inset-x-0 bottom-0 z-[70] pointer-events-auto)){
+      $c.=" $t" unless $c =~ /\b\Q$t\E\b/;
+    }
+    "className=\"$c\""
+/eg;
+' "$F"
+
+# 6) visualViewport hook خفيف إن غاب
+if ! grep -qi 'visualViewport' "$F"; then
+  grep -q 'useEffect' "$F" || sed -i '1i import { useEffect } from "react";' "$F"
+  cat >> "$F" <<'TS'
+/* mobile keyboard lift */
+useEffect(()=>{ try{
+  const vv=(window as any).visualViewport; if(!vv) return;
+  const lift=()=>{ const d=window.innerHeight - vv.height; document.body.style.setProperty('--kbd-shift', d>0? d+'px':'0px'); };
+  vv.addEventListener('resize', lift); lift(); return ()=>vv.removeEventListener('resize', lift);
+}catch{} },[]);
+TS
+fi
+
+# 7) تحقق سريع من الشكل: لا وجود لأي "<\".div." بعد التعديل
+BROKEN=$([ "$(grep -c '"<".div.' "$F" || true)" -eq 0 ] && echo 0 || echo 1)
+
+# 8) فحص بناء المشروع (جاهزية للنشر)
+BUILD_LOG="_ops/reports/build_${TS}.log"
+set +e
+pnpm -s build >"$BUILD_LOG" 2>&1
+RC=$?
+set -e
+
+echo "-- Acceptance --"
+echo "MSG_BAR_RESTORED=$([ $BROKEN -eq 0 ] && echo 1 || echo 0)"
+echo "MSG_BAR_DATA_UI=$([ "$(grep -c 'data-ui=\"messages-fixed\"' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "MSG_BAR_Z_FIXED=$([ "$(grep -c 'z-\\[70\\]' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "VISUAL_VIEWPORT_OK=$([ "$(grep -ci 'visualViewport' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BUILD_OK=$([ $RC -eq 0 ] && echo 1 || echo 0)"
+echo "BACKUP=$BK"
+echo "BUILD_LOG=$BUILD_LOG"
+
+# عند فشل البناء أطبع 40 سطر من البداية والنهاية للمساعدة
+if [ $RC -ne 0 ]; then
+  echo "-- Build Head --"; sed -n '1,40p' "$BUILD_LOG"
+  echo "-- Build Tail --"; tail -n 60 "$BUILD_LOG"
+fi
+EOF
+
+chmod +x E_fix_msgbar_and_verify.sh
+_ops/bin/run ./E_fix_msgbar_and_verify.sh
+
+# أعِد فقط من التقرير:
+# كل ما بعد سطر -- Acceptance -- بما في ذلك BUILD_OK

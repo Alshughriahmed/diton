@@ -1,3 +1,5 @@
+"use client";
+import { isFFA } from "@/utils/ffa";
 import FilterBar from "@/app/chat/components/FilterBar";
 "use client";
 import { useEffect, useMemo, useState } from "react";
@@ -7,7 +9,7 @@ import { emit } from "@/utils/events";
 
 export default function CountrySelect(){
   const { countries, setCountries, isVip } = useFilters();
-  const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+  const freeForAll = isFFA();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [userCountry, setUserCountry] = useState<string | null>(null);
@@ -36,7 +38,7 @@ export default function CountrySelect(){
 
   const toggle = (code:string)=>{
     // Allow ALL and user's own country for non-VIP users
-    if(!isVip && !freeForAll && code !== "ALL" && code !== userCountry) {
+    if(!(isFFA() || isVip) && code !== "ALL" && code !== userCountry) {
       emit('ui:upsell', 'country-filters');
       return;
     }
@@ -49,7 +51,7 @@ export default function CountrySelect(){
     setCountries(base.slice(0,15));
   };
 
-  useEffect(()=>{ if(!isVip && !freeForAll) setCountries(["ALL"]); }, [isVip, freeForAll, setCountries]);
+  useEffect(()=>{ if(!(isFFA() || isVip)) setCountries(["ALL"]); }, [isVip, freeForAll, setCountries]);
 
   return (
     <div className="absolute top-2 right-2 z-50">
@@ -59,7 +61,7 @@ export default function CountrySelect(){
           aria-haspopup="listbox" aria-expanded={open}>
           Countries {countries.includes("ALL") ? "(All)" : `(${countries.length})`}
         </button>
-        {!isVip && !freeForAll && <span className="ml-2 text-[10px] opacity-60">VIP</span>}
+        {!(isFFA() || isVip) && <span className="ml-2 text-[10px] opacity-60">VIP</span>}
       {open && (
         <div className="absolute right-0 mt-2 z-[40] w-[460px] max-h-[320px] overflow-auto p-3 rounded-xl bg-neutral-900 border border-neutral-700 shadow-lg">
           <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search countries..."
@@ -68,11 +70,11 @@ export default function CountrySelect(){
             {list.map(c=>(
               <button key={c.code} onClick={()=>toggle(c.code)}
                 className={`text-left px-2 py-1 rounded text-sm hover:bg-neutral-800 ${countries.includes(c.code)?"bg-neutral-800":""} ${
-                  !isVip && !freeForAll && c.code !== "ALL" && c.code !== userCountry ? 'opacity-60' : ''
+                  !(isFFA() || isVip) && c.code !== "ALL" && c.code !== userCountry ? 'opacity-60' : ''
                 }`}
                 role="option" aria-selected={countries.includes(c.code)}>
                 {c.name} <span className="opacity-50 text-[10px]">({c.code})</span>
-                {!isVip && !freeForAll && c.code !== "ALL" && c.code !== userCountry && (
+                {!(isFFA() || isVip) && c.code !== "ALL" && c.code !== userCountry && (
                   <span className="ml-1 text-xs">🔒</span>
                 )}
               </button>

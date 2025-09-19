@@ -1,0 +1,44 @@
+المشكلة: اختفاء شاشة الشِل عند تشغيل أي سكربت على Replit Console.
+
+ما جرّبته وفشل:
+1) حارس طرفية: export TERM=dumb CI=1 NO_COLOR=1 … + printf '\e[?1049l'; tput rmcup؛ trap لإرجاع الشاشة.
+2) مُشغِّل عام مع heartbeat وtee: _ops/bin/run … وكذلك hb_run.sh.
+3) terminfo مخصّص: صنعنا xterm-256color-noalt عبر infocmp/tic (حذف smcup/rmcup) وضبطنا:
+   export TERMINFO=/home/runner/workspace/_ops/terminfo
+   export TERM=xterm-256color-noalt
+   ومع ذلك ما تزال الشاشة تنتقل وتختفي عند:
+   _ops/bin/run ./01_gate_check.sh
+   أو 00_no_altscreen_terminfo.sh.
+4) تشغيل لا-تفاعلي: bash -lc … </dev/null + stdbuf -oL -eL؛ نفس السلوك.
+5) تعطيل pagers: PAGER/MANPAGER/GIT_PAGER=cat وLESS=FRX؛ بلا فرق.
+
+طلب حل جذري:
+- أريد ضمان “لا شاشة بديلة” دائمًا، لأي سكربت، بدون استثناء.
+
+رجاءً:
+A) شخّص البيئة سريعًا، ونفّذ هذه الأوامر وأعد المخرجات:
+   uname -a; echo "$TERM" "$TERMINFO"
+   infocmp -1 "$TERM" | grep -E '^(smcup|rmcup)=' || echo NO_CAPS
+   tput smcup | od -An -t x1 | tr -d ' '
+   tput rmcup | od -An -t x1 | tr -d ' '
+   command -v script || echo NO_SCRIPT
+   echo "$SHELL" && bash --version | head -1
+B) اقترح وطبّق واحدًا من الحلول التالية أو ما يعادله، مع سكربت نهائي idempotent:
+   1. فرض تشغيل كل السكربتات عبر util-linux `script` بلا TTY بديل:
+      script -qfec 'bash -lc "<CMD>"' /dev/null
+      ودمجه داخل _ops/bin/run لضمان عدم استخدام alternate screen مطلقًا.
+   2. إنفاذ TERM ثابت (مثلاً vt100 أو dumb) مع TERMINFO مخصّص حيث smcup/rmcup فارغان، والتأكد أن tput smcup/rmcup تُعيد لا شيء.
+   3. تعديل إعدادات Replit (.replit أو replit.nix) لتعطيل التفاعل والـalternate screen على مستوى الجلسة.
+
+معايير القبول — اطبعها نصًا:
+-- Acceptance --
+ALT_CAPS_EMPTY=(1 إذا infocmp لا يحوي smcup/rmcup)
+TPUT_SMCUP_EMPTY=(1 إذا tput smcup لا يُخرج بايتات)
+TPUT_RMCUP_EMPTY=(1 إذا tput rmcup لا يُخرج بايتات)
+RUN_OK=(1 إذا _ops/bin/run ./01_gate_check.sh يطبع القبول ولا تختفي الشاشة)
+RUN_LOG=_ops/reports/<اسم-الملف>.log
+
+قيود:
+- لا تعدّل أي ملفات مشروع خارج _ops/** إلا إذا لزم، وبـ Minimal-Diff.
+- أي حل يجب أن يكون دائمًا (جلسات جديدة) وآمنًا.
+- أعطني السكربت النهائي فقط، ثم نفّذه وأعد المخرجات وفق معايير القبول.

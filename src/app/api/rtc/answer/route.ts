@@ -39,4 +39,4 @@ export async function GET(req: NextRequest) {
 
   await expire(`rtc:pair:${pairId}`, 150);
   return NextResponse.json({ sdp: String(sdp) }, { status: 200 });
-}
+}export const dynamic="force-dynamic";

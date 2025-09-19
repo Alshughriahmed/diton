@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 #!/usr/bin/env bash
 set -Eeuo pipefail
 echo "=== Running: $1 ==="

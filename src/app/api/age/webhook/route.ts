@@ -57,4 +57,5 @@ export async function POST(req: NextRequest) {
     ok: false,
     error: "Provider not configured"
   }, { status: 501 });
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

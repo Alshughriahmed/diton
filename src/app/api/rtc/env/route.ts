@@ -1,20 +1,8 @@
 import { NextResponse } from "next/server";
-import { MODE, pingRedis } from "@/lib/rtc/upstash";
-
-const url = (process.env.UPSTASH_REDIS_REST_URL || "").trim();
-const token = (process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
-
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export async function GET() {
-  const urlOk = /^https?:\/\/.+upstash\.io/i.test(url);
-  const tokenPresent = token.length > 10;
-  const ping = await pingRedis().catch(()=>({ok:false, err: "catch failed"}));
-  // لا نكشف القيم؛ فقط مؤشرات صحة
-  return NextResponse.json({
-    mode: MODE,
-    url_ok: urlOk,
-    token_present: tokenPresent,
-    ping_ok: !!ping.ok,
-    ping_err: ping.ok ? undefined : (ping as any).err
-  }, { status: 200 });
+  const server = { FREE_FOR_ALL: process.env.FREE_FOR_ALL ?? "0" };
+  const pub = { NEXT_PUBLIC_FREE_FOR_ALL: process.env.NEXT_PUBLIC_FREE_FOR_ALL ?? "0" };
+  return NextResponse.json({ server, public: pub }, { headers: { "Cache-Control": "no-store" } });
 }

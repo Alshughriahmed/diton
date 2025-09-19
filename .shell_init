@@ -1,0 +1,30 @@
+
+# .shell_init - تحميل تلقائي لمنع alternate screen
+# أضف هذا إلى ~/.bashrc أو ~/.profile في Repl
+
+# متغيرات عامة لتعطيل التفاعل
+export TERM=dumb
+export NO_COLOR=1
+export CI=1
+export LANG=C
+export LC_ALL=C
+
+# متغيرات خاصة بالأدوات
+export VERCEL_NO_TTY=1
+export PNPM_NO_TTY=1
+export NPM_CONFIG_NO_UPDATE_NOTIFIER=true
+export NPM_CONFIG_NO_FUND_MESSAGE=true
+
+# دالة تنظيف سريعة
+fix_screen() {
+    stty sane 2>/dev/null || true
+    printf '\e[?1049l\e[2J\e[H\ec' 2>/dev/null || true
+    echo "تم إصلاح الشاشة"
+}
+
+# alias للأوامر الشائعة
+alias vercel='TERM=dumb NO_COLOR=1 vercel'
+alias pnpm='TERM=dumb NO_COLOR=1 pnpm'
+
+echo "تم تحميل إعدادات منع alternate screen"
+echo "استخدم 'fix_screen' لإصلاح المشكلة يدوياً"

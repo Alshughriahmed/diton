@@ -105,7 +105,8 @@ type Phase = 'idle' | 'searching' | 'matched' | 'connected' | 'stopped';
 
 // State machine
 interface RtcState {
-  sid: number;
+    remoteStream: MediaStream | null;
+sid: number;
   phase: Phase;
   role: 'caller' | 'callee' | null;
   pairId: string | null;
@@ -116,7 +117,8 @@ interface RtcState {
 }
 
 let state: RtcState = {
-  sid: 0,
+    remoteStream: null,
+sid: 0,
   phase: 'idle',
   role: null,
   pairId: null,
@@ -156,66 +158,70 @@ function clearLocalStorage() {
   }
 }
 
-// Complete cleanup and stop
 
+    // Complete cleanup and stop
 export function stop(mode: "full"|"network" = "full"){
-  
-  // Collect metrics before cleanup
-  if (state.pairId && state.pc) {
-    try {
-      collectAndSendMetrics();
-    } catch {}
-  }
-  
+  try { if (state.dc) { try { state.dc.onopen=null; state.dc.onmessage=null; state.dc.onclose=null; state.dc.onerror=null; } catch(_){} state.dc=null; } } catch(_) {}
   try{
-    const peer = (state && (state.lastPeer||null)) as any;
-    if(peer){
-      fetch('/api/rtc/prev/for', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ peer }) }).catch(()=>{});
-    }
-  }catch{}
-try {
-    // Update phase
-    state.phase = 'stopped';
-    if (onPhaseCallback) onPhaseCallback('stopped');
-    
-    // Broadcast phase event
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'idle',role:null}}));
-    }
-
-    // Abort any ongoing requests
-    if (state.ac) { try { if (!state.ac.signal || !state.ac.signal.aborted) state.ac.abort("stop"); } catch {} }
+    // abort any pending ops
+    try{ safeAbort(state.ac); }catch{} 
     state.ac = null;
 
-    // Close peer connection and stop tracks
-    if (state.pc) {
-      try {
-        state.pc.getSenders?.().forEach(sender => {
-          try {
-            if (sender.track) sender.track.stop();
-          } catch {}
-        });
-        state.pc.close();
-      } catch {}
+    // network-only partial stop: close pc + remote, keep local preview
+    if (mode !== "full"){
+      try{ state.pc?.close(); }catch{}
       state.pc = null;
+      try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+      state.remoteStream = null;
+      logRtc("stop", 206);
+      return;
     }
 
-    // Clear localStorage
-    clearLocalStorage();
+    // full stop: send metrics while pc is still alive
+    try{ if (state.pairId && state.pc){ collectAndSendMetrics(); } }catch{}
 
-    // Reset state
+    // close peer and stop remote tracks
+    try{ state.pc?.getSenders?.().forEach(s=>{ try{ s.track?.stop(); }catch{} }); }catch{}
+    try{ state.pc?.close(); }catch{}
+    state.pc = null;
+    try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+    state.remoteStream = null;
+
+    // hint prev-for once
+    try{
+      const peer = (state && (state.lastPeer||null)) as any;
+      if(peer){
+        fetch("/api/rtc/prev/for", {
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify({ peer })
+        }).catch(()=>{});
+      }
+    }catch{}
+
+    // phase + event
+    state.phase = "stopped";
+    try{ onPhaseCallback?.("stopped"); }catch{}
+    if (typeof window !== "undefined"){
+      window.dispatchEvent(new CustomEvent("rtc:phase",{ detail:{ phase:"idle", role:null }}));
+    }
+
+    // clear and reset
+    clearLocalStorage();
     state.sid = 0;
-    state.phase = 'idle';
+    state.phase = "idle";
     state.role = null;
     state.pairId = null;
 
-    logRtc('stop', 200);
-  } catch (e) {
-    console.warn('[rtc] stop error:', e);
+    logRtc("stop", 200);
+  }catch(e){
+    console.warn("[rtc] stop error:", e);
   }
 }
 
+
 // Collect and send metrics
+  
 async function collectAndSendMetrics() {
   if (!state.pc || !state.pairId) return;
   
@@ -602,7 +608,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     };
     
     state.pc.onconnectionstatechange = () => {
-      if (!checkSession(currentSession) || !state.pc) return;
+       try{const st=(state.pc as any).connectionState; if(st==="disconnected"||st==="failed"){ scheduleRestartIce(); }}catch{} if (!checkSession(currentSession) || !state.pc) return;
       
       const connectionState = state.pc.connectionState;
       logRtc('connection-state', 200, { connectionState });
@@ -790,3 +796,25 @@ try{
     try{ next(); }catch{}
   });
 }catch{}
+/** Debounced ICE restart on transient drops */
+let __iceRestartTimer: any = null;
+function scheduleRestartIce() {
+  try {
+    if (__iceRestartTimer) return;
+    __iceRestartTimer = setTimeout(async () => {
+      __iceRestartTimer = null;
+      try {
+        if (!state?.pc || state?.ac?.signal?.aborted) return;
+        if (typeof state.pc.restartIce === 'function') {
+          await state.pc.restartIce();
+        } else {
+          try {
+            await state.pc.setLocalDescription(
+              await state.pc.createOffer({ iceRestart: true })
+            );
+          } catch {}
+        }
+      } catch(e) { try{ swallowAbort(e); }catch{} }
+    }, 700);
+  } catch {}
+}

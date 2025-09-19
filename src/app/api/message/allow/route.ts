@@ -66,3 +66,5 @@ export async function POST(req: NextRequest) {
   const allow = cnt <= limit;
   return NextResponse.json({ allow, tier: "free", count: cnt, limit }, { status: 200, headers: hdr });
 }
+export const runtime="nodejs";
+export const dynamic="force-dynamic";

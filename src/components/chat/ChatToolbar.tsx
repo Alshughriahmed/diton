@@ -1,4 +1,5 @@
 "use client";
+import { isFFA } from "@/utils/ffa";
 import { emit } from "@/utils/events";
 import { useFilters } from "@/state/filters";
 import { useRouter } from "next/navigation";
@@ -7,7 +8,7 @@ import { useState } from "react";
 export default function ChatToolbar(){
   const { isVip } = useFilters();
   const router = useRouter();
-  const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+  const freeForAll = isFFA();
 
   const [isMicOn, setIsMicOn] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
@@ -27,14 +28,14 @@ export default function ChatToolbar(){
       <button
         data-ui="btn-prev"
         onClick={(e)=>{e.preventDefault(); if(isVip || freeForAll){ emit("ui:prev"); }}}
-        disabled={!isVip && !freeForAll}
-        title={!isVip && !freeForAll ? "VIP only" : "Previous"}
+        disabled={!(isFFA() || isVip)}
+        title={!(isFFA() || isVip) ? "VIP only" : "Previous"}
         className={`fixed bottom-[92px] left-3 z-50 w-24 h-12 sm:w-28 sm:h-14 rounded-xl border backdrop-blur font-medium transition-all duration-200 ${
-          !isVip && !freeForAll 
+          !(isFFA() || isVip) 
             ? 'bg-black/20 text-gray-500 border-gray-600/40 cursor-not-allowed opacity-50' 
             : 'bg-black/40 text-white border-white/20 hover:bg-black/50'
         }`}
-        aria-label={!isVip && !freeForAll ? "Previous (VIP only)" : "Previous"}
+        aria-label={!(isFFA() || isVip) ? "Previous (VIP only)" : "Previous"}
       >⏮️</button>
 
       {/* Next ⏭️ كبير - يمين أعلى الشريط */}
@@ -104,7 +105,7 @@ export default function ChatToolbar(){
           {/* Masks 🎭 */}
           <button
             data-ui="btn-masks"
-            onClick={()=>{ if(!isVip && !freeForAll){ emit("ui:upsell","masks"); return; } emit("ui:toggleMasks"); }}
+            onClick={()=>{ if(!(isFFA() || isVip)){ emit("ui:upsell","masks"); return; } emit("ui:toggleMasks"); }}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10 transition-all duration-200 flex items-center justify-center text-sm sm:text-base"
             aria-label="Masks"
           >🎭</button>

@@ -5,4 +5,4 @@ export async function GET(){
   const stun={urls:["stun:stun.l.google.com:19302"]};
   const iceServers=turnUrl&&turnUsername&&turnPassword ? [stun,{urls:[turnUrl],username:turnUsername,credential:turnPassword}] : [stun];
   return NextResponse.json({ iceServers });
-}
+}export const runtime="nodejs";

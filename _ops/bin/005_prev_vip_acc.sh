@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -Eeuo pipefail
 PORT="${PORT:-5000}"; BASE="http://127.0.0.1:${PORT}"
 [ -n "${UPSTASH_REDIS_REST_URL:-}" ] || { echo "NO_UPSTASH_URL"; exit 1; }

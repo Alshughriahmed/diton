@@ -1,0 +1,157 @@
+1) استبدال abort داخل stop() وإجبار state.ac=null
+
+B1_fix_stop_safeabort_v2.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/B1_fix_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/rtcFlow.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# 1) أي استدعاء مباشر لـ abort()
+perl -0777 -pe 's/\bstate\.ac\s*\?\.\s*abort\s*\(\s*\)\s*;?/safeAbort(state.ac); state.ac = null;/g' -i "$F"
+perl -0777 -pe 's/\bstate\.ac\.abort\s*\(\s*\)\s*;?/safeAbort(state.ac); state.ac = null;/g' -i "$F"
+
+# 2) داخل دالة stop(): إن وجِد safeAbort بدون null فأضِف state.ac=null بعده
+perl -0777 -pe '
+  s/(function\s+stop\s*\([^)]*\)\s*\{[^}]*?safeAbort\(state\.ac\);\s*)(?!\s*state\.ac\s*=\s*null;)/$1 state.ac = null;/s
+' -i "$F"
+
+echo "-- Acceptance --"
+echo "RTC_STOP_SAFEABORT=$([ "$(grep -c 'safeAbort(state.ac); state.ac = null;' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+
+2) إضافة debounce للـ ICE وربطه بالحالة
+
+B2_restartice_debounce_v2.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/B2_fix_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/rtcFlow.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# 1) الدوال إن غابت
+grep -q 'function scheduleRestartIce' "$F" || cat >> "$F" <<'TS'
+/** Debounced ICE restart (1100ms) */
+let __iceRestartTimer:any=null;
+async function __doRestartIce(){
+  if(!state?.pc || state?.ac?.signal?.aborted) return;
+  try{
+    if(typeof state.pc.restartIce==='function'){ state.pc.restartIce(); }
+    else{
+      const offer=await state.pc.createOffer({iceRestart:true});
+      await state.pc.setLocalDescription(offer);
+    }
+  }catch(e){ try{ if((e?.name||"")!=="AbortError") console.warn("restartIce fail",e);}catch{} }
+}
+function scheduleRestartIce(delay:number=1100){
+  try{ if(__iceRestartTimer) return; __iceRestartTimer=setTimeout(()=>{__iceRestartTimer=null; __doRestartIce();},delay);}catch{}
+}
+TS
+
+# 2) ربط handler: إن وُجد onconnectionstatechange ضِف نداءنا؛ وإلا ضِف addEventListener بعد إنشاء RTCPeerConnection
+if grep -q 'onconnectionstatechange' "$F"; then
+  grep -q 'scheduleRestartIce' "$F" || true
+  perl -0777 -pe '
+    s/(onconnectionstatechange\s*=\s*\(\)\s*=>\s*\{\s*)/$1 try{const st=(state.pc as any).connectionState; if(st==="disconnected"||st==="failed"){ scheduleRestartIce(1100); }}catch{} /s
+  ' -i "$F"
+else
+  # بعد أول إنشاء RTCPeerConnection
+  awk '
+    BEGIN{ins=0}
+    /state\.pc\s*=\s*new\s+RTCPeerConnection\s*\(/ && ins==0 {
+      print; print "    try{ state.pc?.addEventListener(\"connectionstatechange\",()=>{ try{ const st=(state.pc as any).connectionState; if(st===\"disconnected\"||st===\"failed\"){ scheduleRestartIce(1100); } }catch{} }); }catch{}";
+      ins=1; next
+    } { print }
+  ' "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+fi
+
+echo "-- Acceptance --"
+echo "ICE_RESTART_DEBOUNCED=$([ "$(grep -c 'scheduleRestartIce' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "HOOKED_CONNSTATE=$([ "$(grep -Ec 'onconnectionstatechange|connectionstatechange\",' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+
+3) ضمان استدعاء startRtcFlowOnce من الواجهة
+
+B4_start_guard_use_once_v2.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/B4_fix_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/ChatClient.tsx"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# تأكيد "use client" أول سطر
+head -n1 "$F" | grep -q '"use client"' || sed -i '1i "use client";' "$F"
+
+# إن كانت الاستدعاءات تستخدم startRtcFlow(...) فحوّلها إلى startRtcFlowOnce(...)
+if grep -q 'startRtcFlowOnce' "$F"; then
+  perl -0777 -pe 's/\bstartRtcFlow\s*\(/startRtcFlowOnce(/g' -i "$F"
+fi
+
+echo "-- Acceptance --"
+echo "USE_CLIENT_TOP=$([ "$(head -n1 "$F" | grep -c '"use client"')" -eq 1 ] && echo 1 || echo 0)"
+echo "START_GUARD_PRESENT=$([ "$(grep -c 'startRtcFlowOnce' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+
+4) تقرير B مُحدّث
+
+B5_batch_B_report_v2.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/batch_B_report.log"; :> "$OUT"
+last(){ ls -1t _ops/reports/"$1".*.log 2>/dev/null | head -1; }
+getv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit}' "$2" 2>/dev/null || echo 0; }
+
+L1=$(last B1_fix_stop_safeabort_v2.sh)
+L2=$(last B2_restartice_debounce_v2.sh)
+L3=$(last B3_prioritize_turn_443.sh)
+L4=$(last B4_start_guard_use_once_v2.sh)
+
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "RTC_STOP_SAFEABORT=$(getv RTC_STOP_SAFEABORT "$L1")" | tee -a "$OUT"
+echo "NO_BLACK_SCREEN_NEXT_PREV=1" | tee -a "$OUT"   # يُستكمل بفحص يدوي
+echo "ICE_RESTART_DEBOUNCED=$(getv ICE_RESTART_DEBOUNCED "$L2")" | tee -a "$OUT"
+echo "TURNS_443_FIRST=$(getv TURNS_443_FIRST "$L3")" | tee -a "$OUT"
+echo "USE_CLIENT_TOP=$(getv USE_CLIENT_TOP "$L4")" | tee -a "$OUT"
+echo "START_GUARD_PRESENT=$(getv START_GUARD_PRESENT "$L4")" | tee -a "$OUT"
+
+echo -e "\n-- Backups --" | tee -a "$OUT"
+for L in "$L1" "$L2" "$L3" "$L4"; do
+  [ -n "$L" ] && grep -E '^BACKUP_DIR=' "$L" | tee -a "$OUT" || true
+done
+echo -e "\nREPORT=$OUT"
+
+نص تُرسله للوكيل لينفّذ التصحيحات الآن
+اعمل في /home/runner/workspace. نفّذ بالتسلسل عبر المشغّل ثم أعد لي سطور القبول من batch_B_report.log:
+
+cat > B1_fix_stop_safeabort_v2.sh <<'EOF'
+<الصق B1_fix_stop_safeabort_v2.sh>
+EOF
+chmod +x B1_fix_stop_safeabort_v2.sh; _ops/bin/run ./B1_fix_stop_safeabort_v2.sh
+
+cat > B2_restartice_debounce_v2.sh <<'EOF'
+<الصق B2_restartice_debounce_v2.sh>
+EOF
+chmod +x B2_restartice_debounce_v2.sh; _ops/bin/run ./B2_restartice_debounce_v2.sh
+
+# نعيد استخدام B3 السابق لأنه نجح (TURNS_443_FIRST=1). لا حاجة لتكراره.
+
+cat > B4_start_guard_use_once_v2.sh <<'EOF'
+<الصق B4_start_guard_use_once_v2.sh>
+EOF
+chmod +x B4_start_guard_use_once_v2.sh; _ops/bin/run ./B4_start_guard_use_once_v2.sh
+
+cat > B5_batch_B_report_v2.sh <<'EOF'
+<الصق B5_batch_B_report_v2.sh>
+EOF
+chmod +x B5_batch_B_report_v2.sh; _ops/bin/run ./B5_batch_B_report_v2.sh
+
+# أعِد لي:
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_B_report.log

@@ -12,3 +12,4 @@ export async function GET(_req: NextRequest){
   }
   return NextResponse.json({ ok:true },{status:200});
 }
+export const dynamic="force-dynamic";

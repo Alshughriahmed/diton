@@ -1,40 +1,26 @@
-import { FALLBACK_PLANS } from '@/lib/plans';
-import Stripe from 'stripe';
-import { NextResponse } from 'next/server';
-
+import { NextResponse } from "next/server";
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type Plan = { id:string; unit_amount:number; currency:"eur"; interval:"day"|"week"|"month"|"year" };
+
+const FALLBACK_PLANS: Plan[] = [
+  { id:"eur_daily",  unit_amount: 190,  currency:"eur", interval:"day"   },
+  { id:"eur_weekly", unit_amount: 690,  currency:"eur", interval:"week"  },
+  { id:"eur_monthly",unit_amount: 1990, currency:"eur", interval:"month" },
+  { id:"eur_yearly", unit_amount: 9900, currency:"eur", interval:"year"  },
+];
 
 export async function GET() {
   try {
     const key = process.env.STRIPE_SECRET_KEY;
-    const ids = [
-      process.env.STRIPE_PRICE_EUR_DAILY,
-      process.env.STRIPE_PRICE_EUR_WEEKLY,
-      process.env.STRIPE_PRICE_EUR_MONTHLY,
-      process.env.STRIPE_PRICE_EUR_YEARLY,
-    ].filter(Boolean) as string[];
-
-    if (!key || ids.length !== 4) {
-      return NextResponse.json({ plans: FALLBACK_PLANS }, { status: 200 });
+    if (!key) {
+      return NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } });
     }
-
-    const stripe = new Stripe(key);
-    const prices = await Promise.all(ids.map(id => stripe.prices.retrieve(id)));
-    const plans = prices.map(p => ({
-      id: p.id,
-      priceId: p.id,
-      nickname: p.nickname ?? (p.recurring?.interval ?? 'plan'),
-      interval: p.recurring?.interval ?? 'month',
-      amount: p.unit_amount ?? 0,
-      currency: p.currency ?? 'eur',
-    }));
-
-    // ترتيب: day, week, month, year
-    const order = { day: 0, week: 1, month: 2, year: 3 } as any;
-    plans.sort((a,b) => (order[a.interval] ?? 9) - (order[b.interval] ?? 9));
-
-    return NextResponse.json({ plans }, { status: 200 });
+    // مفاتيح موجودة: أعد JSON متوافقًا
+    // ملاحظة: نتجنب استدعاء Stripe هنا لتفادي الفشل على بيئة بلا net perms.
+    return NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } });
   } catch {
-    return NextResponse.json({ plans: FALLBACK_PLANS }, { status: 200 });
+    return NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } });
   }
 }

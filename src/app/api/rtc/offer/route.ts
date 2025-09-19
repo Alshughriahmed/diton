@@ -17,3 +17,4 @@ export async function GET(req: NextRequest){
   const sdp = await get(`rtc:pair:${pairId}:offer`); if (!sdp) return new NextResponse(null,{status:204});
   await expire(`rtc:pair:${pairId}`, 150); return NextResponse.json({ sdp:String(sdp) },{status:200});
 }
+export const dynamic="force-dynamic";

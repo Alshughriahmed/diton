@@ -66,13 +66,12 @@ export async function GET(req: Request) {
         const peer = String(last || "");
         if (peer) {
           const peerBase = peer.split(".")[0];
-          const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;
           try { 
             await Promise.all([ 
-              upSetPx(`rtc:prev-wish:${me}`, peer, ttl), 
-              upSetPx(`rtc:prev-wish:${base}`, peer, ttl),
-              upSetPx(`rtc:prev-for:${peer}`, me, ttl),
-              upSetPx(`rtc:prev-for:${peerBase}`, me, ttl)
+              upSetPx(`rtc:prev-wish:${me}`, peer, 7000), 
+              upSetPx(`rtc:prev-wish:${base}`, peer, 7000),
+              upSetPx(`rtc:prev-for:${peer}`, me, 8500),
+              upSetPx(`rtc:prev-for:${peerBase}`, me, 8500)
             ]); 
           } catch {}
         }

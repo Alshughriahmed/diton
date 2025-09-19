@@ -44,9 +44,14 @@ jobs:
       run: pnpm exec playwright install chromium
       
     - name: Start development server
-      run: pnpm run dev &
+      run: |
+        source ./disable_alt_screen.sh
+        safe_exec pnpm run dev &
       env:
         PORT: 3000
+        TERM: dumb
+        NO_COLOR: 1
+        CI: 1
         
     - name: Wait for server
       run: |

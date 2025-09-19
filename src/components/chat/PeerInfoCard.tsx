@@ -15,7 +15,9 @@ interface PeerInfoCardProps {
   peerInfo?: PeerInfo;
 }
 
+import usePeerMeta from "@/hooks/usePeerMeta";
 export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
+  const meta = usePeerMeta();
   const hydrated = useHydrated();
   const [peer, setPeer] = useState<PeerInfo>(peerInfo || {
     name: "Connecting...",
@@ -45,16 +47,21 @@ export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
       }
     };
 
+    // Store cleanup functions
+    let offMatch: (() => void) | null = null;
+    let offLike: (() => void) | null = null;
+
     // Import event system dynamically to avoid SSR issues
     import("@/utils/events").then(({ on }) => {
-      const offMatch = on("match:update" as any, handleMatchUpdate);
-      const offLike = on("ui:likeUpdate", handleLikeUpdate);
-      
-      return () => {
-        offMatch();
-        offLike();
-      };
+      offMatch = on("match:update" as any, handleMatchUpdate);
+      offLike = on("ui:likeUpdate", handleLikeUpdate);
     });
+
+    // Return cleanup function from the outer useEffect
+    return () => {
+      if (offMatch) offMatch();
+      if (offLike) offLike();
+    };
   }, []);
 
   useEffect(() => {
@@ -120,6 +127,13 @@ export default function PeerInfoCard({ peerInfo }: PeerInfoCardProps) {
             {/* Likes */}
             <div className="flex items-center gap-1 text-pink-400">
               <span className="text-sm">❤</span>
+        {meta && (
+          <div className="text-[11px] opacity-75 space-x-2">
+            {meta.gender && <span>{meta.gender}</span>}
+            {(meta.country || meta.city) && <span>{meta.country}{meta.city?`/`:``}</span>}
+          </div>
+        )}
+        
               <span className="text-xs font-medium">{peer.likes}</span>
             </div>
           </div>

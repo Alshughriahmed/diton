@@ -1,4 +1,5 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
 export function middleware(req: NextRequest) {
   try { const { pathname } = new URL(req.url); if (pathname.startsWith("/api/like")) { return NextResponse.next(); } } catch {}

@@ -58,11 +58,19 @@ export default function ChatMessagingBar() {
     return () => { vv.removeEventListener("resize", adjust); vv.removeEventListener("scroll", adjust); };
   }, []);
 
+  useEffect(() => {
+    const prevent = (e:any)=>{ try{ const a=document.activeElement as any; if(a && (a.tagName==="INPUT"||a.tagName==="TEXTAREA")) e.preventDefault(); }catch{} };
+    const onF=()=>{ try{ window.addEventListener("touchmove", prevent, {passive:false}); }catch{} };
+    const onB=()=>{ try{ window.removeEventListener("touchmove", prevent); }catch{} };
+    document.addEventListener("focusin", onF);
+    document.addEventListener("focusout", onB);
+    return ()=>{ document.removeEventListener("focusin", onF); document.removeEventListener("focusout", onB); window.removeEventListener("touchmove", prevent); };
+  }, []);
+
   if (!open) return null;
 
   return (
-    <div ref={ref} className="fixed inset-x-0 bottom-0 z-[70] pointer-events-auto">
-      <div className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
+      <div data-ui="messages-fixed" className="fixed inset-x-0 bottom-0 z-[70] pointer-events-auto mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
         <div className="flex gap-2 items-center">
           <input
             data-ui="msg-input"
@@ -86,6 +94,5 @@ export default function ChatMessagingBar() {
           >Close</button>
         </div>
       </div>
-    </div>
   );
 }

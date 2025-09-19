@@ -181,4 +181,5 @@ export async function DELETE(request: NextRequest) {
     console.error('Friends DELETE API error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-}
+}export const runtime="nodejs";
+export const dynamic="force-dynamic";

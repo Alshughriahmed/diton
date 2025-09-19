@@ -1,0 +1,87 @@
+لعنوان
+
+Implement FFA runtime binding + light headers + quick gate (Minimal-Diff)
+
+أوامر الوكيل
+_ops/bin/disable_alt_screen.sh bash -lc '
+set -Eeuo pipefail; export TERM=dumb CI=1 NO_COLOR=1 FORCE_COLOR=0 PAGER=cat GIT_PAGER=cat LESS=FRX
+STAMP=$(date -u +%Y%m%d-%H%M%S); ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+RPT="_ops/reports/agentB_${STAMP}.log"; mkdir -p "${RPT%/*}"
+
+# 0) نسخ احتياطي خفيف
+( cd "$ROOT" && tar -cf "_ops/backups/agentB_${STAMP}.tar" --exclude=.git --exclude=node_modules . ) || true
+
+# 1) تطبيق باتشات FFA إن وُجدت داخل all.zip
+[ -f all.zip ] && unzip -oq all.zip -d _ops/tmp/agentB_all || true
+PDIR=""; test -d _ops/tmp/agentB_all && PDIR="$(dirname "$(find _ops/tmp/agentB_all -type f -name "*ffa*.diff" | head -n1 2>/dev/null)")"
+[ -z "$PDIR" ] && [ -d diton_patches_min ] && PDIR="diton_patches_min"
+apply(){ [ -f "$1" ] || return 0; if git apply --check "$1" >/dev/null 2>&1; then git apply --whitespace=nowarn "$1"; echo "[patch] applied $(basename "$1")" | tee -a "$RPT"; else echo "[patch] skipped $(basename "$1")" | tee -a "$RPT"; fi; }
+if [ -n "$PDIR" ]; then
+  for f in 02_env_include_ffa.diff 03a_filters_runtime_ffa.diff 03b_toolbar_runtime_ffa.diff 03c_filterbar_runtime_ffa.diff 06a_genderselect_ffa.diff 06b_countryselect_ffa.diff 06c_beauty_ffa.diff 06d_messages_ffa.diff; do
+    apply "$PDIR/$f"
+  done
+fi
+
+# 2) إن بقي FFA ناقصًا، نفّذ إصلاح fallback بالـsed
+ffa_fix_needed=0
+grep -Rni --include="*.tsx" -E "isFFA\(\)\s*\|\|\s*isVip" src/components/ src/app/ >/dev/null 2>&1 || ffa_fix_needed=1
+if [ "$ffa_fix_needed" -eq 1 ]; then
+  mkdir -p src/utils
+  cat > src/utils/ffa.ts <<'TS'
+"use client";
+let cached: 0|1|null = null;
+export function isFFA(): boolean {
+  if (typeof window === "undefined") return false;
+  if (cached === null) {
+    const w = window as any;
+    const ls = (typeof localStorage !== "undefined" && localStorage.getItem("ditona_ffa")) || null;
+    const v = (w as any).__DITONA_FFA ?? (ls === "1" ? 1 : 0);
+    cached = v === 1 ? 1 : 0;
+  }
+  return cached === 1;
+}
+export async function loadFFA(): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    const res = await fetch("/api/rtc/env", { cache: "no-store" });
+    const j = await res.json();
+    const on = j?.server?.FREE_FOR_ALL === "1" || j?.public?.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+    (window as any).__DITONA_FFA = on ? 1 : 0;
+    try { localStorage.setItem("ditona_ffa", on ? "1" : "0"); } catch {}
+    cached = on ? 1 : 0;
+    window.dispatchEvent(new CustomEvent("ditona:ffa", { detail: { on } }));
+  } catch {}
+}
+TS
+  fix_file(){
+    f="$1"; [ -f "$f" ] || return 0
+    grep -q 'from "@/utils/ffa"' "$f" || {
+      if head -n1 "$f" | grep -q "use client"; then sed -i '1a import { isFFA } from "@/utils/ffa";' "$f"; else sed -i '1i import { isFFA } from "@/utils/ffa";' "$f"; fi
+    }
+    sed -i -E 's/disabled=\{!isVip\}/disabled={!((isFFA())||isVip)}/g' "$f" || true
+    sed -i -E 's/\bisVip\s*\?/ (isFFA() || isVip) ?/g' "$f" || true
+    sed -i -E 's/\bisVip\s*&&/(isFFA() || isVip) &&/g' "$f" || true
+    sed -i -E 's/!isVip/!(isFFA() || isVip)/g' "$f" || true
+    sed -i -E 's/const[[:space:]]+freeForAll[[:space:]]*=[^;]*;/const freeForAll = isFFA();/g' "$f" || true
+  }
+  for f in $(find src -type f \( -name "ChatToolbar*.tsx" -o -name "FilterBar*.tsx" -o -name "GenderSelect*.tsx" -o -name "CountrySelect*.tsx" \)); do
+    fix_file "$f"
+  done
+fi
+
+# 3) رؤوس أمان خفيفة إن توفّر باتش
+[ -z "$PDIR" ] || apply "$PDIR/08_api_security_headers_report_only.diff" || true
+
+# 4) قبول سريع
+ok_utils=0; grep -q "export function isFFA" src/utils/ffa.ts 2>/dev/null && ok_utils=1
+ok_prev=0; grep -Rni --include="*.tsx" -E "isFFA\(\)\s*\|\|\s*isVip" src/**/ChatToolbar*.tsx >/dev/null 2>&1 && ok_prev=1
+ok_filters=0; grep -Rni --include="*.tsx" -E "isFFA\(\)\s*\|\|\s*isVip" src/**/FilterBar*.tsx src/**/GenderSelect*.tsx src/**/CountrySelect*.tsx >/dev/null 2>&1 && ok_filters=1
+ok_env=0; curl -fsS https://www.ditonachat.com/api/rtc/env | grep -qE "\"FREE_FOR_ALL\":\"1\"|\"NEXT_PUBLIC_FREE_FOR_ALL\":\"1\"" && ok_env=1 || true
+
+echo "-- Acceptance --"          | tee    "$RPT"
+echo "FFA_UTIL_OK=${ok_utils}"   | tee -a "$RPT"
+echo "FFA_PREV_ENABLED=${ok_prev}" | tee -a "$RPT"
+echo "FFA_FILTERS_ENABLED=${ok_filters}" | tee -a "$RPT"
+echo "FFA_ENV_RUNTIME_OK=${ok_env}" | tee -a "$RPT"
+echo "[i] Report: $RPT"
+'

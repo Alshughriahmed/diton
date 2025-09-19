@@ -65,4 +65,4 @@ export async function GET() {
       upstash_token: !!process.env.UPSTASH_REDIS_REST_TOKEN,
     }
   }, { status: 200 });
-}
+}export const dynamic="force-dynamic";

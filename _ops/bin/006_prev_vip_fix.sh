@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -Eeuo pipefail
 TS="$(date -u +%Y%m%d-%H%M%S)"; BKP="_ops/backups/prev_vip_fix_${TS}"; mkdir -p "$BKP"
 cp -a src/lib/rtc/mm.ts "$BKP/mm.ts" 2>/dev/null || true

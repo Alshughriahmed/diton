@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="${ROOT:-/home/runner/workspace}"; cd "$ROOT"
+
+[[ $# -ge 1 ]] || { echo "usage: _ops/bin/run <script> [args...]"; exit 2; }
+
+# Setup environment
+mkdir -p _ops/reports
+TS=$(date -u +%Y%m%d-%H%M%S)
+LOG="_ops/reports/$(basename "$1").${TS}.log"
+
+# Start heartbeat in background
+( while true; do echo "[HB] $(date -u +%H:%M:%S)"; sleep 10; done ) & HB=$!
+trap 'kill $HB 2>/dev/null || true' EXIT
+
+echo "=== Running: $1 ===" | tee "$LOG"
+echo "Timestamp: $(date -u)" | tee -a "$LOG"
+echo "Args: ${*:2}" | tee -a "$LOG"
+echo "" | tee -a "$LOG"
+
+# Execute through ultimate guard
+_ops/bin/ultimate_guard.sh "bash '$1' ${*:2}" 2>&1 | stdbuf -oL -eL tee -a "$LOG"
+RC=${PIPESTATUS[0]}
+
+echo "" | tee -a "$LOG"
+echo "=== Completed: $1 (RC=$RC) ===" | tee -a "$LOG"
+echo "LOG=$LOG"
+exit $RC

@@ -1,3 +1,4 @@
+. _ops/bin/disable_alt_screen.sh || true
 set -Eeuo pipefail
 PORT="${PORT:-3000}"; BASE="http://127.0.0.1:$PORT"
 NEED_PATCH=0
