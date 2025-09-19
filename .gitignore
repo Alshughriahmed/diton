@@ -3,6 +3,7 @@ node_modules/
 dist/
 _ops/backups/
 .vercel/
+.env.local
 
 # ops blobs
 _ops/snapshots/

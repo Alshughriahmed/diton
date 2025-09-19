@@ -36,7 +36,7 @@ export async function POST(
 req: NextRequest) {
   try {
     const anon = extractAnonId(req);
-    if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 403 });
+    if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 401 });
 
     const b: any = await req.json().catch(() => ({}));
     const gender = String(b.gender || "u").toLowerCase();
