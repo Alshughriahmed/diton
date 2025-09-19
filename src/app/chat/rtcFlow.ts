@@ -161,6 +161,7 @@ function clearLocalStorage() {
 
     // Complete cleanup and stop
 export function stop(mode: "full"|"network" = "full"){
+  try { if (state.dc) { try { state.dc.onopen=null; state.dc.onmessage=null; state.dc.onclose=null; state.dc.onerror=null; } catch(_){} state.dc=null; } } catch(_) {}
   try{
     // abort any pending ops
     try{ safeAbort(state.ac); }catch{} 

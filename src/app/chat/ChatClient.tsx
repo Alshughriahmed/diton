@@ -1,4 +1,5 @@
 "use client";
+import "@/app/chat/metaInit.client";
 // startRtcFlowOnce guard marker
 
 import "./freeForAllBridge";
