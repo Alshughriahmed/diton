@@ -5,6 +5,7 @@ import { useFilters } from "@/state/filters";
 import type { GenderOpt } from "@/state/filters";
 import { emit } from "@/utils/events";
 import { toast } from "@/lib/ui/toast";
+import { isFFA } from "@/utils/ffa";
 
 interface GenderOption {
   key: GenderOpt;
@@ -86,8 +87,7 @@ export default function GenderFilter() {
       return;
     }
 
-    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
-    if (!isVip && !FREE_FOR_ALL) {
+    if (!isVip && !isFFA()) {
       toast('🔒 فلترة الجنس حصرية VIP');
       emit('ui:upsell', 'gender');
       return;
@@ -170,8 +170,7 @@ export default function GenderFilter() {
               const isSelected = option.key === "all" 
                 ? selectedGenders.length === 0
                 : selectedGenders.includes(option.key);
-              const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
-              const isDisabled = !isVip && !FREE_FOR_ALL && option.key !== "all";
+              const isDisabled = !isVip && !isFFA() && option.key !== "all";
               
               return (
                 <button
@@ -206,7 +205,7 @@ export default function GenderFilter() {
           </div>
 
           {/* VIP Notice */}
-          {!isVip && !(globalThis as any).__vip?.FREE_FOR_ALL && (
+          {!isVip && !isFFA() && (
             <div className="p-3 border-t border-gray-600 bg-gradient-to-r from-purple-600/20 to-blue-600/20">
               <p className="text-xs text-gray-300 text-center">
                 🔒 ترقية لـ VIP لفلترة الجنس (حتى خيارين)

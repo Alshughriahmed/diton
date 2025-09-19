@@ -531,18 +531,34 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
 
     // Matchmake: support both response formats
     for (let i = 0; i < 50 && checkSession(currentSession) && !state.ac?.signal.aborted; i++) {
-      // Prepare matchmake request with prevFor if available
+      // Prepare matchmake request with filters and prevFor if available
       const matchmakeOptions: RequestInit = {
         method: "POST", 
-        cache: "no-store"
+        cache: "no-store",
+        headers: { "content-type": "application/json" }
       };
       
+      // Get current filters from store
+      let filters = {};
+      try {
+        // Import filters store to get current preferences
+        const { useFilters } = await import('@/state/filters');
+        const { gender, countries } = useFilters.getState();
+        filters = { 
+          gender: gender === 'all' ? null : gender,
+          countries: countries?.length ? countries : null
+        };
+      } catch {}
+
+      // Build request payload
+      const payload: any = { ...filters };
       if (state.prevForOnce) {
-        matchmakeOptions.headers = { "content-type": "application/json" };
-        matchmakeOptions.body = JSON.stringify({ prevFor: state.prevForOnce });
+        payload.prevFor = state.prevForOnce;
         // Clear prevForOnce after use
         state.prevForOnce = null;
       }
+      
+      matchmakeOptions.body = JSON.stringify(payload);
       
       const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions, 'matchmake', currentSession);
       
@@ -775,14 +791,73 @@ function setupDataChannel(dc: RTCDataChannel) {
       // Handle meta:init request - send peer meta immediately
       if (msg.type === "meta:init") {
         try {
-          const peerMetaObject = {
-            country: "Unknown", // TODO: get from user profile
-            gender: "Unknown",   // TODO: get from user profile  
-            name: "Anonymous",   // TODO: get from user profile
-            avatar: null,        // TODO: get from user profile
-            likes: 0             // TODO: get from user stats
+          // Two-phase meta approach for ≤300ms requirement
+          
+          // Phase 1: Send immediate meta from profile + cached geo (≤100ms)
+          const sendImmediateMeta = async () => {
+            let country = "Unknown";
+            let city = "Unknown"; 
+            let gender = "Unknown";
+            let name = "Anonymous";
+            
+            try {
+              // Get immediate geo from cache
+              const { getImmediateGeo } = await import('@/lib/geoCache');
+              const geoData = getImmediateGeo();
+              country = geoData.country;
+              city = geoData.city;
+            } catch {}
+            
+            try {
+              // Get profile data
+              if (typeof window !== 'undefined') {
+                const { useProfile } = await import('@/state/profile');
+                const profile = useProfile.getState().profile;
+                gender = profile.gender || "Unknown";
+                name = profile.displayName || "Anonymous";
+              }
+            } catch {}
+            
+            const immediateMetaObject = { country, city, gender, name, avatar: null, likes: 0 };
+            
+            try {
+              dc.send(JSON.stringify({type:"meta", payload: immediateMetaObject}));
+              console.log('[rtc] Phase 1: Immediate meta sent', immediateMetaObject);
+            } catch {}
+            
+            return immediateMetaObject;
           };
-          dc.send(JSON.stringify({type:"meta", payload: peerMetaObject}));
+          
+          // Phase 2: Update meta with fresh geo data (background)
+          const updateMetaWithFreshGeo = async (initialMeta: any) => {
+            try {
+              const { fetchGeoWithCache } = await import('@/lib/geoCache');
+              const freshGeo = await fetchGeoWithCache();
+              
+              // Only send update if geo data changed
+              if (freshGeo.country !== initialMeta.country || freshGeo.city !== initialMeta.city) {
+                const updatedMetaObject = {
+                  ...initialMeta,
+                  country: freshGeo.country || "Unknown",
+                  city: freshGeo.city || "Unknown"
+                };
+                
+                try {
+                  dc.send(JSON.stringify({type:"meta", payload: updatedMetaObject}));
+                  console.log('[rtc] Phase 2: Updated meta sent', updatedMetaObject);
+                } catch {}
+              }
+            } catch (error) {
+              console.warn('[rtc] Phase 2: Fresh geo update failed:', error);
+            }
+          };
+          
+          // Execute phases
+          sendImmediateMeta().then(initialMeta => {
+            // Start Phase 2 in background (don't await)
+            updateMetaWithFreshGeo(initialMeta);
+          });
+          
         } catch {}
         return;
       }
@@ -817,7 +892,14 @@ function setupDataChannel(dc: RTCDataChannel) {
   
   dc.onclose = () => {
     logRtc('datachannel-close', 200);
-    (globalThis as any).__ditonaDataChannel = null;
+    // Enhanced cleanup: clear global reference and notify LikeSystem
+    try {
+      (globalThis as any).__ditonaDataChannel = null;
+      // Broadcast DataChannel close event for components that depend on it
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent('ditona:datachannel-closed'));
+      }
+    } catch {}
   };
 }
 

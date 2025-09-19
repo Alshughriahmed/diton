@@ -86,6 +86,19 @@ export default function LikeSystem() {
       }
     });
 
+    // Listen for DataChannel close events
+    const handleDataChannelClosed = () => {
+      console.warn('[like] DataChannel closed, falling back to polling only');
+      // DataChannel is now unavailable, increase polling frequency temporarily
+      if (currentPairId) {
+        startPolling(currentPairId);
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener('ditona:datachannel-closed', handleDataChannelClosed);
+    }
+
     // Listen for like updates from other components (backwards compatibility)
     const unsubscribeUpdate = on("ui:likeUpdate", (data) => {
       if (data) {
@@ -115,6 +128,11 @@ export default function LikeSystem() {
       if (typeof unsubscribeUpdate === 'function') unsubscribeUpdate();
       if (typeof unsubscribePhase === 'function') unsubscribePhase();
       stopPolling();
+      
+      // Cleanup DataChannel event listener
+      if (typeof window !== "undefined") {
+        window.removeEventListener('ditona:datachannel-closed', handleDataChannelClosed);
+      }
     };
   }, [currentPairId]);
 
@@ -173,6 +191,27 @@ setShowHeart(true);
           myLikes: result.count || 0,
           pairId: currentPairId
         });
+
+        // Enhanced DataChannel sending with availability checks
+        try {
+          const dc = (globalThis as any).__ditonaDataChannel;
+          // Comprehensive DataChannel availability check
+          if (dc && 
+              typeof dc.send === 'function' && 
+              dc.readyState === 'open' && 
+              !dc.error) {
+            dc.send(JSON.stringify({
+              type: "like:toggle",
+              liked: result.mine || false,
+              pairId: currentPairId
+            }));
+            console.log('[like] DataChannel message sent successfully');
+          } else {
+            console.warn('[like] DataChannel unavailable, falling back to API-only');
+          }
+        } catch (error) {
+          console.warn('[like] DataChannel send failed:', error);
+        }
 
       } else {
         // Server error - revert optimistic update

@@ -21,6 +21,7 @@ import { on, emit } from "@/utils/events";
 import * as rtc from "./rtcFlow";
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useGestures } from "@/hooks/useGestures";
 import { useHydrated } from "@/hooks/useHydrated";
 import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
 import { useFilters } from "@/state/filters";
@@ -46,17 +47,7 @@ type MatchEcho={ ts:number; gender:string; countries:string[] };
 
 const NEXT_COOLDOWN_MS = 700;
 
-// Auto-start hook
-if (typeof window !== "undefined" && !(window as any).__ditonaAutostartDone) {
-  (window as any).__ditonaAutostartDone = 1;
-  try {
-    (async () => {
-      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
-      const m = await import("./rtcFlow");
-      try { await m.next(); } catch {}
-    })();
-  } catch {}
-}
+// Auto-start will be handled after hydration and media initialization
 
 export default function ChatClient(){
   function __updatePeerBadges(meta:any){
@@ -139,6 +130,54 @@ export default function ChatClient(){
   }, [pair.id]);
 
   useKeyboardShortcuts();
+  useGestures();
+
+  // Auto-start effect with geo prefetch - runs once after hydration and media
+  useEffect(() => {
+    if (!hydrated || typeof window === "undefined") return;
+    
+    // Check if already done
+    if ((window as any).__ditonaAutostartDone) return;
+    (window as any).__ditonaAutostartDone = 1;
+
+    const doAutoStart = async () => {
+      try {
+        // Prefetch geo data immediately for fast meta info
+        const { prefetchGeo } = await import('@/lib/geoCache');
+        prefetchGeo();
+        console.log('[auto-start] Geo prefetch initiated');
+        
+        // Wait a bit for media to initialize
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Initialize media first if not already done
+        const stream = await initLocalMedia();
+        if (stream && localRef.current) {
+          localRef.current.srcObject = stream;
+          localRef.current.play().catch(() => {});
+        }
+
+        // Start RTC after ensuring media is ready
+        await new Promise(resolve => setTimeout(resolve, 200));
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
+        
+        // Import and start RTC
+        const m = await import("./rtcFlow");
+        await m.next();
+        
+        console.log('[auto-start] Successfully started RTC flow');
+      } catch (error) {
+        console.warn('[auto-start] Failed:', error);
+      }
+    };
+
+    // Start auto-start with timeout
+    const timeout = setTimeout(() => {
+      doAutoStart();
+    }, 100);
+
+    return () => clearTimeout(timeout);
+  }, [hydrated]);
 
   useEffect(()=>{
     // Enqueue moved to rtcFlow.ts to avoid duplication
@@ -243,11 +282,45 @@ let offTogglePlay=on("ui:togglePlay", ()=>{
       setShowUpsell(true);
       toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
     });
-    let offCountryFilter=on("filters:country", (value)=>{
+    let offCountryFilter=on("filters:country", async (value)=>{
+      try {
+        // Update user in queue with new filters
+        const { useFilters } = await import('@/state/filters');
+        const { gender, countries } = useFilters.getState();
+        
+        await fetch('/api/rtc/enqueue', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            gender: 'unknown', // Will be improved with real profile data
+            country: 'UNKNOWN', // Will be improved with geo data
+            filterGenders: gender === 'all' ? 'all' : gender,
+            filterCountries: countries?.length ? countries.join(',') : 'ALL'
+          })
+        });
+      } catch {}
+      
       // Trigger new match with updated filters
       rtc.next();
     });
-    let offGenderFilterUpdate=on("filters:gender", (value)=>{
+    let offGenderFilterUpdate=on("filters:gender", async (value)=>{
+      try {
+        // Update user in queue with new filters  
+        const { useFilters } = await import('@/state/filters');
+        const { gender, countries } = useFilters.getState();
+        
+        await fetch('/api/rtc/enqueue', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            gender: 'unknown', // Will be improved with real profile data
+            country: 'UNKNOWN', // Will be improved with geo data
+            filterGenders: gender === 'all' ? 'all' : gender,
+            filterCountries: countries?.length ? countries.join(',') : 'ALL'
+          })
+        });
+      } catch {}
+      
       // Trigger new match with updated filters
       rtc.next();
     });

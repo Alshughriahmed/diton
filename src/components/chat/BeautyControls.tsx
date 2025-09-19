@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useFilters } from "@/state/filters";
 import { emit } from "@/utils/events";
+import { isFFA } from "@/utils/ffa";
 
 interface BeautySettings {
   smoothing: number;
@@ -23,7 +24,7 @@ export default function BeautyControls() {
   });
 
   const handleToggleBeauty = () => {
-    if (!isVip) {
+    if (!isVip && !isFFA()) {
       alert("Beauty effects are a VIP feature! Upgrade to access professional beauty filters.");
       return;
     }
@@ -63,7 +64,7 @@ export default function BeautyControls() {
       <button
         onClick={handleToggleBeauty}
         className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
-          isEnabled && isVip
+          isEnabled && (isVip || isFFA())
             ? "bg-pink-600 border-pink-500 text-white"
             : "bg-neutral-800 border-neutral-700 text-white hover:bg-neutral-700"
         }`}
@@ -71,8 +72,8 @@ export default function BeautyControls() {
       >
         <span className="text-lg">✨</span>
         <span className="hidden sm:inline">Beauty</span>
-        {!isVip && <span className="text-xs">🔒</span>}
-        {isVip && (
+        {!isVip && !isFFA() && <span className="text-xs">🔒</span>}
+        {(isVip || isFFA()) && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -86,7 +87,7 @@ export default function BeautyControls() {
       </button>
 
       {/* Beauty Settings Panel */}
-      {isOpen && isVip && (
+      {isOpen && (isVip || isFFA()) && (
         <div className="absolute top-full left-0 mt-2 w-72 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 p-4">
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -194,7 +195,7 @@ export default function BeautyControls() {
       )}
 
       {/* VIP Upgrade Notice */}
-      {!isVip && (
+      {!isVip && !isFFA() && (
         <div className="absolute top-full left-0 mt-2 w-64 bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/30 rounded-lg p-3 z-50">
           <p className="text-xs text-gray-200 text-center">
             ✨ Upgrade to VIP for professional beauty effects:

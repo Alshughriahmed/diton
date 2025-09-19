@@ -1,6 +1,6 @@
 "use client";
 
-import { busOn, busEmit } from "../../utils/bus";
+import { on, emit } from "@/utils/events";
 
 let pairId: string | null = null;
 let timer: any = null;
@@ -22,7 +22,7 @@ async function pull() {
     const j = await r.json();
     count = Number(j?.count ?? 0);
     you = !!j?.you;
-    busEmit("like:update", { pairId, count, you });
+    emit("ui:likeUpdate" as any, { pairId, count, you });
   } catch {}
 }
 
@@ -32,7 +32,7 @@ async function toggle() {
   // تفاؤلي
   you = wantInc;
   count = Math.max(0, count + (wantInc ? 1 : -1));
-  busEmit("like:update", { pairId, count, you });
+  emit("ui:likeUpdate" as any, { pairId, count, you });
 
   try {
     const r = await fetch(
@@ -48,15 +48,15 @@ async function toggle() {
 }
 
 // ربط أحداث الـRTC والـUI
-const off1 = busOn("rtc:pair", (e: any) => {
+const off1 = on("rtc:pair" as any, (e: any) => {
   try { pairId = e?.pairId || e?.id || null; } catch { pairId = null; }
   if (timer) clearInterval(timer);
   pull();
   timer = adjustTimer();
 });
-const off2 = busOn("rtc:end", () => { if (timer) clearInterval(timer); timer = null; pairId = null; });
-const off3 = busOn("rtc:closed", () => { if (timer) clearInterval(timer); timer = null; pairId = null; });
-const off4 = busOn("ui:like", () => { void toggle(); });
+const off2 = on("rtc:end" as any, () => { if (timer) clearInterval(timer); timer = null; pairId = null; });
+const off3 = on("rtc:closed" as any, () => { if (timer) clearInterval(timer); timer = null; pairId = null; });
+const off4 = on("ui:like" as any, () => { void toggle(); });
 
 // تنظيف عند المغادرة
 if (typeof window !== "undefined") {

@@ -28,15 +28,50 @@ _req: NextRequest) {
   const anon = extractAnonId(_req);
   if (!anon) return NextResponse.json({ error:"anon-required" }, { status:401 });
   let prevFor:string|null=null;
+  let filters: {gender?: string, countries?: string[]} = {};
+  
   try{
     if(_req.headers.get("content-type")?.includes("application/json")){
       const b:any = await _req.json().catch(()=>null);
       prevFor = b?.prevFor || null;
+      
+      // Extract filter parameters
+      if (b?.gender && b.gender !== 'all') {
+        filters.gender = String(b.gender);
+      }
+      if (b?.countries && Array.isArray(b.countries) && b.countries.length > 0) {
+        filters.countries = b.countries.filter((c: any) => c && c !== 'ALL').slice(0, 15);
+      }
     } else {
       prevFor = _req.nextUrl?.searchParams?.get("prevFor") || null;
     }
   }catch{}
+  
   if (prevFor) { try{ await setPx(`rtc:prev-wish:${anon}`, String(prevFor), 7000); }catch{} }
+
+  // Update user's filters and attributes in queue if filters provided
+  if (filters.gender || filters.countries) {
+    try {
+      const { enqueue } = await import('@/lib/rtc/mm');
+      
+      // Default attrs (will be improved with real user data later)
+      const attrs = {
+        gender: 'unknown', // TODO: get from user profile
+        country: 'UNKNOWN' // TODO: get from geo or user profile
+      };
+      
+      // Prepare filters for enqueue
+      const enqueueFilt = {
+        genders: filters.gender || 'all',
+        countries: filters.countries?.length ? filters.countries.join(',') : 'ALL'
+      };
+      
+      // Update queue with new filters
+      await enqueue(anon, attrs, enqueueFilt);
+    } catch (error) {
+      console.warn('[matchmake] Failed to update filters:', error);
+    }
+  }
 
   const mapped = await pairMapOf(anon);
   if (mapped) {
@@ -89,6 +124,7 @@ _req: NextRequest) {
       peerAnonId: peerAnonId || "" 
     }, { status: 200 });
   }
+  // Call matchmake with updated filters context 
   const res = await matchmake(anon);
   
 if (res.status === 200) {

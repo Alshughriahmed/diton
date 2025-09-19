@@ -62,8 +62,17 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const sp = new URL(req.url).searchParams;
-  const pairId = sp.get("pairId");
-  const op = (sp.get("op") || "inc").toLowerCase();
+  let pairId = sp.get("pairId");
+  let op = (sp.get("op") || "inc").toLowerCase();
+  
+  // Also check request body for modern usage
+  try {
+    const body = await req.json();
+    if (!pairId && body.pairId) pairId = body.pairId;
+    if (body.action === 'like') op = 'inc';
+    if (body.action === 'unlike') op = 'dec';
+  } catch {}
+  
   if (!pairId) return j({ error: "pairId required" }, { status: 400 });
 
   const anon = parseAnon(req);

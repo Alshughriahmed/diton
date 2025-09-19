@@ -13,7 +13,7 @@ declare global {
   }
 }
 
-if (!window.__ditonaBridgeInit) {
+if (typeof window !== "undefined" && !window.__ditonaBridgeInit) {
   window.__ditonaBridgeInit = 1;
 
   // --- FFA bootstrap (runtime) ---

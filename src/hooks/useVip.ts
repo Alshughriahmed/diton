@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-
+import { isFFA } from '@/utils/ffa';
 
 export function useVip() {
   const session = { user: { name: "Guest" } };
@@ -17,8 +17,8 @@ export function useVip() {
   useEffect(() => {
     let isMounted = true;
     
-    // Check FREE_FOR_ALL mode
-    if (process.env.NEXT_PUBLIC_FREE_ALL === 'true') {
+    // Check FREE_FOR_ALL mode using unified system
+    if (isFFA()) {
       if (isMounted) {
         setIsVip(true);
         setVipStatus({
