@@ -105,6 +105,7 @@ type Phase = 'idle' | 'searching' | 'matched' | 'connected' | 'stopped';
 
 // State machine
 interface RtcState {
+  dc?: RTCDataChannel | null;
     remoteStream: MediaStream | null;
 sid: number;
   phase: Phase;
