@@ -20,3 +20,23 @@
   }
   if(typeof window!=="undefined"){ boot(); }
 })();
+;(()=>{ try{
+  if (typeof window==="undefined") return;
+  if ((window as any).__ditonaBridgeInit) return;
+  (window as any).__ditonaBridgeInit=1;
+  (async()=>{ try{
+    const m=await import("@/utils/events");
+    const on=m.on, emit=m.emit;
+    const N=["rtc:pair","rtc:phase","ditona:peer-meta"] as const;
+    // window -> bus
+    N.forEach((n)=>window.addEventListener(n as any,(ev:any)=>{ try{ emit(n as any,(ev as any)?.detail);}catch{} },{passive:true}));
+    // bus -> window
+    N.forEach((n)=>{ try{ on(n as any,(detail:any)=>{ try{ window.dispatchEvent(new CustomEvent(n as any,{detail})); }catch{} }); }catch{} });
+  }catch{} })();
+} catch{} })();
+;(()=>{ try{
+  if (typeof window==="undefined") return;
+  if ((window as any).__ditonaFFALoaded) return;
+  (window as any).__ditonaFFALoaded=1;
+  (async()=>{ try{ const m=await import("@/utils/ffa"); await m.loadFFA?.(); }catch{} })();
+} catch{} })();
