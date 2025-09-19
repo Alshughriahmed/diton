@@ -162,6 +162,7 @@ function clearLocalStorage() {
 
     // Complete cleanup and stop
 export function stop(mode: "full"|"network" = "full"){
+try{ __ditonaSetPair(null as any, (state as any).role); }catch{};
   try { if (state.dc) { try { state.dc.onopen=null; state.dc.onmessage=null; state.dc.onclose=null; state.dc.onerror=null; } catch(_){} state.dc=null; } } catch(_) {}
   try{
     // abort any pending ops
@@ -213,6 +214,7 @@ export function stop(mode: "full"|"network" = "full"){
     state.phase = "idle";
     state.role = null;
     state.pairId = null;
+ try{ __ditonaSetPair((state as any).pairId, (state as any).role); }catch{};
 
     logRtc("stop", 200);
   }catch(e){
@@ -544,6 +546,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
         // Support both formats: {pairId, role} and {found:true, pairId, role}
         if (j?.pairId && j?.role) {
           state.pairId = j.pairId;
+ try{ __ditonaSetPair((state as any).pairId, (state as any).role); }catch{};
           state.role = j.role;
           state.phase = 'matched';
           // Save peer for potential "prev" functionality
@@ -788,6 +791,16 @@ export function startRtcFlowOnce() {
 export function stopRtcSession(reason: string = "user") {
   logRtc('session-stop', 200, { reason });
   stop();
+}
+
+/** ditona: broadcast pairId to window for UI runtime */
+function __ditonaSetPair(pid?: string, role?: any){
+  try{
+    (window as any).__ditonaPairId = pid ?? null;
+    if (typeof window !== "undefined") {
+      try { window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: pid ?? null, role } })); } catch {}
+    }
+  }catch{}
 }
 
 
