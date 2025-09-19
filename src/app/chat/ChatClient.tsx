@@ -58,6 +58,9 @@ export default function ChatClient(){
     }catch{}
   }
 
+  // Peer meta state for real-time updates
+  const [peerMeta, setPeerMeta] = useState<any>(null);
+
   const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
   const lastTsRef = useRef(0);
@@ -214,6 +217,8 @@ let offTogglePlay=on("ui:togglePlay", ()=>{
       // Trigger new match with updated filters
       rtc.next();
     });
+    
+    // Removed duplicate - handlePeerMeta defined below
     
     // RTC event listeners
     let offRtcPhase=on("rtc:phase" as any, (data)=>{

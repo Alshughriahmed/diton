@@ -163,7 +163,15 @@ function clearLocalStorage() {
     // Complete cleanup and stop
 export function stop(mode: "full"|"network" = "full"){
 try{ __ditonaSetPair(null as any, (state as any).role); }catch{};
-  try { if (state.dc) { try { state.dc.onopen=null; state.dc.onmessage=null; state.dc.onclose=null; state.dc.onerror=null; } catch(_){} state.dc=null; } } catch(_) {}
+  try { 
+    // Clean up DataChannel listeners safely
+    const dc = (globalThis as any).__ditonaDataChannel;
+    if (dc) { 
+      try { dc.onopen = dc.onmessage = dc.onclose = dc.onerror = null as any; } catch{} 
+      (globalThis as any).__ditonaDataChannel = null;
+    }
+    if (state.dc) { try { state.dc.onopen=null; state.dc.onmessage=null; state.dc.onclose=null; state.dc.onerror=null; } catch(_){} state.dc=null; } 
+  } catch(_) {}
   try{
     // abort any pending ops
     try{ safeAbort(state.ac); }catch{} 
@@ -746,22 +754,55 @@ export async function nextWithMedia(media: MediaStream) {
   }
 }
 
-// DataChannel setup for real-time likes
+// DataChannel setup for real-time likes and meta
 function setupDataChannel(dc: RTCDataChannel) {
   dc.onopen = () => {
     logRtc('datachannel-open', 200);
     // Store reference for sending data
     (globalThis as any).__ditonaDataChannel = dc;
+    
+    // Auto-send meta:init after opening
+    try{ 
+      dc.send(JSON.stringify({type:"meta:init"})); 
+      setTimeout(()=>dc?.send?.(JSON.stringify({type:"meta:init"})), 300); 
+    }catch{}
   };
   
   dc.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
+      
+      // Handle meta:init request - send peer meta immediately
+      if (msg.type === "meta:init") {
+        try {
+          const peerMetaObject = {
+            country: "Unknown", // TODO: get from user profile
+            gender: "Unknown",   // TODO: get from user profile  
+            name: "Anonymous",   // TODO: get from user profile
+            avatar: null,        // TODO: get from user profile
+            likes: 0             // TODO: get from user stats
+          };
+          dc.send(JSON.stringify({type:"meta", payload: peerMetaObject}));
+        } catch {}
+        return;
+      }
+      
+      // Handle meta response - broadcast to UI
+      if (msg.type === "meta" && msg.payload) {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent('ditona:peer-meta', { detail: msg.payload }));
+        }
+        return;
+      }
+      
+      // Legacy chat messages
       if (msg?.t === "chat" && msg?.pairId === state.pairId) {
         window.dispatchEvent(new CustomEvent('ditona:chat:recv', { detail: { text: String(msg.text || "") } }));
         return;
       }
-      if (msg.t === "like" && msg.pairId === state.pairId) {
+      
+      // Like toggle handling
+      if (msg.type === "like:toggle" || (msg.t === "like" && msg.pairId === state.pairId)) {
         // Broadcast like event to UI
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent('rtc:peer-like', { detail: { liked: !!msg.liked } }));
