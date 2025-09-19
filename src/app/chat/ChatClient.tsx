@@ -3,7 +3,7 @@ import "@/app/chat/metaInit.client";
 // startRtcFlowOnce guard marker
 
 import "./freeForAllBridge";
-
+import "./dcMetaResponder.client";
 
 import "./likeSyncClient";
 import './msgSendClient';
@@ -44,6 +44,18 @@ import { useProfile } from "@/state/profile";
 type MatchEcho={ ts:number; gender:string; countries:string[] };
 
 const NEXT_COOLDOWN_MS = 700;
+
+// Auto-start hook
+if (typeof window !== "undefined" && !(window as any).__ditonaAutostartDone) {
+  (window as any).__ditonaAutostartDone = 1;
+  try {
+    (async () => {
+      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
+      const m = await import("./rtcFlow");
+      try { await m.next(); } catch {}
+    })();
+  } catch {}
+}
 
 export default function ChatClient(){
   function __updatePeerBadges(meta:any){
