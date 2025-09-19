@@ -9,8 +9,6 @@ export default function ChatToolbar(){
   const [micOn,setMicOn]=useState(true);
   const [paused,setPaused]=useState(false);
   const { isVip } = useVip();
-  const freeForAll = isFFA();
-
   useEffect(()=>{ // sync with messaging bar
     const onOpen = ()=>setMsgOpen(true);
     const onClose= ()=>setMsgOpen(false);
@@ -23,7 +21,7 @@ export default function ChatToolbar(){
     <>
       {/* Prev / Next icons large, no boxes */}
       <button data-ui="btn-prev" 
-        onClick={()=>{ if(isVip || freeForAll) emit("ui:prev"); }}
+        onClick={()=>{ if(isVip || isFFA()) emit("ui:prev"); }}
         disabled={!(isFFA() || isVip)}
         title={!(isFFA() || isVip) ? "VIP only" : "Previous match"}
         className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!(isFFA() || isVip) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>

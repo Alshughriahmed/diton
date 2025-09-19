@@ -9,7 +9,6 @@ import { emit } from "@/utils/events";
 
 export default function CountrySelect(){
   const { countries, setCountries, isVip } = useFilters();
-  const freeForAll = isFFA();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [userCountry, setUserCountry] = useState<string | null>(null);
@@ -51,7 +50,7 @@ export default function CountrySelect(){
     setCountries(base.slice(0,15));
   };
 
-  useEffect(()=>{ if(!(isFFA() || isVip)) setCountries(["ALL"]); }, [isVip, freeForAll, setCountries]);
+  useEffect(()=>{ if(!(isFFA() || isVip)) setCountries(["ALL"]); }, [isVip, isFFA(), setCountries]);
 
   return (
     <div className="absolute top-2 right-2 z-50">

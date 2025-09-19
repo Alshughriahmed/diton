@@ -6,7 +6,6 @@ import { GENDERS } from "@/data/genders";
 
 export default function GenderSelect(){
   const { gender, setGender, isVip } = useFilters();
-  const freeForAll = isFFA();
   return (
     <div className="absolute top-2 right-40 z-50">
       <div className="inline-flex items-center gap-2">

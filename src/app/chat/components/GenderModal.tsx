@@ -1,4 +1,5 @@
 "use client";
+import { isFFA } from "@/utils/ffa";
 import { useEffect, useState } from "react";
 
 export type GenderKey = "any" | "female" | "male" | "couples" | "lgbt";
@@ -31,8 +32,8 @@ export default function GenderModal({ open, onClose, selected, onChange }: Props
 
 
   const toggle = (key: GenderKey) => {
-  // NON_VIP_EVERYONE_ONLY
-  if (!isVip) { onChange([]); return; }
+  // NON_VIP_EVERYONE_ONLY (unless FFA)
+  if (!(isFFA() || isVip)) { onChange([]); return; }
   if (key === "any") { onChange([]); return; }
   const set = new Set(selected);
   if (set.has(key)) set.delete(key); else {
@@ -54,7 +55,7 @@ export default function GenderModal({ open, onClose, selected, onChange }: Props
         </div>
         <div className="grid grid-cols-1 gap-2 p-4">
           {OPTIONS.map(o=>{
-            const disabled = (!isVip && o.key !== "any");
+            const disabled = (!(isFFA() || isVip) && o.key !== "any");
             const active = (o.key === "any" && selected.length === 0) || selected.includes(o.key);
             
             return (
@@ -72,7 +73,7 @@ export default function GenderModal({ open, onClose, selected, onChange }: Props
               </button>
             );
           })}
-          {!isVip && <p className="text-xs text-gray-500 mt-1">Tip: VIP users can select up to two genders.</p>}
+          {!(isFFA() || isVip) && <p className="text-xs text-gray-500 mt-1">Tip: VIP users can select up to two genders.</p>}
         </div>
         <div className="flex justify-end p-4 border-t">
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-black text-white">Done</button>

@@ -3,9 +3,6 @@ import { isFFA } from "@/utils/ffa";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { GenderKey } from "./GenderModal";
-const freeForAll = isFFA();
-
-
 const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
 const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 

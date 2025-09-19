@@ -1,4 +1,5 @@
 "use client";
+import { isFFA } from "@/utils/ffa";
 import { useEffect, useMemo, useState } from "react";
 import { getAllRegions, Region } from "@/lib/regions";
 
@@ -41,8 +42,8 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
   // [] means All; badge handled outside
 
   const toggle = (code: string) => {
-    // Non-VIP: only user country or All allowed
-    if (!isVip) {
+    // Non-VIP: only user country or All allowed (unless FFA)
+    if (!(isFFA() || isVip)) {
       if (code === userCode || !userCode) {
         onChange(userCode ? [userCode] : []); // User country or All
       }
@@ -103,8 +104,8 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
                   className="size-4"
                   checked={selected.includes(r.code)}
                   onChange={()=>toggle(r.code)}
-                  disabled={!isVip && !!userCode && r.code !== userCode}
-                  title={!isVip && userCode && r.code !== userCode ? "VIP required for additional countries" : ""}
+                  disabled={!(isFFA() || isVip) && !!userCode && r.code !== userCode}
+                  title={!(isFFA() || isVip) && userCode && r.code !== userCode ? "VIP required for additional countries" : ""}
                 />
                 <span className="text-xl">{r.flag}</span>
                 <span className="flex-1">{r.name}</span>
