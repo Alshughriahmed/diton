@@ -1,5 +1,6 @@
 "use client";
 import "@/app/chat/metaInit.client";
+import "@/app/chat/peerMetaUi.client";
 // startRtcFlowOnce guard marker
 
 import "./freeForAllBridge";
@@ -72,6 +73,25 @@ export default function ChatClient(){
 
   // Peer meta state for real-time updates
   const [peerMeta, setPeerMeta] = useState<any>(null);
+  
+  // Listen for ditona:peer-meta-ui events
+  useEffect(() => {
+    const handleMetaUI = (event: any) => {
+      try {
+        const meta = event.detail;
+        if (meta) {
+          setPeerMeta(meta);
+          __updatePeerBadges(meta);
+          console.log('UI_META', meta);
+        }
+      } catch {}
+    };
+    
+    if (typeof window !== "undefined") {
+      window.addEventListener('ditona:peer-meta-ui', handleMetaUI);
+      return () => window.removeEventListener('ditona:peer-meta-ui', handleMetaUI);
+    }
+  }, []);
 
   const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
@@ -141,7 +161,9 @@ export default function ChatClient(){
       try {
         // Check if we have a valid pairId from current RTC connection
         const currentPairId = (data && data.pairId) || pair.id;
-        if (!currentPairId) {
+        const dc = (globalThis as any).__ditonaDataChannel;
+        
+        if (!currentPairId || (!dc || dc.readyState !== 'open')) {
           toast('لا يوجد اتصال نشط للإعجاب');
           return;
         }
@@ -151,9 +173,9 @@ export default function ChatClient(){
         setLike(newLikeState);
         
         // Send via DataChannel for instant peer update
-        const dc = (globalThis as any).__ditonaDataChannel;
-        if (dc && dc.readyState === 'open') {
-          dc.send(JSON.stringify({ t:"like", pairId: currentPairId, liked: newLikeState }));
+        const dataChannel = (globalThis as any).__ditonaDataChannel;
+        if (dataChannel && dataChannel.readyState === 'open') {
+          dataChannel.send(JSON.stringify({ t:"like", pairId: currentPairId, liked: newLikeState }));
         }
         
         // Send to backend for persistence
