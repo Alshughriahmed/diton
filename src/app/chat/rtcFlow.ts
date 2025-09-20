@@ -123,6 +123,7 @@ let state: RtcState = {
   pairId: null,
   ac: null,
   pc: null,
+  remoteStream: null,
   lastPeer: null,
   prevForOnce: null
 };
