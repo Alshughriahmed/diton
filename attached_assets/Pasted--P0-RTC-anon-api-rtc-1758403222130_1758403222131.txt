@@ -1,0 +1,58 @@
+نحن ما زلنا في #P0 (ثبات الإنتاج/مسارات الـRTC). الخطأ الحالي نتج عن دالة توقيع الـanon في ‎/api/rtc/init‎ التي لا تُرجع نصًا (return فارغ) ففشل بناء الـPreview.
+
+إن كنت موافقًا على تمريرها لوكيل Replit، فهذه مذكرة المهمة المختصرة (جاهزة له حرفيًا):
+
+الهدف: إغلاق P0 بإصلاح تهيئة الهوية ومسارات RTC حتى تعمل المطابقة على الإنتاج.
+
+الفرع: rc/fix-anon-init-20250920-211029 (استمر عليه).
+
+الملفات:
+
+src/app/api/rtc/init/route.ts
+
+src/app/api/anon/init/route.ts (جديد إن لم يوجد)
+
+تأكد أن أي middleware.ts لا يعترض /api/*.
+
+المطلوب بدقة:
+
+في rtc/init/route.ts:
+
+اجعل دالة التوقيع تُرجع string: ${b64}.${sig} (ليس return;).
+
+عند POST: أنشئ UUID خام raw, احسب b64 وsig بمفتاح process.env.ANON_SIGNING_SECRET، واضبط الكوكي:
+
+Set-Cookie: anon=<raw>.<sig>; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax; Secure
+
+
+أعد {ok:true}, وأضف cache-control: no-store, وصدّر export const runtime='nodejs'; export const dynamic='force-dynamic'.
+
+أنشئ/ثبت api/anon/init (GET وPOST) يقوم بنفس منطق توليد الكوكي الموقّع ويعيد {ok:true}.
+
+متغيّرات Vercel: فعّل ANON_SIGNING_SECRET (موجود الآن) + FREE_FOR_ALL=1 وNEXT_PUBLIC_FREE_FOR_ALL=1.
+
+معايير القبول (يُتحقق بها بـ curl):
+
+POST /api/age/allow ⇒ 200 + كوكي ageok=1.
+
+POST /api/rtc/init ⇒ 200 + كوكي anon يحوي نقطة (<uuid>.<sig>).
+
+POST /api/rtc/enqueue ⇒ 204.
+
+جلستان متوازيتان:
+
+جلسة A: POST /api/rtc/matchmake ⇒ 200 يحوي pairId وrole:"caller".
+
+جلسة B بعد ≤1s: POST /api/rtc/matchmake ⇒ 200/204 مع found:true وrole:"callee".
+
+عدم كسر FFA: POST /api/message/allow تحت FFA ⇒ 200.
+
+عدم اعتراض middleware: أي /api/* لا يُعاد توجيهه إلى HTML.             تعديل ملفين فقط: src/app/api/rtc/init/route.ts وsrc/app/api/anon/init/route.ts (إن لم يوجد فأنشئه). ممنوع أي تغييرات أخرى أو إعادة هيكلة/تنسيق.
+
+ممنوع تغيير الحزم أو تشغيل npm i. لا تعديل على middleware.ts إلا إذا كان يعترض /api/*.
+
+منطق الكوكي: anon=<uuid>.<hmac> مع HMAC-SHA256( base64url(uuid), ANON_SIGNING_SECRET ). أعد {ok:true} وأضف runtime='nodejs' وdynamic='force-dynamic' وCache-Control: no-store.
+
+ارفق تقرير Diff مختصر + لوج تشغيل 4 فحوص curl فقط (age/allow, rtc/init, enqueue, matchmake A/B) مع الأكواد.
+
+سياسة “Minimal-Diff” صريحة: أي تعديل خارج النطاق يُعتبر فشلًا.  

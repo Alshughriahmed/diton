@@ -8,7 +8,7 @@ function signAnon(raw: string, secret?: string): string {
   if (!secret) return raw;
   const b64 = Buffer.from(raw, "utf8").toString("base64url");
   const sig = createHmac("sha256", secret).update(b64).digest("hex");
-  return ;
+  return `${b64}.${sig}`;
 }
 
 export async function POST() {
@@ -24,7 +24,7 @@ export async function POST() {
   const res = NextResponse.json({ ok: true }, { status: 200 });
   res.headers.set(
     "set-cookie",
-    
+    `anon=${value}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax; Secure`
   );
   res.headers.set("Cache-Control", "no-store");
   res.headers.set("Referrer-Policy", "no-referrer");
