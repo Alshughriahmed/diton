@@ -200,12 +200,13 @@ try {
     // Close peer connection and stop tracks
     if (state.pc) {
       try {
-        state.pc.getSenders?.().forEach(sender => {
+        const pc = state.pc as RTCPeerConnection;
+        pc.getSenders?.().forEach((sender: RTCRtpSender) => {
           try {
             if (sender.track) sender.track.stop();
           } catch {}
         });
-        state.pc.close();
+        pc.close();
       } catch {}
       state.pc = null;
     }
