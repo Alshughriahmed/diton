@@ -11,7 +11,21 @@ function signAnon(raw: string, secret?: string): string {
   return `${b64}.${sig}`;
 }
 
-export async function POST() {
+export async function POST(req: Request) {
+  // تحقق من وجود anon cookie صالح
+  const cookies = req.headers.get('cookie') || '';
+  const anonMatch = cookies.match(/anon=([^;]+)/);
+  const existingAnon = anonMatch?.[1];
+  
+  // إن كان anon موجود ويحتوي نقطة (موقّع) فلا حاجة لإعادة الإنشاء
+  if (existingAnon && existingAnon.includes('.')) {
+    const res = NextResponse.json({ ok: true }, { status: 200 });
+    res.headers.set("Cache-Control", "no-store");
+    res.headers.set("Referrer-Policy", "no-referrer");
+    return res;
+  }
+
+  // إنشاء anon جديد
   const raw =
     (globalThis.crypto?.randomUUID?.() as string | undefined) ??
     Math.random().toString(36).slice(2);
