@@ -111,6 +111,7 @@ interface RtcState {
   pairId: string | null;
   ac: AbortController | null;
   pc: RTCPeerConnection | null;
+    remoteStream: MediaStream | null;
   lastPeer: string | null;
   prevForOnce: string | null;
 }
