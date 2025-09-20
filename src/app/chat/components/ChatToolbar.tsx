@@ -1,5 +1,4 @@
 "use client";
-import { isFFA } from "@/utils/ffa";
 import { useState, useEffect } from "react";
 import { emit } from "@/utils/events";
 import { useVip } from "@/hooks/useVip";
@@ -9,6 +8,8 @@ export default function ChatToolbar(){
   const [micOn,setMicOn]=useState(true);
   const [paused,setPaused]=useState(false);
   const { isVip } = useVip();
+  const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
+
   useEffect(()=>{ // sync with messaging bar
     const onOpen = ()=>setMsgOpen(true);
     const onClose= ()=>setMsgOpen(false);
@@ -20,12 +21,12 @@ export default function ChatToolbar(){
   return (
     <>
       {/* Prev / Next icons large, no boxes */}
-      <button data-ui="btn-prev" 
-        onClick={()=>{ if(isVip || isFFA()) emit("ui:prev"); }}
-        disabled={!(isFFA() || isVip)}
-        title={!(isFFA() || isVip) ? "VIP only" : "Previous match"}
-        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!(isFFA() || isVip) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
-      <button data-ui="btn-next" onClick={()=>emit("ui:next")}
+      <button 
+        onClick={()=>{ if(isVip || freeForAll) emit("ui:prev"); }}
+        disabled={!isVip && !freeForAll}
+        title={!isVip && !freeForAll ? "VIP only" : "Previous match"}
+        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!isVip ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
+      <button onClick={()=>emit("ui:next")} data-ui="btn-next"
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[50] text-3xl sm:text-4xl select-none">⏭️</button>
 
       {/* Bottom toolbar fixed forever */}
@@ -33,13 +34,13 @@ export default function ChatToolbar(){
                style={{bottom: "calc(env(safe-area-inset-bottom) + 8px)"}}>
         <div className="relative flex flex-row-reverse items-center gap-2 sm:gap-3 justify-center">
           {/* 💬 messages */}
-          <button data-ui="btn-messages"
+          <button
             onClick={()=>{ const ev = msgOpen?"ui:closeMessaging":"ui:openMessaging"; setMsgOpen(!msgOpen); emit(ev); }}
             aria-pressed={msgOpen}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg border text-white ${msgOpen?'bg-purple-600/40 border-purple-400/60':'bg-black/20 border-white/20 hover:bg-white/10'}`}>💬</button>
 
           {/* ❤ like */}
-          <button data-ui="btn-like" onClick={()=>emit("ui:like",{isLiked:true})}
+          <button onClick={()=>emit("ui:like",{isLiked:true})}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40">❤</button>
 
           {/* 🔊 remote audio */}

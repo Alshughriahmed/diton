@@ -1,0 +1,131 @@
+مهمة الزميل: تثبيت البناء والنشر على Vercel
+الهدف
+
+إزالة أخطاء البناء TypeScript/JSX.
+
+تفعيل Preview على Vercel يعمل فيه تدفّق RTC كاملًا.
+
+تسليم تقرير قبول + حزمة Zip جاهزة.
+
+السياق السريع
+
+الفرع الحالي: rc/restore-20250920-020252-ee9fe79.
+
+آخر خطأ بناء: نقص حقل في النوع RtcState داخل src/app/chat/rtcFlow.ts:
+
+Property 'remoteStream' is missing in type … (سطر ~119 عند تهيئة state)
+
+
+سبق إصلاح ازدواج data-ui="btn-next" في ChatToolbar.tsx.
+
+التعديلات المطلوبة (Minimal-Diff)
+
+إصلاح أنواع rtcFlow
+الملف: src/app/chat/rtcFlow.ts
+
+ضمن تعريف النوع RtcState أضف:
+
+remoteStream: MediaStream | null;
+
+
+ضمن تهيئة الحالة let state: RtcState = { … } أضف:
+
+remoteStream: null,
+
+
+اترك أي خصائص قائمة كما هي. لا تغيّر منطق stop() سوى الاعتماد على remoteStream?.getTracks()?.forEach(t=>t.stop()).
+
+تأكيد إزالة أي ازدواج خصائص JSX
+
+الملف: src/app/chat/components/ChatToolbar.tsx
+
+تأكد عدم تكرار أي سمة data-ui="…" داخل نفس <button>. خصوصًا زر btn-next. البناء كان يفشل بسبب تكرار الاسم.
+
+توحيد بوابة FFA وقت التشغيل
+
+اجعل تمكين الأزرار يعتمد على ((globalThis as any).__vip?.FREE_FOR_ALL) || isVip داخل الـrender، وليس process.env.
+
+المراجعة تشمل:
+src/app/chat/components/ChatToolbar.tsx,
+src/components/filters/{GenderSelect,CountrySelect}.tsx,
+src/components/chat/{GenderFilter,CountryFilter}.tsx.
+
+لا تغيّر منطق الخادم.
+
+مسار /api/rtc/init موجود ويعمل
+
+تأكد أن الملف src/app/api/rtc/init/route.ts موجود ويعيد 200 {"ok":true} ويضبط كوكي anon عند الحاجة.
+
+يجب أن يصدّر:
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+
+لا تغييرات وظيفية أخرى على مسارات RTC.
+
+إعدادات Vercel المطلوبة
+
+FREE_FOR_ALL=1
+
+NEXT_PUBLIC_FREE_FOR_ALL=1
+
+باقي الأسرار كما هي (Upstash, Twilio, ANON_SIGNING_SECRET).
+
+اختبارات القبول
+
+A) بناء الـPreview ينجح
+
+فتح URL للفرع:
+https://diton-git-<branch-kebab>-ahmed-alshughris-projects.vercel.app
+
+لا أخطاء build.
+
+B) فحوص RTC بالـcurl
+
+من جهازك:
+
+POST /api/age/allow ⇒ 200 مع كوكي ageok=1.
+
+POST /api/rtc/init ⇒ 200.
+
+POST /api/rtc/enqueue ⇒ 204.
+
+جلسة مزدوجة بجارين Cookies:
+
+A: POST /api/rtc/matchmake ⇒ جسم يحوي pairId وrole:"caller" أو found:true.
+
+B: POST /api/rtc/matchmake ⇒ found:true بنفس pairId وrole:"callee".
+
+استقصاء answer/ice قبل التبادل ⇒ 204.
+
+C) فحص واجهة /chat يدوي
+
+ظهور rtc:phase="searching" ≤ 2s بعد الدخول.
+
+تمكين Prev/Filters/Beauty عندما FFA=1.
+
+لا رسالة “لا يوجد اتصال نشط” عندما الـDC open.
+
+التسليمات المطلوبة
+
+PR إلى main بعنوان:
+fix(build): add remoteStream to RtcState + FFA runtime gating
+
+رابط Preview على Vercel + لقطة شاشة Build successful.
+
+ملف تقرير قبول مختصر تحت _ops/reports/<stamp>-acceptance.txt يتضمن:
+
+نتائج curl للأربعة مسارات.
+
+لقطات من DevTools تبين rtc:phase, rtc:pair.
+
+ملف Zip للكود بعد الإصلاح تحت _ops/archives/<stamp>-rc-preview.zip.
+
+قيود
+
+ممنوع تغييرات منطقية على RTC أو UI أبعد من المطلوب أعلاه.
+
+ممنوع تعديل الـAPI خلاف runtime/dynamic أو /init الموجود.
+
+أي تعديل إضافي يستلزم ذكره صراحة في التقرير.
