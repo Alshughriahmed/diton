@@ -12,8 +12,8 @@ function signAnon(raw: string, secret?: string) {
   return `${raw}.${sig}`;
 }
 
-function setAnonCookie() {
-  const jar = cookies();
+async function setAnonCookie() {
+  const jar = await cookies();
   const existing = jar.get("anon")?.value;
   const raw = existing?.split(".")[0] || randomUUID();
   const secret = process.env.ANON_SIGNING_SECRET;
@@ -29,7 +29,7 @@ function setAnonCookie() {
 }
 
 export async function POST() {
-  setAnonCookie();
+  await setAnonCookie();
   return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 }
 
