@@ -8,7 +8,7 @@ export default function ChatToolbar(){
   const [micOn,setMicOn]=useState(true);
   const [paused,setPaused]=useState(false);
   const { isVip } = useVip();
-  const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+  const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
 
   useEffect(()=>{ // sync with messaging bar
     const onOpen = ()=>setMsgOpen(true);

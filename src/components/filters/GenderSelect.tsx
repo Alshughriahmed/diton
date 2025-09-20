@@ -5,7 +5,7 @@ import { GENDERS } from "@/data/genders";
 
 export default function GenderSelect(){
   const { gender, setGender, isVip } = useFilters();
-  const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+  const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
   return (
     <div className="absolute top-2 right-40 z-50">
       <div className="inline-flex items-center gap-2">

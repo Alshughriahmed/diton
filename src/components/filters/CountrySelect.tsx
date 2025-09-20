@@ -7,7 +7,7 @@ import { emit } from "@/utils/events";
 
 export default function CountrySelect(){
   const { countries, setCountries, isVip } = useFilters();
-  const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+  const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [userCountry, setUserCountry] = useState<string | null>(null);
