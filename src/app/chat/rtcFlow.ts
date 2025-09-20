@@ -160,6 +160,26 @@ function clearLocalStorage() {
 
 // Complete cleanup and stop
 
+// Selective teardown with option to keep local stream alive
+export function teardownPeer(mode: "keep-local" | "full" = "full") {
+  try { safeAbort(state.ac); } catch {}
+  state.ac = null;
+  try { state.pc?.close(); } catch {}
+  state.pc = null;
+  try { state.remoteStream?.getTracks().forEach(t=>t.stop()); } catch {}
+  state.remoteStream = null;
+  
+  if (mode === "keep-local") {
+    // Keep localStream alive - only teardown peer connection
+    state.phase = 'idle';
+    if (onPhaseCallback) onPhaseCallback('idle');
+    return;
+  }
+  
+  // Full teardown mode
+  stop("full");
+}
+
 export function stop(mode: "full"|"network" = "full"){
   // partial-stop for network rematch
   try { safeAbort(state.ac); } catch {}
@@ -798,6 +818,6 @@ export function stopRtcSession(reason: string = "user") {
 try{
   window.addEventListener("ui:prev", ()=>{
     try{ state.prevForOnce = state.lastPeer; }catch{}
-    try{ next(); }catch{}
+    try{ teardownPeer("keep-local"); }catch{}
   });
 }catch{}

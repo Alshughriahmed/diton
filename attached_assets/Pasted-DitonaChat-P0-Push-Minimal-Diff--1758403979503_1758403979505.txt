@@ -1,0 +1,87 @@
+DitonaChat — P0 فقط (بدون Push)
+القيود
+
+لا حذف/تعطيل أي ميزة.
+
+Minimal-Diff + نسخ احتياطي لكل ملف إلى _ops/backups/….
+
+تقرير قبول إلى _ops/reports/….
+
+لا تدفع إلى GitHub. أعطني Zip نهائي فقط.
+
+المطلوب (خطوات تنفيذية)
+
+توقيع الهوية المجهولة
+
+أضف مسار src/app/api/anon/init/route.ts (يقبل GET/POST) يُنشئ anon=<uuid>.<hmac> لمدة سنة.
+
+ثبّت دالة signAnon(raw:string, secret:string): string وترجع القيمة الموقَّعة (لا ترجع undefined).
+
+عدّل src/app/api/rtc/init/route.ts ليتحقق: إن لم توجد anon أو لا تحتوي نقطة → أنشئ/أعد التوقيع ثم return {ok:true}.
+
+أضف export const runtime="nodejs" وexport const dynamic="force-dynamic" للمسارين.
+
+الرؤوس: Cache-Control: no-store, Referrer-Policy: no-referrer.
+
+بوابة /api لا يعترضها middleware
+
+تأكد أن middleware.ts يستثني تمامًا /api/* (لا HTML/Middleware redirect لمسارات API).
+
+مسارات RTC الأساسية تعمل
+
+تأكد وجود/صحة:
+src/app/api/rtc/{init,enqueue,matchmake,offer,answer,ice}/route.ts
+
+matchmake يعيد دائمًا عند found:true: { found:true, pairId, role, peerAnonId } (قراءة واحدة).
+
+أضف dynamic="force-dynamic" للمسارات الحساسة.
+
+/api/message/allow
+
+إن كان FREE_FOR_ALL=1 أو NEXT_PUBLIC_FREE_FOR_ALL=1 → رجّع 200 {"allow":true} فورًا.
+
+غير ذلك: استخدم extractAnonId للتحقق (بدون كسر سلوك VIP).
+
+P0 في العميل (ثبات الاتصال فقط)
+
+في src/app/chat/rtcFlow.ts:
+
+استبدل أي استدعاء مباشر state.ac.abort() بـ safeAbort(state.ac); state.ac=null;.
+
+أضف function safeAbort(ac?:AbortController|null){ try{ac?.abort()}catch{}} مع كتم “AbortError”.
+
+أدخل مسار هدم انتقائي teardownPeer("keep-local") في Next/Prev ليبقي localStream حيًّا (منع الشاشة السوداء).
+
+(لا تغيّر UI أخرى في هذه الدفعة).
+
+ICE صلابة (حدّ أدنى)
+
+تأكد من Debounce لإعادة تشغيل ICE عند disconnected/failed مع تفضيل TURN :443 أولًا (إن وُجدت الدالة، ثبّت ترتيب الـICEServers فقط؛ لا إعادة هيكلة كبيرة).
+
+اختبارات قبول (يشغّلها الوكيل ويضع مخرجاتها في التقرير)
+
+Curl من بيئة التشغيل:
+
+POST /api/age/allow ⇒ 200 ويضع ageok=1.
+
+POST /api/rtc/init ⇒ 200 ويضع anon=<uuid>.<hmac> (وجود نقطة يثبت التوقيع).
+
+POST /api/rtc/enqueue ⇒ 204.
+
+جلسـتان بجارَين (JAR_A/JAR_B):
+
+POST /api/rtc/matchmake:
+
+A يعيد 200 مع {pairId, role:"caller"}
+
+B يعيد 200 مع {found:true, pairId ذاته, role:"callee", peerAnonId}.
+
+POST /api/message/allow تحت FFA ⇒ 200 {"allow":true}.
+
+سجّل الأكواد والرؤوس والكوكيز في _ops/reports/<stamp>-p0-acceptance.txt.
+
+أنشئ Zip نهائي مطابق للجذر بعد التعديلات: _ops/backups/<stamp>-p0-ready.zip.
+
+إن ظهرت عقبة تمنع تحقيق القبول
+
+اسمح لك بإصلاحات موضعية فقط ضمن القيود أعلاه (بدون حذف ميزة، وMinimal-Diff)، ثم وثّق القرار في بداية تقرير القبول.

@@ -1,27 +1,38 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { createHmac, randomUUID } from "crypto";
+import { randomUUID, createHmac } from "crypto";
+
 export const runtime = "nodejs";
-function sign(v: string, sec: string) {
-  const b = Buffer.from(v, "utf8").toString("base64url");
-  const s = createHmac("sha256", sec).update(b).digest("hex");
-  return `${b}.${s}`;
+export const dynamic = "force-dynamic";
+
+function signAnon(raw: string, secret?: string) {
+  if (!secret) return raw; // يسمح بالعمل بدون توقيع لو السر غير مضبوط
+  const b64 = Buffer.from(raw, "utf8").toString("base64url");
+  const sig = createHmac("sha256", secret).update(b64).digest("hex");
+  return `${raw}.${sig}`;
 }
+
+function setAnonCookie() {
+  const jar = cookies();
+  const existing = jar.get("anon")?.value;
+  const raw = existing?.split(".")[0] || randomUUID();
+  const secret = process.env.ANON_SIGNING_SECRET;
+  const value = signAnon(raw, secret);
+  jar.set("anon", value, {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    maxAge: 60 * 60 * 24 * 365,
+  });
+  return value;
+}
+
+export async function POST() {
+  setAnonCookie();
+  return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+}
+
 export async function GET() {
-  const sec = process.env.ANON_SIGNING_SECRET || process.env.VIP_SIGNING_SECRET || (process.env.NODE_ENV !== 'production' ? 'dev-anon-secret' : "");
-  const id = randomUUID();
-  
-  let cookie: string;
-  if (process.env.NODE_ENV !== 'production' && !process.env.ANON_SIGNING_SECRET && !process.env.VIP_SIGNING_SECRET) {
-    // In dev without secrets, use raw ID for easier testing
-    cookie = id;
-  } else if (sec) {
-    cookie = sign(id, sec);
-  } else {
-    return NextResponse.json({ ok:false, error:"secret-missing" }, { status: 500 });
-  }
-  
-  const res = NextResponse.json({ ok:true, anonId:id });
-  res.cookies.set("anon", cookie, { httpOnly:true, secure:true, sameSite:"lax", path:"/", maxAge:60*60*24*180 });
-  return res;
+  return POST();
 }
-export const dynamic="force-dynamic";
