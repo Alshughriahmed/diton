@@ -27,9 +27,11 @@ async function upstashGetMeta(anonId:string){
 
 export async function POST(
 _req: NextRequest) {
+  const cookieStore = await cookies();
+  const headerStore = await headers();
   const raw =
-    cookies().get("anon")?.value ??
-    headers().get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
+    cookieStore.get("anon")?.value ??
+    headerStore.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
     null;
 
   const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
