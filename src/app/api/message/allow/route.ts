@@ -1,3 +1,6 @@
+export const runtime = "nodejs"; 
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { rateLimit } from "@/lib/rtc/upstash";
 import { extractAnonId } from "@/lib/rtc/auth";
@@ -29,6 +32,14 @@ async function upstashPipeline(cmds: any[]): Promise<any[]|null> {
 }
 
 export async function POST(req: NextRequest) {
+  // FFA fast-path
+  if (process.env.FREE_FOR_ALL === "1" || process.env.FREE_FOR_ALL === "true") {
+    return NextResponse.json({ ok: true, reason: "ffa" }, { 
+      status: 200, 
+      headers: { "cache-control": "no-store" } 
+    });
+  }
+
   const anon = anonFrom(req);
   const { pairId }: AllowBody = await req.json().catch(()=>({})) as any;
 
@@ -72,5 +83,3 @@ export async function POST(req: NextRequest) {
   const allow = cnt <= limit;
   return NextResponse.json({ allow, tier: "free", count: cnt, limit }, { status: 200, headers: hdr });
 }
-export const runtime="nodejs";
-export const dynamic="force-dynamic";

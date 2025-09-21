@@ -2,13 +2,14 @@
 import { useState, useEffect } from "react";
 import { emit } from "@/utils/events";
 import { useVip } from "@/hooks/useVip";
+import { useFFA } from "@/hooks/useFFA";
 
 export default function ChatToolbar(){
   const [msgOpen,setMsgOpen]=useState(false);
   const [micOn,setMicOn]=useState(true);
   const [paused,setPaused]=useState(false);
   const { isVip } = useVip();
-  const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
+  const freeForAll = useFFA();
 
   useEffect(()=>{ // sync with messaging bar
     const onOpen = ()=>setMsgOpen(true);
