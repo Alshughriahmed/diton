@@ -35,7 +35,9 @@ _req: NextRequest) {
     null;
 
   const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
-  if (!anonId) return NextResponse.json({ error: "anon-required" }, { status: 401 });
+  if (!anonId) {
+    return NextResponse.json({ error: "anon-required" }, { status: 401, headers: { "cache-control": "no-store" } });
+  }
   let prevFor:string|null=null;
   let filters: {gender?: string, countries?: string[]} = {};
   

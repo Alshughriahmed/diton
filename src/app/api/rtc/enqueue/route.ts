@@ -46,7 +46,9 @@ req: NextRequest) {
       null;
 
     const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
-    if (!anonId) return NextResponse.json({ error: "anon-required" }, { status: 401 });
+    if (!anonId) {
+      return NextResponse.json({ error: "anon-required" }, { status: 401, headers: { "cache-control": "no-store" } });
+    }
 
     const b: any = await req.json().catch(() => ({}));
     const gender = String(b.gender || "u").toLowerCase();
