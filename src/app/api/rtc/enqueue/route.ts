@@ -2,7 +2,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 import { NextRequest, NextResponse } from "next/server";
-import { extractAnonId } from "@/lib/rtc/auth";
+import { cookies, headers } from "next/headers";
+import { verifySigned } from "@/lib/rtc/auth";
 import { enqueue } from "@/lib/rtc/mm";
 import { zadd } from "@/lib/rtc/upstash";
 import { requireVip } from "@/utils/vip";
@@ -37,8 +38,13 @@ async function saveUserMetaUpstash(anonId:string, meta:any){
 export async function POST(
 req: NextRequest) {
   try {
-    const anon = extractAnonId(req);
-    if (!anon) return NextResponse.json({ error: "anon-required" }, { status: 401 });
+    const raw =
+      cookies().get("anon")?.value ??
+      headers().get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
+      null;
+
+    const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
+    if (!anonId) return NextResponse.json({ error: "anon-required" }, { status: 401 });
 
     const b: any = await req.json().catch(() => ({}));
     const gender = String(b.gender || "u").toLowerCase();
@@ -46,16 +52,16 @@ req: NextRequest) {
     const filterGenders = String(b.filterGenders || "all");
     const filterCountries = String(b.filterCountries || "ALL");
 
-    await enqueue(anon, { gender, country }, { genders: filterGenders, countries: filterCountries });
+    await enqueue(anonId, { gender, country }, { genders: filterGenders, countries: filterCountries });
 // VIP weight: bring vip to the front
 try {
   const isVip = await requireVip();
   if (isVip) {
     const pri = Date.now() - 600000; // 10min earlier
     await Promise.all([
-      zadd(`rtc:q`, pri, anon),
-      zadd(`rtc:q:gender:${gender.toLowerCase()}`, pri, anon),
-      zadd(`rtc:q:country:${country.toUpperCase()}`, pri, anon),
+      zadd(`rtc:q`, pri, anonId),
+      zadd(`rtc:q:gender:${gender.toLowerCase()}`, pri, anonId),
+      zadd(`rtc:q:country:${country.toUpperCase()}`, pri, anonId),
     ]);
   }
 } catch {}

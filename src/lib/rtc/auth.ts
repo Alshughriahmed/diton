@@ -1,6 +1,6 @@
 import { createHmac } from "crypto";
 
-function verifySigned(raw: string, secret: string) {
+export function verifySigned(raw: string, secret: string) {
   const [body, sig] = (raw || "").split(".");
   if (!body || !sig) return null;
   const calc = createHmac("sha256", secret).update(body).digest("hex");

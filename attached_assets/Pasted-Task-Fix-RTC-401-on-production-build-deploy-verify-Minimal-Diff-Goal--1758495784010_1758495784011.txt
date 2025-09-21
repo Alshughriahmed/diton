@@ -1,0 +1,140 @@
+Task: Fix RTC 401 on production + build + deploy + verify (Minimal-Diff)
+
+Goal
+
+مطابقة تعمل على الإنتاج 100%:
+
+enqueue ⇒ 204 للطرفين.
+
+matchmake ⇒ 200 مع found=true + pairId واحد + role مختلف.
+
+تحت FFA: message/allow ⇒ 200.
+
+في الكود: حدث dc-open موجود، ولا استخدام عميل لـprocess.env.NEXT_PUBLIC_FREE_FOR_ALL.
+
+Constraints
+
+Minimal-Diff فقط. لا حذف ميزات ولا تغيير VIP.
+
+إذا ظهر خلل أثناء التنفيذ، أصلحه موضعيًا دون كسر ميزات.
+
+تقرير واحد: _ops/reports/agent_front_rtc_<UTC>.log مع مفاتيح القبول.
+
+A) Fix build + cookie handling
+
+إزالة التكرار الذي يكسر البناء
+
+في:
+
+src/app/api/rtc/enqueue/route.ts
+
+src/app/api/rtc/matchmake/route.ts
+
+أبقِ التعريفات التالية مرة واحدة فقط في أعلى كل ملف واحذف أي نسخ مكررة لاحقًا:
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+التقاط كوكي anon بشكل موثوق
+
+في نفس الملفين، قبل التحقق من الهوية:
+
+تأكد من وجود الاستيرادات:
+
+import { cookies, headers } from "next/headers";
+import { NextResponse } from "next/server";
+import { verifySigned } from "@/lib/rtc/auth";
+
+
+استخرج الكوكي بهذه الصيغة ثم تحقّق:
+
+const raw =
+  cookies().get("anon")?.value ??
+  headers().get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
+  null;
+
+const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
+if (!anonId) return NextResponse.json({ error: "anon-required" }, { status: 401 });
+
+
+تحقق من auth
+
+في src/lib/rtc/auth.ts يجب أن تكون verifySigned هكذا:
+
+function verifySigned(raw: string, secret: string) {
+  const [body, sig] = (raw || "").split(".");
+  if (!body || !sig) return null;
+  const calc = createHmac("sha256", secret).update(body).digest("hex");
+  if (calc !== sig) return null;
+  try { return Buffer.from(body, "base64url").toString("utf8"); }
+  catch { return body; } // UUID raw
+}
+
+
+middleware
+
+تأكد ألا يتدخل أي middleware.ts مع /api/*. إن وُجد اعتراض، استثنِ /api.
+
+B) Build → Push → Vercel
+
+شغّل: pnpm -s build أو npm run -s build. أصلح أي أخطاء بناء ناتجة عن تكرار التعريفات فقط.
+
+نفّذ commit واحد بعنوان:
+fix(api): force node runtime and robust anon cookie for rtc
+
+ادفع إلى الفرع ثم ادمج إلى main.
+
+في Vercel: تأكد من وجود ANON_SIGNING_SECRET, FREE_FOR_ALL=1, NEXT_PUBLIC_FREE_FOR_ALL=1.
+نفّذ Clear build cache ثم انتظر نجاح النشر.
+
+C) Production A/B checks (www.ditonachat.com
+)
+
+نفّذ بالترتيب، جلستين مستقلتين (A/B) بملفين كوكيز مختلفين:
+
+BASE=https://www.ditonachat.com
+# A
+curl -i -sS $BASE/api/rtc/env
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt $BASE/api/age/allow
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt $BASE/api/rtc/init
+curl -i -sS -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"XX","filterGenders":"all","filterCountries":"ALL"}' -c A.txt -b A.txt $BASE/api/rtc/enqueue
+# B
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt $BASE/api/age/allow
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt $BASE/api/rtc/init
+curl -i -sS -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"YY","filterGenders":"all","filterCountries":"ALL"}' -c B.txt -b B.txt $BASE/api/rtc/enqueue
+# matchmake
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt $BASE/api/rtc/matchmake
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt $BASE/api/rtc/matchmake
+# message/allow تحت FFA (استخدم pairId من أعلاه)
+# curl -i -sS -X POST -H 'content-type: application/json' -d "{\"pairId\":\"<PAIR>\"}" -c A.txt -b A.txt $BASE/api/message/allow
+
+
+استخلص الأكواد والحقول (found, pairId, role) واكتبها في التقرير.
+
+D) Acceptance keys (must all be 1)
+
+اكتب في _ops/reports/agent_front_rtc_<UTC>.log:
+
+ENV_OK (env يُظهر FFA=1)
+
+AGE_OK (200 للطرفين)
+
+ANON_OK (200 للطرفين مع كوكي anon)
+
+ENQUEUE_OK (204 للطرفين)
+
+MATCH_OK (200 + found=true + pairId موحّد + roles مختلفة)
+
+MSG_ALLOW_OK (200 تحت FFA)
+
+DC_OPEN_OK (تأكيد وجود بث dc-open في rtcFlow.ts)
+
+CLIENT_ENV_REMOVED (لا process.env.NEXT_PUBLIC_FREE_FOR_ALL في العميل)
+
+أضف مقتطفَي JSON من matchmake للطرفين يوضحان pairId وrole.
+
+إذا فشل أي بند:
+
+أصلح السبب مباشرةً بحد أدنى تغييرات (مثل قراءة الكوكي أو تكرار export) ثم أعد الفحص حتى تنجح جميع المفاتيح = 1.

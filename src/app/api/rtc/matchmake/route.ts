@@ -2,7 +2,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 import { NextRequest, NextResponse } from "next/server";
-import { extractAnonId } from "@/lib/rtc/auth";
+import { cookies, headers } from "next/headers";
+import { verifySigned } from "@/lib/rtc/auth";
 import { matchmake, pairMapOf } from "@/lib/rtc/mm";
 import { setPx } from "@/lib/rtc/upstash";
 
@@ -26,8 +27,13 @@ async function upstashGetMeta(anonId:string){
 
 export async function POST(
 _req: NextRequest) {
-  const anon = extractAnonId(_req);
-  if (!anon) return NextResponse.json({ error:"anon-required" }, { status:401 });
+  const raw =
+    cookies().get("anon")?.value ??
+    headers().get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
+    null;
+
+  const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
+  if (!anonId) return NextResponse.json({ error: "anon-required" }, { status: 401 });
   let prevFor:string|null=null;
   let filters: {gender?: string, countries?: string[]} = {};
   
@@ -48,7 +54,7 @@ _req: NextRequest) {
     }
   }catch{}
   
-  if (prevFor) { try{ await setPx(`rtc:prev-wish:${anon}`, String(prevFor), 7000); }catch{} }
+  if (prevFor) { try{ await setPx(`rtc:prev-wish:${anonId}`, String(prevFor), 7000); }catch{} }
 
   // Update user's filters and attributes in queue if filters provided
   if (filters.gender || filters.countries) {
@@ -68,13 +74,13 @@ _req: NextRequest) {
       };
       
       // Update queue with new filters
-      await enqueue(anon, attrs, enqueueFilt);
+      await enqueue(anonId, attrs, enqueueFilt);
     } catch (error) {
       console.warn('[matchmake] Failed to update filters:', error);
     }
   }
 
-  const mapped = await pairMapOf(anon);
+  const mapped = await pairMapOf(anonId);
   if (mapped) {
     // Fetch peer info from the pair record
     let peerAnonId = null;
@@ -104,7 +110,7 @@ _req: NextRequest) {
         
         // Fallback: try to get from rtc:last if pair fetch failed
         if (!peerAnonId) {
-          const lastKey = `rtc:last:${anon}`;
+          const lastKey = `rtc:last:${anonId}`;
           const lr = await fetch(endpoint, {
             method: "POST",
             headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
@@ -126,7 +132,7 @@ _req: NextRequest) {
     }, { status: 200 });
   }
   // Call matchmake with updated filters context 
-  const res = await matchmake(anon);
+  const res = await matchmake(anonId);
   
 if (res.status === 200) {
   const body:any = res.body || {};
@@ -156,8 +162,8 @@ if (res.status === 200) {
       // Set last connection records for both users (TTL ~ 90s)
       try{
         const setBody = JSON.stringify([
-          ["SET", `rtc:last:${anon}`, body.peerAnonId, "PX", "90000"],
-          ["SET", `rtc:last:${body.peerAnonId}`, anon, "PX", "90000"]
+          ["SET", `rtc:last:${anonId}`, body.peerAnonId, "PX", "90000"],
+          ["SET", `rtc:last:${body.peerAnonId}`, anonId, "PX", "90000"]
         ]);
         await fetch(url + "/pipeline", {
           method:"POST",
