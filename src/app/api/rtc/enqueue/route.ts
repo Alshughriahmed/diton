@@ -1,11 +1,11 @@
-export const runtime="nodejs";
-export const dynamic="force-dynamic";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 import { NextRequest, NextResponse } from "next/server";
 import { extractAnonId } from "@/lib/rtc/auth";
 import { enqueue } from "@/lib/rtc/mm";
 import { zadd } from "@/lib/rtc/upstash";
 import { requireVip } from "@/utils/vip";
-export const runtime = "nodejs";
 
 export async function OPTIONS() { return NextResponse.json({ ok: true }); }
 
@@ -64,4 +64,3 @@ try {
     return NextResponse.json({ error: "enqueue-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 });
   }
 }
-export const dynamic="force-dynamic";

@@ -1,11 +1,10 @@
-export const runtime="nodejs";
-export const dynamic="force-dynamic";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 import { NextRequest, NextResponse } from "next/server";
 import { extractAnonId } from "@/lib/rtc/auth";
 import { matchmake, pairMapOf } from "@/lib/rtc/mm";
 import { setPx } from "@/lib/rtc/upstash";
-export const runtime = "nodejs";
 
 async function upstashGetMeta(anonId:string){
   try{
