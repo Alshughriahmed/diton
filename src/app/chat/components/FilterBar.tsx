@@ -1,14 +1,15 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useState } from "react";
+import { useFFA } from "@/hooks/useFFA";
 import type { GenderKey } from "./GenderModal";
-const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
 
 
 const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
 const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 
 export default function FilterBar() {
+  const freeForAll = useFFA();
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);
   const [selectedGenders, setSelectedGenders] = useState<GenderKey[]>([]);

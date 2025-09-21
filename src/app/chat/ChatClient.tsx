@@ -3,7 +3,6 @@ import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 // startRtcFlowOnce guard marker
 
-import "./freeForAllBridge";
 import "./dcMetaResponder.client";
 
 import "./likeSyncClient";
@@ -36,6 +35,7 @@ import ChatToolbar from "./components/ChatToolbar";
 import ChatMessagingBar from "./components/ChatMessagingBar";
 import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
+import FreeForAllBridge from "./components/FreeForAllBridge";
 import LikeHud from "./LikeHud";
 // import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
 import { getMobileOptimizer } from "@/lib/mobile";
@@ -89,6 +89,16 @@ export default function ChatClient(){
   const lastTsRef = useRef(0);
   const busyRef = useRef(false);
   const lastNextTsRef = useRef(0);
+  
+  // Autostart: emit("ui:next") once after hydration
+  useEffect(() => { 
+    if (!(window as any).__DITONA_AUTOSTART_DONE && hydrated) { 
+      (window as any).__DITONA_AUTOSTART_DONE = 1; 
+      try { 
+        emit("ui:next"); 
+      } catch {} 
+    }
+  }, [hydrated]);
   const localRef = useRef<HTMLVideoElement>(null);
   const [ready,setReady]=useState(false);
   const [like,setLike]=useState(false);
@@ -619,6 +629,7 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
 
   return (
     <>
+      <FreeForAllBridge />
       <LikeHud />
       <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
       <div className="h-full grid grid-rows-2 gap-2 p-2">

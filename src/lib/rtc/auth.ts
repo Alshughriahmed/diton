@@ -1,11 +1,12 @@
 import { createHmac } from "crypto";
 
-function verifySigned(raw: string, secret: string) { 
-  const [b64, sig] = raw.split("."); 
-  if (!b64 || !sig) return null; 
-  const calc = createHmac("sha256", secret).update(b64).digest("hex"); 
-  if (calc !== sig) return null; 
-  return Buffer.from(b64, "base64url").toString("utf8"); 
+function verifySigned(raw: string, secret: string) {
+  const [body, sig] = (raw || "").split(".");
+  if (!body || !sig) return null;
+  const calc = createHmac("sha256", secret).update(body).digest("hex");
+  if (calc !== sig) return null;
+  try { return Buffer.from(body, "base64url").toString("utf8"); }
+  catch { return body; } // UUID خام صالح
 }
 
 // Simplified version that works with API routes via request headers/cookies

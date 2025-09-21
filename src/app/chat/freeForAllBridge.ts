@@ -9,7 +9,7 @@ declare global {
   interface Window {
     __ditonaBridgeInit?: 1;
     __ditonaFFALoaded?: 1;
-    __DITONA_FFA?: 0|1;
+    __DITONA_FFA?: 0|1|boolean|string;
   }
 }
 
