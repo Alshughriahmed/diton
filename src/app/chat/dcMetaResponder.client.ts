@@ -47,18 +47,26 @@ function onMsg(ev: MessageEvent) {
     return;
   }
   if (d.type === "meta" && d.payload) {
-    try { window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: d.payload })); } catch {}
+    try { 
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: d.payload })); 
+      }
+    } catch {}
     return;
   }
 }
 
 (function init(){
-  const dc = ((window as any).__ditonaDataChannel || (window as any).__ditonaDataChannel2) as RTCDataChannel;
+  const w = typeof window !== "undefined" ? (window as any) : undefined;
+  const dc = (w?.__ditonaDataChannel ?? w?.__ditonaDataChannel2) as RTCDataChannel | undefined;
   if (dc) wireDC(dc);
 
   // When phases change, try to (re)wire the latest DC reference
-  window.addEventListener("rtc:phase", () => {
-    const ndc = ((window as any).__ditonaDataChannel || (window as any).__ditonaDataChannel2) as RTCDataChannel;
-    if (ndc) wireDC(ndc);
-  });
+  if (typeof window !== "undefined") {
+    window.addEventListener("rtc:phase", () => {
+      const w = typeof window !== "undefined" ? (window as any) : undefined;
+      const ndc = (w?.__ditonaDataChannel ?? w?.__ditonaDataChannel2) as RTCDataChannel | undefined;
+      if (ndc) wireDC(ndc);
+    });
+  }
 })();

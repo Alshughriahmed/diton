@@ -1,0 +1,120 @@
+Task: Finalize Front+RTC + Fix build error (Minimal-Diff)
+
+Goals:
+
+إصلاح خطأ البناء window is not defined في عميل الدردشة.
+
+تأكيد إصلاحات الدفعة السابقة: 401، dc-open، إزالة ازدواج الجسر.
+
+تشغيل فحوص القبول كاملة API + UI وإخراج تقرير واحد.
+
+Constraints:
+
+Minimal-Diff فقط. لا حذف ميزات ولا تغيير VIP.
+
+لا أدوات تفاعلية ولا شاشات بديلة. استخدم مهلات ثابتة للـcurl.
+
+إخراج تقرير واحد: _ops/reports/agent_front_rtc_<UTC>.log.
+
+A) Build fix: guard window correctly
+
+Touch only these files.
+
+src/app/chat/dcMetaResponder.client.ts
+
+تأكد من وجود "use client" في أول سطر.
+
+داخل الدالة init() استبدل قراءة القناة بالتالي:
+
+const w = typeof window !== "undefined" ? (window as any) : undefined;
+const dc = (w?.__ditonaDataChannel ?? w?.__ditonaDataChannel2) as RTCDataChannel | undefined;
+if (dc) wireDC(dc);
+
+
+لا تستخدم window على مستوى الملف. أي window.addEventListener(...) يجب أن يُستدعى فقط إذا كان typeof window !== "undefined".
+
+src/app/chat/metaInit.client.ts
+
+أول سطر "use client".
+
+حيث تُرسل meta:init:
+
+const w = typeof window !== "undefined" ? (window as any) : undefined;
+const dc = w?.__ditonaDataChannel as RTCDataChannel | undefined;
+if (dc) {
+  try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+  setTimeout(()=>{ try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
+  setTimeout(()=>{ try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 1200);
+}
+
+B) Verify previous fixes
+
+src/lib/rtc/auth.ts
+
+دالة verifySigned يجب أن تكون بالصيغة التي تقبل UUID خام:
+
+function verifySigned(raw: string, secret: string) {
+  const [body, sig] = (raw || "").split(".");
+  if (!body || !sig) return null;
+  const calc = createHmac("sha256", secret).update(body).digest("hex");
+  if (calc !== sig) return null;
+  try { return Buffer.from(body, "base64url").toString("utf8"); }
+  catch { return body; }
+}
+
+
+src/app/chat/ChatClient.tsx
+
+أزل import "./freeForAllBridge";
+
+أبقِ مثيلًا واحدًا فقط لـ <FreeForAllBridge /> في JSX.
+
+src/app/chat/rtcFlow.ts
+
+تأكد من وجود مستمع فتح القناة:
+
+dc.addEventListener("open", () => {
+  try {
+    window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "dc-open", role: state?.role ?? null } }));
+  } catch {}
+});
+
+C) Acceptance checks
+
+Run once after build. لا تستخدم تبويبين من نفس النافذة. افتح نافذة عادية + خاصة.
+
+API A/B (إنتاج):
+
+GET /api/rtc/env → FREE_FOR_ALL=1.
+
+A وB: POST /api/age/allow ⇒ 200.
+
+A وB: POST /api/rtc/init ⇒ 200 وكوكي anon.
+
+A وB: POST /api/rtc/enqueue ⇒ 204.
+
+A وB: POST /api/rtc/matchmake ⇒ 200 مع found=true, pairId واحد, role مختلف.
+
+POST /api/message/allow مع {pairId} ⇒ 200 تحت FFA.
+
+UI (صفحتان /chat, normal + incognito):
+
+خلال ≤2s: phase searching.
+
+بعد المطابقة: event rtc:phase {phase:"dc-open"} يظهر في الـConsole.
+
+خلال ≤300ms من dc-open: يصل ditona:peer-meta وتتحدث البطاقة.
+
+شرط الرسائل/اللايك يعمل عند dc.open && pairId.
+
+D) Report
+
+اكتب إلى _ops/reports/agent_front_rtc_<UTC>.log:
+
+مفاتيح: ENV_OK, AGE_OK, ANON_OK, ENQUEUE_OK, MATCH_OK, MSG_ALLOW_OK, DC_OPEN_OK, CLIENT_ENV_REMOVED.
+
+مقتطفَي JSON من matchmake يوضحان pairId وrole للطرفين.
+
+مواقع الأسطر التي عُدّلت في الملفات أعلاه.
+
+If any check fails, fix locally with minimal diffs and re-run until all keys =1.

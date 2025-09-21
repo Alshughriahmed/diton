@@ -2,12 +2,13 @@
 (function(){
   if (typeof window === "undefined") return;
   function send(){
-    try {
-      const dc = (window as any).__ditonaDataChannel as RTCDataChannel | undefined;
-      if (dc && dc.readyState === "open") {
-        dc.send(JSON.stringify({ type: "meta:init" }));
-      }
-    } catch {}
+    const w = typeof window !== "undefined" ? (window as any) : undefined;
+    const dc = w?.__ditonaDataChannel as RTCDataChannel | undefined;
+    if (dc) {
+      try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+      setTimeout(()=>{ try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
+      setTimeout(()=>{ try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 1200);
+    }
   }
   function onPhase(e:any){
     try {
