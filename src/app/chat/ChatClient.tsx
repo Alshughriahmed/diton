@@ -3,7 +3,6 @@ import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 // startRtcFlowOnce guard marker
 
-import "./freeForAllBridge";
 import "./dcMetaResponder.client";
 
 import "./likeSyncClient";

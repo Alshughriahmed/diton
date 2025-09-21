@@ -774,6 +774,14 @@ function setupDataChannel(dc: RTCDataChannel) {
     // Store reference for sending data
     (globalThis as any).__ditonaDataChannel = dc;
   };
+
+  dc.addEventListener("open", () => {
+    try {
+      window.dispatchEvent(new CustomEvent("rtc:phase", {
+        detail: { phase: "dc-open", role: state?.role ?? null }
+      }));
+    } catch {}
+  });
   
   dc.onmessage = (event) => {
     try {
