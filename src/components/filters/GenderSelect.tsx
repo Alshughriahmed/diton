@@ -1,3 +1,4 @@
+import { isFFA } from "@/utils/ffa";
 import FilterBar from "@/app/chat/components/FilterBar";
 "use client";
 import { useFilters, type GenderOpt } from "@/state/filters";
@@ -5,7 +6,7 @@ import { GENDERS } from "@/data/genders";
 
 export default function GenderSelect(){
   const { gender, setGender, isVip } = useFilters();
-  const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
+  const freeForAll = isFFA();
   return (
     <div className="absolute top-2 right-40 z-50">
       <div className="inline-flex items-center gap-2">

@@ -1,4 +1,5 @@
 "use client";
+import { isFFA } from "@/utils/ffa";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 // startRtcFlowOnce guard marker
@@ -283,7 +284,7 @@ let offTogglePlay=on("ui:togglePlay", ()=>{
       });
     });
     let offUpsell=on("ui:upsell", (feature)=>{
-      const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
+      const freeForAll = isFFA();
       if (freeForAll) {
         // In free mode, don't show upsell, just show notification
         toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
@@ -580,7 +581,7 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
         } else {
-          const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
+          const freeForAll = isFFA();
           if (!vip && !freeForAll) {
             toast('🔒 العودة للسابق متاحة لـ VIP فقط');
             emit('ui:upsell', 'prev');

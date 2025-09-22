@@ -1,3 +1,4 @@
+import { isFFA } from "@/utils/ffa";
 import FilterBar from "@/app/chat/components/FilterBar";
 "use client";
 import { useEffect, useMemo, useState } from "react";
@@ -7,7 +8,7 @@ import { emit } from "@/utils/events";
 
 export default function CountrySelect(){
   const { countries, setCountries, isVip } = useFilters();
-  const freeForAll = !!(globalThis as any).__vip?.FREE_FOR_ALL;
+  const freeForAll = isFFA();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [userCountry, setUserCountry] = useState<string | null>(null);

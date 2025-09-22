@@ -1,4 +1,5 @@
 "use client";
+import { isFFA } from "@/utils/ffa";
 
 import { useState, useMemo } from "react";
 import { useFilters } from "@/state/filters";
@@ -34,7 +35,7 @@ export default function CountryFilter() {
   }, [countryOptions, search]);
 
   const handleCountryToggle = async (code: string) => {
-    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    const FREE_FOR_ALL = isFFA();
     if (!isVip && !FREE_FOR_ALL) {
       toast('🔒 ميزة تصفية الدول حصرية لـ VIP');
       emit('ui:upsell', 'countries');
@@ -75,7 +76,7 @@ export default function CountryFilter() {
   };
 
   const handleSelectAll = () => {
-    const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+    const FREE_FOR_ALL = isFFA();
     if (!isVip && !FREE_FOR_ALL) {
       toast('🔒 ميزة تصفية الدول حصرية لـ VIP');
       emit('ui:upsell', 'countries');
@@ -140,7 +141,7 @@ export default function CountryFilter() {
             <div className="grid grid-cols-2 gap-1">
               {filteredCountries.map((country) => {
                 const isSelected = selectedCountries.includes(country.code);
-                const FREE_FOR_ALL = (globalThis as any).__vip?.FREE_FOR_ALL;
+                const FREE_FOR_ALL = isFFA();
                 const isDisabled = !isVip && !FREE_FOR_ALL && !isSelected;
                 
                 return (
@@ -167,7 +168,7 @@ export default function CountryFilter() {
           </div>
 
           {/* VIP Notice */}
-          {!isVip && !(globalThis as any).__vip?.FREE_FOR_ALL && (
+          {!isVip && !isFFA() && (
             <div className="p-3 border-t border-gray-600 bg-gradient-to-r from-purple-600/20 to-blue-600/20">
               <p className="text-xs text-gray-300 text-center">
                 🔒 ترقية لـ VIP لفلترة الدول (حتى 15 دولة)
