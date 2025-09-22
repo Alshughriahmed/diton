@@ -11,3 +11,4 @@ _ops/artifacts/
 _ops/backups/
 _ops/**/*.tar.gz
 .vercel
+_ops/reports

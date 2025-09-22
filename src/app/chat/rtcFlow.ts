@@ -773,6 +773,7 @@ function setupDataChannel(dc: RTCDataChannel) {
     logRtc('datachannel-open', 200);
     // Store reference for sending data
     (globalThis as any).__ditonaDataChannel = dc;
+      (globalThis as any).__ditonaDataChannel2 = dc;
   };
 
   dc.addEventListener("open", () => {
@@ -806,6 +807,7 @@ function setupDataChannel(dc: RTCDataChannel) {
   dc.onclose = () => {
     logRtc('datachannel-close', 200);
     (globalThis as any).__ditonaDataChannel = null;
+      (globalThis as any).__ditonaDataChannel2 = null;
   };
 }
 
