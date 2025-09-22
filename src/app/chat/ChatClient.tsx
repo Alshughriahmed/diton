@@ -91,14 +91,26 @@ export default function ChatClient(){
   const busyRef = useRef(false);
   const lastNextTsRef = useRef(0);
   
-  // Autostart: emit("ui:next") once after hydration
-  useEffect(() => { 
-    if (!(window as any).__DITONA_AUTOSTART_DONE && hydrated) { 
-      (window as any).__DITONA_AUTOSTART_DONE = 1; 
-      try { 
-        emit("ui:next"); 
-      } catch {} 
-    }
+  // Autostart: age/allow ⇒ rtc/init ⇒ ui:next (once)
+  useEffect(() => {
+    if (!hydrated || typeof window === "undefined") return;
+    const w = window as any;
+    if (w.__DITONA_AUTOSTART_DONE) return;
+    w.__DITONA_AUTOSTART_DONE = 1;
+
+    const opts: RequestInit = {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { accept: "application/json" }
+    };
+
+    (async () => {
+      try { await fetch("/api/age/allow", opts); } catch {}
+      try { await fetch("/api/rtc/init", opts); } catch {}
+      if (document.cookie.includes("anon=")) { emit("ui:next"); console.log("AUTO_NEXT: fired"); }
+      else { console.log("AUTO_NEXT: anon cookie missing"); }
+    })();
   }, [hydrated]);
   const localRef = useRef<HTMLVideoElement>(null);
   const [ready,setReady]=useState(false);
