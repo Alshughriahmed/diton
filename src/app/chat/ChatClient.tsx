@@ -107,7 +107,7 @@ export default function ChatClient(){
 
     (async () => {
       try { await fetch("/api/age/allow", opts); } catch {}
-      try { await fetch("/api/rtc/init", opts); } catch {}
+      try { await fetch("/api/anon/init"), opts); } catch {}
       emit("ui:next"); console.log("AUTO_NEXT: fired");
     })();
   }, [hydrated]);
@@ -487,9 +487,7 @@ try{
           setCameraPermissionHint('قم بإغلاق التبويب الثاني أو اسمح للكاميرا');
         } else if (error?.name === 'NotFoundError') {
           setCameraPermissionHint('لم يتم العثور على كاميرا أو ميكروفون');
-        } else {
-          setCameraPermissionHint('خطأ في الوصول للكاميرا - تأكد من الأذونات');
-        }
+        } 
         return;
       }
     }
@@ -512,19 +510,13 @@ try{
                 setEffectsStream(processedStream);
                 localRef.current.srcObject = processedStream;
                 effects.start();
-              } else {
-                localRef.current.srcObject = s;
-              }
-            } else {
-              localRef.current.srcObject = s;
-            }
+              } 
+            } 
           } catch (error) {
             console.warn('Effects initialization failed, using original stream:', error);
             localRef.current.srcObject = s;
           }
-        } else {
-          localRef.current.srcObject = s;
-        }
+        } 
         
         localRef.current.muted = true; 
         localRef.current.play().catch(()=>{}); 
@@ -591,15 +583,7 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
         if(dx<0) {
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
-        } else {
-          const freeForAll = isFFA();
-          if (!vip && !freeForAll) {
-            toast('🔒 العودة للسابق متاحة لـ VIP فقط');
-            emit('ui:upsell', 'prev');
-          } else {
-            toast('⏮️ محاولة العودة للمطابقة السابقة...');
-            emit('ui:prev');
-          }
+        }  
         }
       }
     };
@@ -739,19 +723,13 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
                                   setEffectsStream(processedStream);
                                   localRef.current.srcObject = processedStream;
                                   effects.start();
-                                } else {
-                                  localRef.current.srcObject = s;
-                                }
-                              } else {
-                                localRef.current.srcObject = s;
-                              }
+                                } 
+                              } 
                             } catch (error) {
                               console.warn('Effects initialization failed, using original stream:', error);
                               localRef.current.srcObject = s;
                             }
-                          } else {
-                            localRef.current.srcObject = s;
-                          }
+                          } 
                           
                           localRef.current.muted = true; 
                           localRef.current.play().catch(()=>{}); 
@@ -768,9 +746,7 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
                           setCameraPermissionHint('قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح');
                         } else if (error?.name === 'NotReadableError' || error?.name === 'AbortError') {
                           setCameraPermissionHint('قم بإغلاق التبويب الثاني أو اسمح للكاميرا');
-                        } else {
-                          setCameraPermissionHint('خطأ في الوصول للكاميرا - تأكد من الأذونات');
-                        }
+                        } 
                       });
                     }}
                     className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
