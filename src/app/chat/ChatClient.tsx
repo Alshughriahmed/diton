@@ -107,7 +107,7 @@ export default function ChatClient(){
 
     (async () => {
       try { await fetch("/api/age/allow", opts); } catch {}
-      try { await fetch("/api/anon/init", opts); } catch {}
+      try { await fetch("/api/anon/init"), opts); } catch {}
       emit("ui:next"); console.log("AUTO_NEXT: fired");
     })();
   }, [hydrated]);
@@ -583,6 +583,7 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
         if(dx<0) {
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
+        }  
         }
       }
     };
