@@ -108,8 +108,7 @@ export default function ChatClient(){
     (async () => {
       try { await fetch("/api/age/allow", opts); } catch {}
       try { await fetch("/api/rtc/init", opts); } catch {}
-      if (document.cookie.includes("anon=")) { emit("ui:next"); console.log("AUTO_NEXT: fired"); }
-      else { console.log("AUTO_NEXT: anon cookie missing"); }
+      emit("ui:next"); console.log("AUTO_NEXT: fired");
     })();
   }, [hydrated]);
   const localRef = useRef<HTMLVideoElement>(null);

@@ -325,7 +325,7 @@ async function safeFetch(url: string, options: RequestInit = {}, operation: stri
   const signal = state.ac?.signal;
   let response: Response;
   try {
-    response = await fetch(url, { ...options, signal });
+    response = await fetch(url, { credentials: 'include', cache: 'no-store', ...options, signal });
   } catch(e){ swallowAbort(e); return null; }
   
   logRtc(operation, response.status);

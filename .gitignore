@@ -12,3 +12,7 @@ _ops/backups/
 _ops/**/*.tar.gz
 .vercel
 _ops/reports
+_dist/
+_ops/reports/
+*.zip
+*.tar.gz
