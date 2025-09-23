@@ -583,7 +583,6 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
         if(dx<0) {
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
-        }  
         }
       }
     };
