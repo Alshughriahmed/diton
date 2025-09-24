@@ -7,8 +7,7 @@ export const dynamic = "force-dynamic";
 
 function signAnon(raw: string, secret?: string) {
   if (!secret) return raw; // يسمح بالعمل بدون توقيع لو السر غير مضبوط
-  const b64 = Buffer.from(raw, "utf8").toString("base64url");
-  const sig = createHmac("sha256", secret).update(b64).digest("hex");
+  const sig = createHmac("sha256", secret).update(raw).digest("hex");
   return `${raw}.${sig}`;
 }
 
