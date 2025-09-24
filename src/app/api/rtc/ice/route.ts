@@ -1,7 +1,16 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+
+
+
+
+
 import { NextRequest, NextResponse } from "next/server";
 import { extractAnonId } from "@/lib/rtc/auth";
 import { get, lpush, lrange, ltrim, expire } from "@/lib/rtc/upstash";
-export const runtime = "nodejs";
 
 async function auth(anon: string, pairId: string) {
   const map = await get(`rtc:pair:map:${anon}`); if (!map) return null;
@@ -38,4 +47,4 @@ export async function GET(req: NextRequest) {
   if (!items || items.length === 0) return new NextResponse(null, { status: 204 });
   await ltrim(key, items.length, -1); await expire(`rtc:pair:${pairId}`, 150);
   return NextResponse.json(items.map(s => JSON.parse(s)), { status: 200 });
-}export const dynamic="force-dynamic";
+}

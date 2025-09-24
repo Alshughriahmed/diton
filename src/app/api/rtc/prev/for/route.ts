@@ -1,3 +1,12 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+
+
+
+
 import { NextRequest, NextResponse } from "next/server";
 import { extractAnonId } from "@/lib/rtc/auth";
 import { setPx } from "@/lib/rtc/upstash";
@@ -17,5 +26,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok:false, error:String(e?.message||e).slice(0,140) }, { status:500 });
   }
 }
-export const runtime="nodejs";
-export const dynamic="force-dynamic";

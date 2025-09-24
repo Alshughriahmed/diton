@@ -1,6 +1,7 @@
 export const runtime = "nodejs"; 
 export const dynamic = "force-dynamic";
 
+export const revalidate = 0;
 import { NextRequest, NextResponse } from "next/server";
 import { rateLimit } from "@/lib/rtc/upstash";
 import { extractAnonId } from "@/lib/rtc/auth";

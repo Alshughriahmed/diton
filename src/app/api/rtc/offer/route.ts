@@ -1,7 +1,15 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+
+
+
+
 import { NextRequest, NextResponse } from "next/server";
 import { extractAnonId } from "@/lib/rtc/auth";
 import { get, setNxPx, expire } from "@/lib/rtc/upstash";
-export const runtime = "nodejs";
 async function auth(anon: string, pairId: string){ const map = await get(`rtc:pair:map:${anon}`); if (!map) return null; const [pid, role] = String(map).split("|"); return pid===pairId ? role : null; }
 export async function POST(req: NextRequest){
   const anon = extractAnonId(req); if (!anon) return NextResponse.json({ error:"anon-required" },{status:403});
@@ -17,4 +25,3 @@ export async function GET(req: NextRequest){
   const sdp = await get(`rtc:pair:${pairId}:offer`); if (!sdp) return new NextResponse(null,{status:204});
   await expire(`rtc:pair:${pairId}`, 150); return NextResponse.json({ sdp:String(sdp) },{status:200});
 }
-export const dynamic="force-dynamic";

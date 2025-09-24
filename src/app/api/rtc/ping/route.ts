@@ -1,8 +1,16 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+
+
+
+
 import { NextRequest, NextResponse } from "next/server";
 import { extractAnonId } from "@/lib/rtc/auth";
 import { hgetall, expire } from "@/lib/rtc/upstash";
 import { touchQueue } from "@/lib/rtc/mm";
-export const runtime = "nodejs";
 export async function GET(_req: NextRequest){
   const anon = extractAnonId(_req); if (!anon) return NextResponse.json({ ok:false },{status:403});
   const attr = await hgetall(`rtc:attrs:${anon}`);
@@ -12,4 +20,3 @@ export async function GET(_req: NextRequest){
   }
   return NextResponse.json({ ok:true },{status:200});
 }
-export const dynamic="force-dynamic";

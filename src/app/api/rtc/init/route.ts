@@ -1,9 +1,16 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+
+
+
+
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { randomUUID, createHmac } from "crypto";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 function signAnon(raw: string, secret?: string) {
   if (!secret) return raw; // يسمح بالعمل بدون توقيع لو السر غير مضبوط

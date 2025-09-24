@@ -4,6 +4,11 @@ export const revalidate = 0;
 
 
 
+
+
+
+
+
 import { NextRequest, NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
 import { verifySigned } from "@/lib/rtc/auth";
