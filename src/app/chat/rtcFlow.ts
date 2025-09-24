@@ -623,6 +623,8 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     // Setup DataChannel for real-time communication
     if (state.role === 'caller') {
       const dc = state.pc.createDataChannel('likes');
+  (globalThis as any).__ditonaDataChannel = dc;
+  dc.onopen = () => { dispatchEvent(new CustomEvent("rtc:phase",{detail:{phase:"dc-open"}})); };
       setupDataChannel(dc);
     }
     
