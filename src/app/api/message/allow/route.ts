@@ -55,10 +55,6 @@ export async function POST(req: NextRequest) {
   }
 
   // FFA: إذا كان مفعلاً، اسمح لجميع المستخدمين
-  const ffa = !!(process.env.FREE_FOR_ALL || process.env.NEXT_PUBLIC_FREE_FOR_ALL);
-  if (ffa) {
-    return NextResponse.json({ allow: true, tier: "ffa" }, { status: 200, headers: hdr });
-  }
 
   // VIP غير محدود
   if (isVipFrom(req)) {
