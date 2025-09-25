@@ -282,8 +282,9 @@ let offTogglePlay=on("ui:togglePlay", ()=>{
       });
     });
     let offUpsell=on("ui:upsell", (feature)=>{
-      const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
-      if (freeForAll) {
+      const ffa = (typeof window !== "undefined" && (window as any).__vip?.FREE_FOR_ALL == 1);
+      if (ffa) {
+        console.log("FFA_FORCE: enabled");
         // In free mode, don't show upsell, just show notification
         toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
         return;
@@ -579,8 +580,9 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
         } else {
-          const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
-          if (!vip && !freeForAll) {
+          const ffa = (typeof window !== "undefined" && (window as any).__vip?.FREE_FOR_ALL == 1);
+          if (ffa) console.log("FFA_FORCE: enabled");
+          if (!vip && !ffa) {
             toast('🔒 العودة للسابق متاحة لـ VIP فقط');
             emit('ui:upsell', 'prev');
           } else {

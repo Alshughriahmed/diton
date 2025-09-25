@@ -311,7 +311,7 @@ async function safeFetch(url: string, options: RequestInit = {}, operation: stri
   const signal = state.ac?.signal;
   let response: Response;
   try {
-    response = await fetch(url, { ...options, signal });
+    response = await fetch(url, { credentials: 'include', cache: 'no-store', ...options, signal });
   } catch(e){ swallowAbort(e); return null; }
   
   logRtc(operation, response.status);
@@ -776,6 +776,11 @@ function setupDataChannel(dc: RTCDataChannel) {
     logRtc('datachannel-open', 200);
     // Store reference for sending data
     (globalThis as any).__ditonaDataChannel = dc;
+    
+    // Broadcast dc-open phase event
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent('rtc:phase', { detail: { phase: "dc-open" } }));
+    }
     
     // Auto-send meta:init after opening
     try{ 
