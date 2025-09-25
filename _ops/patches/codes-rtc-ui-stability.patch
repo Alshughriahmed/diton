@@ -1,0 +1,228 @@
+diff --git a/src/app/chat/ChatClient.tsx b/src/app/chat/ChatClient.tsx
+index 5fe9c85..073329e 100644
+--- a/src/app/chat/ChatClient.tsx
++++ b/src/app/chat/ChatClient.tsx
+@@ -28,8 +28,7 @@ import { useFilters } from "@/state/filters";
+ import type { GenderOpt } from "@/utils/filters";
+ import ChatComposer from "@/components/chat/ChatComposer";
+ import LikeSystem from "@/components/chat/LikeSystem";
+-import PeerInfoCard from "@/components/chat/PeerInfoCard";
+-import PeerMetadata from "@/components/chat/PeerMetadata";
++import PeerBadge from "@/components/chat/PeerBadge";
+ import MyControls from "@/components/chat/MyControls";
+ import UpsellModal from "@/components/chat/UpsellModal";
+ import ChatToolbar from "./components/ChatToolbar";
+@@ -37,6 +36,7 @@ import ChatMessagingBar from "./components/ChatMessagingBar";
+ import MessageHud from "./components/MessageHud";
+ import FilterBar from "./components/FilterBar";
+ import LikeHud from "./LikeHud";
++import { safeFetch } from "./safeFetch";
+ // import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
+ import { getMobileOptimizer } from "@/lib/mobile";
+ import { toast } from "@/lib/ui/toast";
+@@ -102,7 +102,7 @@ export default function ChatClient(){
+   const [paused, setPaused] = useState(false);
+   const [showMessaging, setShowMessaging] = useState(false);
+   const [showUpsell, setShowUpsell] = useState(false);
+-  const { profile } = useProfile();
++  const { profile, setProfile } = useProfile();
+   const [rtcPhase, setRtcPhase] = useState<'idle' | 'searching' | 'matched' | 'connected' | 'stopped'>('idle');
+   const [phase, setPhase] = useState<'idle'|'searching'|'matched'|'connected'>('idle');
+   const [pair, setPair] = useState<{id?:string, role?:'caller'|'callee'}>({});
+@@ -114,12 +114,42 @@ export default function ChatClient(){
+     likes: 0,
+     isOnline: true,
+     country: "",
+-    city: "",
++    city: "",
+     gender: "",
+     age: 0
+   });
+   const isMobile = useMemo(()=>getMobileOptimizer(navigator.userAgent).isMobile,[navigator.userAgent]);
+ 
++  useEffect(() => {
++    try {
++      const storedGender = localStorage.getItem("gender");
++      if (storedGender) {
++        setProfile((prev) => ({
++          ...prev,
++          gender: storedGender as any
++        }));
++      }
++    } catch {}
++  }, [setProfile]);
++
++  useEffect(() => {
++    if (typeof document === "undefined") return;
++    const handleRtcPhase = (event: any) => {
++      if (event?.detail?.phase === "dc-open") {
++        console.log("[RTC_PHASE] dc-open");
++      }
++    };
++    document.addEventListener("rtc:phase", handleRtcPhase as any);
++    return () => document.removeEventListener("rtc:phase", handleRtcPhase as any);
++  }, []);
++
++  useEffect(() => {
++    const onPair = (evt: CustomEvent<{ pairId: string; pairGender?: string; meGender?: string }>) => {
++      const gender = evt.detail?.meGender;
++      if (gender) setProfile((prev) => ({ ...prev, gender }));
++    };
++    window.addEventListener("rtc:pair", onPair as any);
++    return () => window.removeEventListener("rtc:pair", onPair as any);
++  }, [setProfile]);
++
+   const filters = useFilters();
+   const peerGenderOpt = useMemo(()=>filters.genderOpt,[filters.genderOpt]);
+ 
+@@ -154,6 +184,8 @@ export default function ChatClient(){
+     const handleMatched = (e: CustomEvent<{pairId?:string,role?:'caller'|'callee'}>) => {
+       setPhase("matched");
+       setPair({ id: e.detail?.pairId, role: e.detail?.role });
++      console.log("[RTC_MATCH] matched", e.detail);
++      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: e.detail }));
+     };
+ 
+     const handleConnected = () => {
+@@ -175,6 +207,9 @@ export default function ChatClient(){
+       setPhase("idle");
+       setPair({});
+       setRemoteStream(null);
++      try {
++        window.dispatchEvent(new Event("ui:next"));
++      } catch {}
+     };
+ 
+     const handleRtcPhase = (event: CustomEvent<{phase: typeof phases[number] | 'stopped'}>) => {
+@@ -203,7 +238,7 @@ export default function ChatClient(){
+   const doMatch = useCallback(async (direction: "next" | "prev") => {
+     if(rtcPhase === "searching") return;
+     setRtcPhase("searching");
+-    const response = await fetch(`/api/rtc/${direction}`, {
++    const response = await safeFetch(`/api/rtc/${direction}`, {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ pairId: pair.id })
+@@ -216,11 +251,13 @@ export default function ChatClient(){
+     const shouldAutoStart = (isFFA() || vip) && !paused;
+     if (shouldAutoStart) {
+       startRTC();
++    } else {
++      console.log("[AUTO_START] skipped", { shouldAutoStart, isFFA: isFFA(), vip, paused });
+     }
+   }, [pair.id, paused, startRTC, rtcPhase, vip]);
+ 
+   const startRTC = useCallback(async () => {
+-    const next = await fetch("/api/rtc/start", {
++    const next = await safeFetch("/api/rtc/start", {
+       method: "POST",
+       headers: {
+         "Content-Type": "application/json"
+@@ -229,6 +266,7 @@ export default function ChatClient(){
+     if (!next.ok) {
+       toast.error("Something went wrong");
+       setRtcPhase("idle");
++      console.error("[RTC_START_ERROR]", next.status);
+       return;
+     }
+     const nextBody = await next.json();
+@@ -317,7 +386,8 @@ export default function ChatClient(){
+       if (remoteStream) {
+         remoteStream.getTracks().forEach(track => track.stop());
+         setRemoteStream(null);
+-        emit("ui:next");
++        console.log("AUTO_NEXT: fired");
++        emit("ui:next");
+       }
+       if (localStream) {
+         localStream.getTracks().forEach(track => track.stop());
+@@ -329,12 +399,15 @@ export default function ChatClient(){
+       setRtcPhase("idle");
+       setPhase("idle");
+       setPair({});
++      window.dispatchEvent(new Event("ui:next"));
+     };
+   }, [localStream, remoteStream, safeAbortRef]);
+ 
+   useEffect(() => {
+     const handleNext = () => {
+       safeAbortRef.current = true;
++      console.log("AUTO_NEXT: fired");
++      window.dispatchEvent(new Event("ui:next"));
+       setRtcPhase("searching");
+       setPair({});
+       if (remoteStream) {
+diff --git a/src/app/chat/components/ChatMessagingBar.tsx b/src/app/chat/components/ChatMessagingBar.tsx
+index c7b8be9..3c54230 100644
+--- a/src/app/chat/components/ChatMessagingBar.tsx
++++ b/src/app/chat/components/ChatMessagingBar.tsx
+@@ -1,20 +1,48 @@
+ "use client";
+-import { useEffect, useState, useRef } from "react";
+-import { emit } from "@/utils/events";
+-import type { PeerProfile } from "@/types";
+-import safeAbort from "@/utils/safeAbort";
+-import { cn } from "@/lib/utils";
+-import { safeFetch } from "../safeFetch";
++import { useEffect, useState, useRef, useCallback } from "react";
++import { emit } from "@/utils/events";
++import type { PeerProfile } from "@/types";
++import safeAbort from "@/utils/safeAbort";
++import { cn } from "@/lib/utils";
++import { safeFetch } from "../safeFetch";
++import { useAutoScroll } from "@/hooks/useAutoScroll";
+ 
+ type Message = {
+   id: string;
+   text: string;
+   sender: "me" | "peer";
+ };
+ 
+ export default function ChatMessagingBar({
+   showMessaging,
+   peer,
+-  onStop
++  onStop,
++  pairId
+ }: {
+   showMessaging: boolean;
+   peer: PeerProfile;
+-  onStop: () => void;
++  onStop: () => void;
++  pairId: string;
+ }) {
+-  const [messages, setMessages] = useState<Message[]>([]);
+-  const [typing, setTyping] = useState(false);
++  const [messages, setMessages] = useState<Message[]>([]);
++  const [typing, setTyping] = useState(false);
++  const containerRef = useAutoScroll<HTMLDivElement>();
++
++  const resetMessages = useCallback(() => {
++    setMessages([]);
++    setTyping(false);
++  }, []);
++
++  useEffect(() => {
++    const handlePair = () => {
++      resetMessages();
++    };
++    window.addEventListener("rtc:pair", handlePair as EventListener);
++    return () => window.removeEventListener("rtc:pair", handlePair as EventListener);
++  }, [resetMessages]);
++
++  useEffect(() => {
++    if (!pairId) return;
++    resetMessages();
++  }, [pairId, resetMessages]);
++
+   const inputRef = useRef<HTMLInputElement | null>(null);
+   const listRef = useRef<HTMLDivElement | null>(null);
+ 
+@@ -24,6 +52,7 @@ export default function ChatMessagingBar({
+     return () => {
+       window.removeEventListener("message:new", handler as EventListener);
+     };
++
+   }, []);
+ 
+   useEffect(() => {
