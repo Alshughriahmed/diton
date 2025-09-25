@@ -1,4 +1,5 @@
 "use client";
+import { safeFetch } from "./safeFetch";
 // side-effect module, runs in client because it's imported by a client component
 // Minimal-Diff wiring for message sending with per-pair limit handled server-side.
 
@@ -30,7 +31,7 @@ async function send(text: string, pairId: string): Promise<"ok"|"limit"|"err"> {
     }).then(r => r.ok).catch(()=>false);
     if(!ok) return "limit"; // Will trigger upsell
 
-    const r = await fetch("/api/message", {
+    const r = await safeFetch("/api/message", {
       method: "POST",
       headers: {
         "content-type": "application/json",
