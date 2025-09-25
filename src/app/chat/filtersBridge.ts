@@ -1,3 +1,4 @@
+import { safeFetch } from "./safeFetch";
 /**
  * Bridge to wrap RTC enqueue calls with filter data
  * Enforces VIP limits and passes gender/country selections to API
@@ -6,7 +7,7 @@
 
 async function getVipStatus(): Promise<boolean> {
   try {
-    const response = await fetch("/api/user/vip-status");
+    const response = await safeFetch("/api/user/vip-status");
     const data = await response.json();
     return !!(data?.isVip || data?.vip);
   } catch {
@@ -16,7 +17,7 @@ async function getVipStatus(): Promise<boolean> {
 
 async function getUserCountry(): Promise<string | null> {
   try {
-    const response = await fetch("/api/geo");
+    const response = await safeFetch("/api/geo");
     const data = await response.json();
     const code = (data?.countryCode || data?.country || "").toString().toUpperCase();
     return code && /^[A-Z]{2}$/.test(code) ? code : null;
