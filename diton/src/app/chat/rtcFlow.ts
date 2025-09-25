@@ -305,25 +305,6 @@ function ensureCalleeOnly(operation: string) {
 // Safe fetch with session checking and telemetry
 
   const signal = state.ac?.signal;
-  let response: Response;
-  try {
-    response = await fetch(url, { credentials: 'include', cache: 'no-store', ...options, signal });
-  } catch(e){ swallowAbort(e); return null; }
-  
-  logRtc(operation, response.status);
-  
-  if (response.status === 403) {
-    console.warn('[rtc]', state.role, '403 at', operation);
-    // Don't call stop() immediately to prevent recursion
-    state.phase = 'idle';
-    if (onPhaseCallback) onPhaseCallback('idle');
-    return null;
-  }
-  
-  return response;
-}
-
-// Get ICE servers from API or fallback, reordered by priority
 async function getIceServers() {
   try {
     const response = await fetch('/api/turn', { cache: 'no-store' });
