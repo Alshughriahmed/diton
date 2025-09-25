@@ -161,9 +161,18 @@ export default function ChatClient(){
         await new Promise(resolve => setTimeout(resolve, 200));
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
         
-        // Import and start RTC
-        const m = await import("./rtcFlow");
-        await m.next();
+        // Required sequence: age/allow ⇒ anon/init ⇒ emit("ui:next")
+        try {
+          const opts = { method: "POST", credentials: "include" as RequestCredentials, cache: "no-store" as RequestCache };
+          await fetch("/api/age/allow", opts);
+          await fetch("/api/anon/init", opts);
+        } catch (e) { 
+          console.warn("age/allow or anon/init failed", e); 
+        }
+        
+        // Import and emit ui:next
+        emit("ui:next"); 
+        console.log("AUTO_NEXT: fired");
         
         console.log('[auto-start] Successfully started RTC flow');
       } catch (error) {
