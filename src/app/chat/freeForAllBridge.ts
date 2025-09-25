@@ -1,3 +1,4 @@
+import { safeFetch } from "./safeFetch";
 // use client
 /**
  * Bridge window <-> internal event bus with loop-guard
@@ -20,7 +21,7 @@ if (typeof window !== "undefined" && !window.__ditonaBridgeInit) {
   (async () => {
     if (!window.__ditonaFFALoaded) {
       try {
-        const r = await fetch("/api/rtc/env", { cache: "no-store" });
+        const r = await safeFetch("/api/rtc/env", { cache: "no-store" });
         const j = await r.json().catch(() => ({}));
         const ffa = (j?.server?.FREE_FOR_ALL === "1") || (j?.public?.NEXT_PUBLIC_FREE_FOR_ALL === "1");
         window.__DITONA_FFA = ffa ? 1 : 0;
