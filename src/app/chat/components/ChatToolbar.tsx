@@ -10,6 +10,25 @@ export default function ChatToolbar(){
   const [paused,setPaused]=useState(false);
   const { isVip } = useVip();
   const freeForAll = useFFA();
+  
+  // FFA runtime detection
+  const ffa = (typeof window !== "undefined" && (window as any).__vip?.FREE_FOR_ALL == 1);
+  if (ffa) console.log("FFA_FORCE: enabled");
+  
+  // DataChannel and pair state for button guards
+  const dc = (globalThis as any).__ditonaDataChannel;
+  const [pairId, setPairId] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const handlePair = (event: any) => {
+      setPairId(event.detail?.pairId || null);
+    };
+    
+    if (typeof window !== "undefined") {
+      window.addEventListener('rtc:pair', handlePair);
+      return () => window.removeEventListener('rtc:pair', handlePair);
+    }
+  }, []);
 
   useEffect(()=>{ // sync with messaging bar
     const onOpen = ()=>setMsgOpen(true);
@@ -23,10 +42,13 @@ export default function ChatToolbar(){
     <>
       {/* Prev / Next icons large, no boxes */}
       <button 
-        onClick={()=>{ if(isVip || freeForAll) emit("ui:prev"); }}
-        disabled={!isVip && !freeForAll}
-        title={!isVip && !freeForAll ? "VIP only" : "Previous match"}
-        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!isVip ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
+        onClick={()=>{ 
+          const canUsePrev = ffa || (dc?.readyState === "open" && pairId);
+          if (canUsePrev) emit("ui:prev"); 
+        }}
+        disabled={!(ffa || (dc?.readyState === "open" && pairId))}
+        title={!(ffa || (dc?.readyState === "open" && pairId)) ? "Available during active connection or FFA" : "Previous match"}
+        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!(ffa || (dc?.readyState === "open" && pairId)) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>⏮️</button>
       <button onClick={()=>emit("ui:next")} data-ui="btn-next"
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[50] text-3xl sm:text-4xl select-none">⏭️</button>
 

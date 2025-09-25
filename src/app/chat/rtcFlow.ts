@@ -105,25 +105,26 @@ type Phase = 'idle' | 'searching' | 'matched' | 'connected' | 'stopped';
 
 // State machine
 interface RtcState {
-  sid: number;
+  dc?: RTCDataChannel | null;
+    remoteStream: MediaStream | null;
+sid: number;
   phase: Phase;
   role: 'caller' | 'callee' | null;
   pairId: string | null;
   ac: AbortController | null;
   pc: RTCPeerConnection | null;
-    remoteStream: MediaStream | null;
   lastPeer: string | null;
   prevForOnce: string | null;
 }
 
 let state: RtcState = {
-  sid: 0,
+    remoteStream: null,
+sid: 0,
   phase: 'idle',
   role: null,
   pairId: null,
   ac: null,
   pc: null,
-  remoteStream: null,
   lastPeer: null,
   prevForOnce: null
 };
@@ -158,95 +159,80 @@ function clearLocalStorage() {
   }
 }
 
-// Complete cleanup and stop
 
-// Selective teardown with option to keep local stream alive
-export function teardownPeer(mode: "keep-local" | "full" = "full") {
-  try { safeAbort(state.ac); } catch {}
-  state.ac = null;
-  try { state.pc?.close(); } catch {}
-  state.pc = null;
-  try { state.remoteStream?.getTracks().forEach(t=>t.stop()); } catch {}
-  state.remoteStream = null;
-  
-  if (mode === "keep-local") {
-    // Keep localStream alive - only teardown peer connection
-    state.phase = 'idle';
-    if (onPhaseCallback) onPhaseCallback('idle');
-    return;
-  }
-  
-  // Full teardown mode
-  stop("full");
-}
-
+    // Complete cleanup and stop
 export function stop(mode: "full"|"network" = "full"){
-  // partial-stop for network rematch
-  try { safeAbort(state.ac); } catch {}
-  state.ac = null;
-  try { state.pc?.close(); } catch {}
-  state.pc = null;
-  try { state.remoteStream?.getTracks().forEach(t=>t.stop()); } catch {}
-  state.remoteStream = null;
-  if (mode !== "full") return;
-  
-  // Collect metrics before cleanup
-  if (state.pairId && state.pc) {
-    try {
-      collectAndSendMetrics();
-    } catch {}
-  }
-  
+try{ __ditonaSetPair(null as any, (state as any).role); }catch{};
+  try { 
+    // Clean up DataChannel listeners safely
+    const dc = (globalThis as any).__ditonaDataChannel;
+    if (dc) { 
+      try { dc.onopen = dc.onmessage = dc.onclose = dc.onerror = null as any; } catch{} 
+      (globalThis as any).__ditonaDataChannel = null;
+    }
+    if (state.dc) { try { state.dc.onopen=null; state.dc.onmessage=null; state.dc.onclose=null; state.dc.onerror=null; } catch(_){} state.dc=null; } 
+  } catch(_) {}
   try{
-    const peer = (state && (state.lastPeer||null)) as any;
-    if(peer){
-      fetch('/api/rtc/prev/for', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ peer }) }).catch(()=>{});
-    }
-  }catch{}
-try {
-    // Update phase
-    state.phase = 'stopped';
-    if (onPhaseCallback) onPhaseCallback('stopped');
-    
-    // Broadcast phase event
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'idle',role:null}}));
-    }
-
-    // Abort any ongoing requests
-    try{ safeAbort(state.ac); }catch{} state.ac=null;
+    // abort any pending ops
+    try{ safeAbort(state.ac); }catch{} 
     state.ac = null;
 
-    // Close peer connection and stop tracks
-    if (state.pc) {
-      try {
-        const pc = state.pc as RTCPeerConnection;
-        pc.getSenders?.().forEach((sender: RTCRtpSender) => {
-          try {
-            if (sender.track) sender.track.stop();
-          } catch {}
-        });
-        pc.close();
-      } catch {}
+    // network-only partial stop: close pc + remote, keep local preview
+    if (mode !== "full"){
+      try{ state.pc?.close(); }catch{}
       state.pc = null;
+      try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+      state.remoteStream = null;
+      logRtc("stop", 206);
+      return;
     }
 
-    // Clear localStorage
-    clearLocalStorage();
+    // full stop: send metrics while pc is still alive
+    try{ if (state.pairId && state.pc){ collectAndSendMetrics(); } }catch{}
 
-    // Reset state
+    // close peer and stop remote tracks
+    try{ state.pc?.getSenders?.().forEach(s=>{ try{ s.track?.stop(); }catch{} }); }catch{}
+    try{ state.pc?.close(); }catch{}
+    state.pc = null;
+    try{ state.remoteStream?.getTracks().forEach(t=>t.stop()); }catch{}
+    state.remoteStream = null;
+
+    // hint prev-for once
+    try{
+      const peer = (state && (state.lastPeer||null)) as any;
+      if(peer){
+        fetch("/api/rtc/prev/for", {
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify({ peer })
+        }).catch(()=>{});
+      }
+    }catch{}
+
+    // phase + event
+    state.phase = "stopped";
+    try{ onPhaseCallback?.("stopped"); }catch{}
+    if (typeof window !== "undefined"){
+      window.dispatchEvent(new CustomEvent("rtc:phase",{ detail:{ phase:"idle", role:null }}));
+    }
+
+    // clear and reset
+    clearLocalStorage();
     state.sid = 0;
-    state.phase = 'idle';
+    state.phase = "idle";
     state.role = null;
     state.pairId = null;
+ try{ __ditonaSetPair((state as any).pairId, (state as any).role); }catch{};
 
-    logRtc('stop', 200);
-  } catch (e) {
-    console.warn('[rtc] stop error:', e);
+    logRtc("stop", 200);
+  }catch(e){
+    console.warn("[rtc] stop error:", e);
   }
 }
 
+
 // Collect and send metrics
+  
 async function collectAndSendMetrics() {
   if (!state.pc || !state.pairId) return;
   
@@ -499,8 +485,8 @@ async function iceExchange(sessionId: number) {
   pollIce().catch(() => {});
 }
 
-// Main start function
-export async function start(media: MediaStream, onPhase: (phase: Phase) => void) {
+// Main start function - accepts null media for camera error cases
+export async function start(media: MediaStream | null, onPhase: (phase: Phase) => void) {
   try {
     // Always stop first to prevent leaks
     stop();
@@ -545,18 +531,34 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
 
     // Matchmake: support both response formats
     for (let i = 0; i < 50 && checkSession(currentSession) && !state.ac?.signal.aborted; i++) {
-      // Prepare matchmake request with prevFor if available
+      // Prepare matchmake request with filters and prevFor if available
       const matchmakeOptions: RequestInit = {
         method: "POST", 
-        cache: "no-store"
+        cache: "no-store",
+        headers: { "content-type": "application/json" }
       };
       
+      // Get current filters from store
+      let filters = {};
+      try {
+        // Import filters store to get current preferences
+        const { useFilters } = await import('@/state/filters');
+        const { gender, countries } = useFilters.getState();
+        filters = { 
+          gender: gender === 'all' ? null : gender,
+          countries: countries?.length ? countries : null
+        };
+      } catch {}
+
+      // Build request payload
+      const payload: any = { ...filters };
       if (state.prevForOnce) {
-        matchmakeOptions.headers = { "content-type": "application/json" };
-        matchmakeOptions.body = JSON.stringify({ prevFor: state.prevForOnce });
+        payload.prevFor = state.prevForOnce;
         // Clear prevForOnce after use
         state.prevForOnce = null;
       }
+      
+      matchmakeOptions.body = JSON.stringify(payload);
       
       const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions, 'matchmake', currentSession);
       
@@ -568,6 +570,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
         // Support both formats: {pairId, role} and {found:true, pairId, role}
         if (j?.pairId && j?.role) {
           state.pairId = j.pairId;
+ try{ __ditonaSetPair((state as any).pairId, (state as any).role); }catch{};
           state.role = j.role;
           state.phase = 'matched';
           // Save peer for potential "prev" functionality
@@ -623,8 +626,6 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     // Setup DataChannel for real-time communication
     if (state.role === 'caller') {
       const dc = state.pc.createDataChannel('likes');
-  (globalThis as any).__ditonaDataChannel = dc;
-  dc.onopen = () => { dispatchEvent(new CustomEvent("rtc:phase",{detail:{phase:"dc-open"}})); };
       setupDataChannel(dc);
     }
     
@@ -635,7 +636,7 @@ export async function start(media: MediaStream, onPhase: (phase: Phase) => void)
     };
     
     state.pc.onconnectionstatechange = () => {
-      if (!checkSession(currentSession) || !state.pc) return;
+       try{const st=(state.pc as any).connectionState; if(st==="disconnected"||st==="failed"){ scheduleRestartIce(); }}catch{} if (!checkSession(currentSession) || !state.pc) return;
       
       const connectionState = state.pc.connectionState;
       logRtc('connection-state', 200, { connectionState });
@@ -769,31 +770,119 @@ export async function nextWithMedia(media: MediaStream) {
   }
 }
 
-// DataChannel setup for real-time likes
+// DataChannel setup for real-time likes and meta
 function setupDataChannel(dc: RTCDataChannel) {
   dc.onopen = () => {
     logRtc('datachannel-open', 200);
     // Store reference for sending data
     (globalThis as any).__ditonaDataChannel = dc;
-      (globalThis as any).__ditonaDataChannel2 = dc;
+    
+    // Broadcast dc-open phase event
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent('rtc:phase', { detail: { phase: "dc-open" } }));
+    }
+    
+    // Auto-send meta:init after opening
+    try{ 
+      dc.send(JSON.stringify({type:"meta:init"})); 
+      setTimeout(()=>dc?.send?.(JSON.stringify({type:"meta:init"})), 300); 
+    }catch{}
   };
-
-  dc.addEventListener("open", () => {
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:phase", {
-        detail: { phase: "dc-open", role: state?.role ?? null }
-      }));
-    } catch {}
-  });
   
   dc.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
+      
+      // Handle meta:init request - send peer meta immediately
+      if (msg.type === "meta:init") {
+        try {
+          // Two-phase meta approach for ≤300ms requirement
+          
+          // Phase 1: Send immediate meta from profile + cached geo (≤100ms)
+          const sendImmediateMeta = async () => {
+            let country = "Unknown";
+            let city = "Unknown"; 
+            let gender = "Unknown";
+            let name = "Anonymous";
+            
+            try {
+              // Get immediate geo from cache
+              const { getImmediateGeo } = await import('@/lib/geoCache');
+              const geoData = getImmediateGeo();
+              country = geoData.country;
+              city = geoData.city;
+            } catch {}
+            
+            try {
+              // Get profile data
+              if (typeof window !== 'undefined') {
+                const { useProfile } = await import('@/state/profile');
+                const profile = useProfile.getState().profile;
+                gender = profile.gender || "Unknown";
+                name = profile.displayName || "Anonymous";
+              }
+            } catch {}
+            
+            const immediateMetaObject = { country, city, gender, name, avatar: null, likes: 0 };
+            
+            try {
+              dc.send(JSON.stringify({type:"meta", payload: immediateMetaObject}));
+              console.log('[rtc] Phase 1: Immediate meta sent', immediateMetaObject);
+            } catch {}
+            
+            return immediateMetaObject;
+          };
+          
+          // Phase 2: Update meta with fresh geo data (background)
+          const updateMetaWithFreshGeo = async (initialMeta: any) => {
+            try {
+              const { fetchGeoWithCache } = await import('@/lib/geoCache');
+              const freshGeo = await fetchGeoWithCache();
+              
+              // Only send update if geo data changed
+              if (freshGeo.country !== initialMeta.country || freshGeo.city !== initialMeta.city) {
+                const updatedMetaObject = {
+                  ...initialMeta,
+                  country: freshGeo.country || "Unknown",
+                  city: freshGeo.city || "Unknown"
+                };
+                
+                try {
+                  dc.send(JSON.stringify({type:"meta", payload: updatedMetaObject}));
+                  console.log('[rtc] Phase 2: Updated meta sent', updatedMetaObject);
+                } catch {}
+              }
+            } catch (error) {
+              console.warn('[rtc] Phase 2: Fresh geo update failed:', error);
+            }
+          };
+          
+          // Execute phases
+          sendImmediateMeta().then(initialMeta => {
+            // Start Phase 2 in background (don't await)
+            updateMetaWithFreshGeo(initialMeta);
+          });
+          
+        } catch {}
+        return;
+      }
+      
+      // Handle meta response - broadcast to UI
+      if (msg.type === "meta" && msg.payload) {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent('ditona:peer-meta', { detail: msg.payload }));
+        }
+        return;
+      }
+      
+      // Legacy chat messages
       if (msg?.t === "chat" && msg?.pairId === state.pairId) {
         window.dispatchEvent(new CustomEvent('ditona:chat:recv', { detail: { text: String(msg.text || "") } }));
         return;
       }
-      if (msg.t === "like" && msg.pairId === state.pairId) {
+      
+      // Like toggle handling
+      if (msg.type === "like:toggle" || (msg.t === "like" && msg.pairId === state.pairId)) {
         // Broadcast like event to UI
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent('rtc:peer-like', { detail: { liked: !!msg.liked } }));
@@ -808,8 +897,14 @@ function setupDataChannel(dc: RTCDataChannel) {
   
   dc.onclose = () => {
     logRtc('datachannel-close', 200);
-    (globalThis as any).__ditonaDataChannel = null;
-      (globalThis as any).__ditonaDataChannel2 = null;
+    // Enhanced cleanup: clear global reference and notify LikeSystem
+    try {
+      (globalThis as any).__ditonaDataChannel = null;
+      // Broadcast DataChannel close event for components that depend on it
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent('ditona:datachannel-closed'));
+      }
+    } catch {}
   };
 }
 
@@ -826,10 +921,42 @@ export function stopRtcSession(reason: string = "user") {
   stop();
 }
 
+/** ditona: broadcast pairId to window for UI runtime */
+function __ditonaSetPair(pid?: string, role?: any){
+  try{
+    (window as any).__ditonaPairId = pid ?? null;
+    if (typeof window !== "undefined") {
+      try { window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: pid ?? null, role } })); } catch {}
+    }
+  }catch{}
+}
+
 
 try{
   window.addEventListener("ui:prev", ()=>{
     try{ state.prevForOnce = state.lastPeer; }catch{}
-    try{ teardownPeer("keep-local"); }catch{}
+    try{ next(); }catch{}
   });
 }catch{}
+/** Debounced ICE restart on transient drops */
+let __iceRestartTimer: any = null;
+function scheduleRestartIce() {
+  try {
+    if (__iceRestartTimer) return;
+    __iceRestartTimer = setTimeout(async () => {
+      __iceRestartTimer = null;
+      try {
+        if (!state?.pc || state?.ac?.signal?.aborted) return;
+        if (typeof state.pc.restartIce === 'function') {
+          await state.pc.restartIce();
+        } else {
+          try {
+            await state.pc.setLocalDescription(
+              await state.pc.createOffer({ iceRestart: true })
+            );
+          } catch {}
+        }
+      } catch(e) { try{ swallowAbort(e); }catch{} }
+    }, 700);
+  } catch {}
+}

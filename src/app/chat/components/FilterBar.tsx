@@ -10,6 +10,15 @@ const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 
 export default function FilterBar() {
   const freeForAll = useFFA();
+  
+  // FFA runtime detection
+  const ffa = (typeof window !== "undefined" && (window as any).__vip?.FREE_FOR_ALL == 1);
+  if (ffa) console.log("FFA_FORCE: enabled");
+  
+  // DataChannel state for button guards  
+  const dc = (globalThis as any).__ditonaDataChannel;
+  const filtersEnabled = ffa || dc?.readyState === "open";
+  
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);
   const [selectedGenders, setSelectedGenders] = useState<GenderKey[]>([]);
@@ -21,8 +30,10 @@ export default function FilterBar() {
         type="button"
         data-ui="gender-button"
         aria-label="Gender"
-        onClick={() => setOpenGender(true)}
-        className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur"
+        disabled={!filtersEnabled}
+        onClick={() => filtersEnabled && setOpenGender(true)}
+        title={!filtersEnabled ? "Available during active connection or FFA" : "Gender filters"}
+        className={`h-9 w-9 grid place-items-center rounded-xl ${!filtersEnabled ? 'bg-black/15 opacity-50 cursor-not-allowed' : 'bg-black/30 hover:bg-black/40'} text-white backdrop-blur`}
       >
         <span aria-hidden className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-rose-400">⚧</span>
       </button>
@@ -31,8 +42,10 @@ export default function FilterBar() {
         type="button"
         data-ui="country-button"
         aria-label="Countries"
-        onClick={() => setOpenCountry(true)}
-        className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur"
+        disabled={!filtersEnabled}
+        onClick={() => filtersEnabled && setOpenCountry(true)}
+        title={!filtersEnabled ? "Available during active connection or FFA" : "Country filters"}
+        className={`h-9 w-9 grid place-items-center rounded-xl ${!filtersEnabled ? 'bg-black/15 opacity-50 cursor-not-allowed' : 'bg-black/30 hover:bg-black/40'} text-white backdrop-blur`}
       >
         <span aria-hidden>🌍</span>
       </button>
