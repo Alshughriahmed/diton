@@ -1,0 +1,130 @@
+جاهز. هذه مهمة الوكيل الدقيقة لإصلاح المطابقة نهائيًا عبر ضبط تدفّق WebRTC حسب الدور ومنع 403 الخاطئة.
+
+هدف
+
+إجبار العميل على مسار عرض/جواب وICE الصحيح حسب الدور، مع تنظيف الحالة وإلغاء أي pollers قديمة. النتيجة: اتصال ناجح بين جهازين بلا 403.
+
+لماذا
+
+الطرف الخاطئ يضرب /api/rtc/answer و/api/rtc/ice فتظهر 403. في WebRTC يجب أن يقدّم caller العرض ويُجيب callee، ثم يتبادل الطرفان ICE حتى الاكتمال 
+developer.mozilla.org
++2
+developer.mozilla.org
++2
+. نستخدم AbortController لإلغاء الاستطلاعات عند تبدّل الجلسة 
+developer.mozilla.org
++1
+.
+
+ما تفعلُه الآن
+
+نفّذ التعديلات التالية فقط، Minimal-Diff، ثم ابْنِ واختبر:
+
+1) src/app/chat/rtcFlow.ts — إعادة ضبط التدفّق حسب الدور
+
+أضِف آلة حالات بسيطة:
+
+state = { role: 'caller' | 'callee' | null, pairId: string | null, ac: AbortController | null }
+
+عند بدء محاولة جديدة:
+
+نفّذ cleanup() أولًا: ألغِ ac.abort(), أزل المستمعين, امسح localStorage للمفاتيح: ditona_role, ditona_pair, ditona_ice_sent.
+
+أنشئ ac = new AbortController().
+
+POST /api/rtc/enqueue ثم poll POST /api/rtc/matchmake حتى تحصل على { pairId, role } أو { found:true, pairId, role } (ادعم الشكلين).
+
+خزّن role/pairId في الذاكرة ثم localStorage (للاستعادة فقط).
+
+تفرّع:
+
+caller:
+
+createOffer → setLocalDescription → POST /api/rtc/offer
+
+poll GET /api/rtc/answer حتى يصل الـSDP → setRemoteDescription
+
+ICE: عند onicecandidate أرسل دفعات إلى POST /api/rtc/ice; وبالتوازي poll GET /api/rtc/ice لإضافة البعيد بـpc.addIceCandidate حتى نهاية التجميع 
+developer.mozilla.org
++1
+
+callee:
+
+poll GET /api/rtc/offer → setRemoteDescription
+
+createAnswer → setLocalDescription → POST /api/rtc/answer
+
+ICE كما أعلاه: كالطرفين يرسلان POST ويقرآن GET، لكن ممنوع على callee استدعاء POST /offer، وممنوع على caller استدعاء GET /offer 
+developer.mozilla.org
++1
+
+احذر: اربط كل pollers بـac.signal وأوقفها عند cleanup() أو تغيّر pairId/role 
+developer.mozilla.org
+.
+
+سجّل تيلمتري خفيف:
+
+console.log('[rtc]', {role, op, code, pair: pairId}) بعد كل طلب، من دون طباعة الـSDP.
+
+2) src/app/chat/ChatClient.tsx — التكامل والتنظيف
+
+استخدم واجهة rtcFlow.start() وrtcFlow.cleanup() مرة واحدة فقط.
+
+عند unmount أو إعادة محاولة، نادِ cleanup() قبل أي enqueue() جديد.
+
+أبقِ جميع fetches same-origin ضمن https://www.ditonachat.com فقط (التحويل إلى www مُفعّل مسبقًا بالميدلوير).
+
+3) عدم السماح بمسارات خاطئة
+
+ضع حراسات صريحة:
+
+إذا role==='caller' فاجعل دوال getOffer() تُعيد 403 اصطناعيًا محليًا أو ترمي Error قبل الشبكة.
+
+إذا role==='callee' امنع postOffer().
+
+الشيء نفسه لـGET/POST answer بما يتوافق مع الأعلى.
+
+4) اختبارات مطابقة سريعة (أدوات مضمنة)
+
+شغّل بناء:
+
+pnpm build
+
+افتح تبويبين من نفس المتصفح على https://www.ditonachat.com/chat:
+
+راقب Console: يجب أن ترى تسلسلًا مرتبًا مثل:
+
+على caller: offer->200, answer->200, ice{post/get}->200
+
+على callee: offer{get}->200, answer{post}->200, ice{post/get}->200
+
+لا تُسجّل أي 403. أي 403 تعني مخالفة دور.
+
+اختياري: استخدم سكربت الاختبار الثنائي السابق pair_probe.sh للتحقّق من سيرفر المطابقة فقط.
+
+5) التسليم المطلوب من الوكيل
+
+قائمة الملفات المعدّلة وسطورها.
+
+لقطات من Console تُظهر [rtc] للتسلسل على caller وcallee.
+
+نتيجة pnpm build ووقت البناء.
+
+خلاصة: هل ظهرت أي 403 بعد التعديل؟ إن نعم، على أي عملية وبأي دور؟
+
+قيود
+
+لا تغييرات على الخادم.
+
+Minimal-Diff. لا حذف ميزات. لا لمس الفلاتر أو الـUI خارج rtcFlow.ts وتهيئة ChatClient.tsx.
+
+ملاحظات مرجعية
+
+مسار العرض/الجواب والأدوار caller/callee كما توصي به وثائق WebRTC/MDN، وتبادل ICE مستمر حتى الاكتمال 
+developer.mozilla.org
++2
+developer.mozilla.org
++2
+.
+
+إلغاء الاستطلاعات عند تبدّل الحالة عبر AbortController يجنّب تضارب الطلبات ويمنع 403 الناتجة عن pollers قديمة

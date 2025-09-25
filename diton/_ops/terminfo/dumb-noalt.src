@@ -1,0 +1,8 @@
+#	Reconstructed via infocmp from file: /usr/share/terminfo/d/dumb
+dumb|80-column dumb tty,
+	am,
+	cols#80,
+	bel=^G,
+	cr=\r,
+	cud1=\n,
+	ind=\n,

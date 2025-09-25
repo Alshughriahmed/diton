@@ -1,0 +1,236 @@
+Batch: Phase-D — Bridge loop fix + DC meta responder + FFA bootstrap + Autostart
+ما سنفعله
+
+إصلاح حلقة الأحداث في freeForAllBridge.ts بعلامة منع الارتداد.
+
+إنشاء مُجيب DataChannel لرسالة meta:init وبث ditona:peer-meta.
+
+تثبيت علم FFA عالميًا مبكرًا.
+
+تفعيل Auto-start للمطابقة بعد التروية.
+
+ملفات ستُنشأ/تُعدّل (Minimal-Diff)
+
+src/app/chat/freeForAllBridge.ts (إعادة إنشاء آمن).
+
+src/app/chat/dcMetaResponder.client.ts (جديد).
+
+src/app/chat/ChatClient.tsx (إضافة importين وحارس Auto-start فقط).
+
+سكربت التنفيذ (شِـل — غير تفاعلي)
+
+شغّل عبر: _ops/bin/run ./_ops/scripts/phaseD_bridge_meta_autostart.sh
+
+#!/usr/bin/env bash
+set -Eeuo pipefail; export TERM=dumb CI=1
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+mkdir -p _ops/backups _ops/reports
+
+BK="_ops/backups/phaseD_${STAMP}.tar"
+tar -cf "$BK" \
+  --exclude=node_modules --exclude=.git \
+  src/app/chat/freeForAllBridge.ts \
+  src/app/chat/dcMetaResponder.client.ts \
+  src/app/chat/ChatClient.tsx 2>/dev/null || true
+
+# 1) freeForAllBridge.ts — one-time init + FFA bootstrap + loop guard
+cat > src/app/chat/freeForAllBridge.ts <<'TS'
+// use client
+/**
+ * Bridge window <-> internal event bus with loop-guard
+ * Also bootstraps FFA runtime once.
+ */
+import { on, emit } from "@/utils/events";
+
+declare global {
+  interface Window {
+    __ditonaBridgeInit?: 1;
+    __ditonaFFALoaded?: 1;
+    __DITONA_FFA?: 0|1;
+  }
+}
+
+if (!window.__ditonaBridgeInit) {
+  window.__ditonaBridgeInit = 1;
+
+  // --- FFA bootstrap (runtime) ---
+  (async () => {
+    if (!window.__ditonaFFALoaded) {
+      try {
+        const r = await fetch("/api/rtc/env", { cache: "no-store" });
+        const j = await r.json().catch(() => ({}));
+        const ffa = (j?.server?.FREE_FOR_ALL === "1") || (j?.public?.NEXT_PUBLIC_FREE_FOR_ALL === "1");
+        window.__DITONA_FFA = ffa ? 1 : 0;
+        window.__ditonaFFALoaded = 1;
+        window.dispatchEvent(new CustomEvent("ffa:ready", { detail: { ffa: window.__DITONA_FFA } }));
+      } catch {}
+    }
+  })();
+
+  // --- Event bridge with bounce guard ---
+  const FLAG = "__bridge";
+  const names = ["rtc:phase", "rtc:pair", "ditona:peer-meta"] as const;
+
+  // window -> bus
+  for (const n of names) {
+    window.addEventListener(n, (ev: any) => {
+      const d = ev?.detail || {};
+      if (d && d[FLAG]) return; // already bridged
+      try { emit(n as any, { ...d, [FLAG]:"win" }); } catch {}
+    }, { passive: true });
+  }
+
+  // bus -> window
+  for (const n of names) {
+    on(n as any, (d: any) => {
+      if (d && d[FLAG]) return; // avoid echo
+      try { window.dispatchEvent(new CustomEvent(n, { detail: { ...d, [FLAG]:"bus" } })); } catch {}
+    });
+  }
+}
+TS
+
+# 2) dcMetaResponder.client.ts — reply to meta:init and forward meta to UI
+cat > src/app/chat/dcMetaResponder.client.ts <<'TS'
+// use client
+/**
+ * Listens to RTCDataChannel messages and:
+ *  - replies to {type:'meta:init'} with {type:'meta', payload:{...}}
+ *  - forwards incoming {type:'meta'} to window 'ditona:peer-meta'
+ */
+declare global {
+  interface Window {
+    __ditonaDataChannel?: RTCDataChannel|null;
+    __ditonaDataChannel2?: RTCDataChannel|null;
+    __ditonaPairId?: string | null;
+  }
+}
+
+type AnyMsg = { type?: string; [k: string]: any };
+
+function getLocalMeta() {
+  // Country from localStorage ditona_geo if available
+  let country: string | undefined, city: string | undefined, gender: string | undefined;
+  try {
+    const j = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+    country = j?.country || undefined;
+    city = j?.city || undefined;
+  } catch {}
+  // Gender heuristic: try persisted selection
+  try {
+    const g = localStorage.getItem("ditona_gender") || localStorage.getItem("gender") || "";
+    gender = g || undefined;
+  } catch {}
+  return { country, city, gender };
+}
+
+function wireDC(dc: RTCDataChannel) {
+  if (!dc) return;
+  try {
+    dc.removeEventListener("message", onMsg as any);
+    // no-op if not present
+  } catch {}
+  dc.addEventListener("message", onMsg as any, { passive: true });
+  if (dc.readyState === "open") {
+    try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+    setTimeout(() => { try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
+  }
+}
+
+function onMsg(ev: MessageEvent) {
+  let d: AnyMsg = {};
+  try { d = JSON.parse(String(ev.data || "")); } catch { /* ignore non-JSON */ }
+  if (!d || !d.type) return;
+
+  if (d.type === "meta:init") {
+    const payload = getLocalMeta();
+    try { (ev.target as RTCDataChannel)?.send(JSON.stringify({ type: "meta", payload })); } catch {}
+    return;
+  }
+  if (d.type === "meta" && d.payload) {
+    try { window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: d.payload })); } catch {}
+    return;
+  }
+}
+
+(function init(){
+  const dc = (window.__ditonaDataChannel || window.__ditonaDataChannel2) as any;
+  if (dc) wireDC(dc);
+
+  // When phases change, try to (re)wire the latest DC reference
+  window.addEventListener("rtc:phase", () => {
+    const ndc = (window.__ditonaDataChannel || window.__ditonaDataChannel2) as any;
+    if (ndc) wireDC(ndc);
+  });
+})();
+TS
+
+# 3) ChatClient.tsx — ensure imports + autostart
+CHAT="src/app/chat/ChatClient.tsx"
+if [[ -f "$CHAT" ]]; then
+  # import files if missing
+  grep -q 'freeForAllBridge' "$CHAT" || sed -i '1,12 s~^~import "./freeForAllBridge";\n~' "$CHAT"
+  grep -q 'dcMetaResponder' "$CHAT" || sed -i '1,14 s~^~import "./dcMetaResponder.client";\n~' "$CHAT"
+
+  # add autostart effect once (guarded)
+  if ! grep -q '__ditonaAutostartDone' "$CHAT"; then
+    awk '
+      BEGIN{printed=0}
+      /useEffect|export default/{ if(!printed){ 
+        print "if (typeof window!==\"undefined\" && !window.__ditonaAutostartDone){";
+        print "  window.__ditonaAutostartDone=1; try{ (async()=>{";
+        print "    window.dispatchEvent(new CustomEvent(\"rtc:phase\",{detail:{phase:\"boot\"}}));";
+        print "    const m = await import(\"./rtcFlow\");";
+        print "    try{ await m.next(); }catch{}";
+        print "  })(); }catch{} }";
+        printed=1
+      } }1' "$CHAT" > "$CHAT.tmp" && mv "$CHAT.tmp" "$CHAT"
+  fi
+fi
+
+# 4) قبول سريع (بالأكواد/الأعلام)
+RPT="_ops/reports/phaseD_bridge_meta_autostart_${STAMP}.log"
+ok_bridge=$(grep -q 'FLAG.*__bridge' src/app/chat/freeForAllBridge.ts && echo 1 || echo 0)
+ok_resp=$(grep -q 'type..meta:init' src/app/chat/dcMetaResponder.client.ts && echo 1 || echo 0)
+ok_imports=$(grep -q 'freeForAllBridge' "$CHAT" && grep -q 'dcMetaResponder' "$CHAT" && echo 1 || echo 0)
+ok_autostart=$(grep -q '__ditonaAutostartDone' "$CHAT" && echo 1 || echo 0)
+
+{
+  echo "-- Acceptance --"
+  echo "BRIDGE_LOOP_GUARD_OK=${ok_bridge}"
+  echo "DC_META_RESPONDER_OK=${ok_resp}"
+  echo "CHATCLIENT_IMPORTS_OK=${ok_imports}"
+  echo "AUTOSTART_HOOK_OK=${ok_autostart}"
+  echo "[backup] $BK"
+} | tee "$RPT"
+echo "[i] Report: $RPT"
+
+ما الذي نتوقع تغيّره وظيفيًا بعد التشغيل
+
+لا مزيد من RangeError: Maximum call stack size exceeded من الجسر.
+
+عند المطابقة، تُضخ بطاقة الطرف (country/gender… إلخ) خلال ≤ 300ms.
+
+زر ❤️ لا يُظهر “لا يوجد اتصال نشط” عندما تكون القناة مفتوحة.
+
+تبدأ المطابقة تلقائيًا بعد دخول /chat (بدون الضغط على “التالي”).
+
+فحص يدوي سريع (من المتصفح)
+
+افتح DevTools Console على /chat، ثم الصق:
+
+// تأكيد FFA وبدء المطابقة تلقائيًا
+console.log('FFA', window.__DITONA_FFA);
+window.addEventListener('rtc:phase', e=>console.log('PHASE', e.detail));
+window.addEventListener('rtc:pair',  e=>console.log('PAIR',  e.detail));
+window.addEventListener('ditona:peer-meta', e=>console.log('META', e.detail));
+
+// إن وُجدت قناة بيانات، اطلب الميتا يدويًا أيضًا
+setTimeout(()=>{
+  const dc = window.__ditonaDataChannel || window.__ditonaDataChannel2;
+  console.log('DC', dc?.label, dc?.readyState);
+  try{ dc?.send?.(JSON.stringify({type:'meta:init'})); }catch{}
+}, 500);
+
+
+قبول يدوي: ترى PHASE searching خلال ≤ 2s، و META {country|gender…} خلال ≤ 300ms بعد الاتصال، ولا تظهر رسالة حلقة الجسر في الكونسول.    إذا فشل أي بند قبول، ايرجى من الوكيل إصلاحه مباشرةً دون تعطيل أي ميزة قائمة، مع الحفاظ على نفس أسلوب الـMinimal-Diff والنسخ الاحتياطي والتقرير.

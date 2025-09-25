@@ -1,0 +1,11 @@
+## versions
+v20.19.3
+^15.5.2
+## headers /chat (after age)
+## robots/sitemap
+HTTP/2 200 
+User-agent: *
+Allow: /
+Allow: /plans
+Allow: /privacy
+Allow: /terms

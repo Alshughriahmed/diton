@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Goal: إصلاح توصيل FilterBar لفتح الـmodals محليًا بدون window events،
+# وتثبيت الأزرار ⚧ و🌍 بأقصى الزاوية العليا اليمنى في القسم العلوي.
+# Minimal-Diff. لا مساس بالخادم. لا حذف ميزات.
+
+LABEL="fix_filterbar_wiring_$(date -u +%Y%m%d-%H%M%S)"
+BACKUP_DIR="_ops/backups/$LABEL"
+BRANCH="fix/ui-filterbar-wiring"
+mkdir -p "$BACKUP_DIR"
+
+echo "[1/8] إنشاء فرع عمل آمن"
+git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+
+echo "[2/8] نسخ احتياطي"
+for f in \
+  "src/app/chat/components/FilterBar.tsx" \
+  "src/app/chat/ChatClient.tsx"
+do
+  [ -f "$f" ] && install -D "$f" "$BACKUP_DIR/$f"
+done
+
+echo "[3/8] كتابة FilterBar.tsx كعميل مع state محلي + أيقونات في أقصى أعلى يمين"
+cat > src/app/chat/components/FilterBar.tsx <<'TSX'
+"use client";
+
+import dynamic from "next/dynamic";
+import { useState } from "react";
+
+const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
+const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
+
+export default function FilterBar() {
+  const [openGender, setOpenGender] = useState(false);
+  const [openCountry, setOpenCountry] = useState(false);
+
+  return (
+    <div className="absolute top-1 right-1 z-[60] flex items-center gap-2 pointer-events-none">
+      {/* Gender */}
+      <button
+        type="button"
+        data-ui="gender-button"
+        aria-label="Gender"
+        onClick={() => setOpenGender(true)}
+        className="pointer-events-auto h-8 w-8 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white text-sm backdrop-blur transition"
+      >
+        <span
+          aria-hidden
+          className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-rose-400"
+          style={{ lineHeight: 1 }}
+        >
+          ⚧
+        </span>
+      </button>
+
+      {/* Countries */}
+      <button
+        type="button"
+        data-ui="country-button"
+        aria-label="Countries"
+        onClick={() => setOpenCountry(true)}
+        className="pointer-events-auto h-8 w-8 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white text-sm backdrop-blur transition"
+      >
+        <span aria-hidden style={{ lineHeight: 1 }}>🌍</span>
+      </button>
+
+      {/* badges placeholders */}
+      <div data-ui="gender-badge" className="sr-only"></div>
+      <div data-ui="country-count-badge" className="sr-only"></div>
+
+      {/* Modals */}
+      {openGender && (
+        <GenderModal open={true} onClose={() => setOpenGender(false)} />
+      )}
+      {openCountry && (
+        <CountryModal open={true} onClose={() => setOpenCountry(false)} />
+      )}
+    </div>
+  );
+}
+TSX
+
+echo "[4/8] تنظيف واردات قديمة من ChatClient.tsx"
+# إزالة أي واردات قديمة
+sed -i -E '/RemoteTopRight|CountrySelect|GenderSelect/d' src/app/chat/ChatClient.tsx || true
+
+echo "[5/8] ضمان استيراد FilterBar من المسار الصحيح"
+if ! grep -q 'components/FilterBar' src/app/chat/ChatClient.tsx; then
+  if grep -n -m1 -E '^[\"\x27]use client[\"\x27]' src/app/chat/ChatClient.tsx >/dev/null; then
+    ln=$(grep -n -m1 -E '^[\"\x27]use client[\"\x27]' src/app/chat/ChatClient.tsx | cut -d: -f1)
+    awk -v ln="$ln" 'NR==ln{print; print "import FilterBar from \"@/app/chat/components/FilterBar\";"; next} {print}' \
+      src/app/chat/ChatClient.tsx > src/app/chat/ChatClient.tsx.tmp && mv src/app/chat/ChatClient.tsx.tmp src/app/chat/ChatClient.tsx
+  else
+    sed -i '1i import FilterBar from "@\/app\/chat\/components\/FilterBar";' src/app/chat/ChatClient.tsx
+  fi
+fi
+
+echo "[6/8] إدراج <FilterBar /> داخل القسم العلوي مرة واحدة فقط"
+if ! grep -q '<FilterBar />' src/app/chat/ChatClient.tsx; then
+  # إدراج بعد أول <section ...> في الملف (القسم العلوي لديه className="relative h-1/2 ..." عادة)
+  awk '
+    BEGIN{ins=0}
+    ins==0 && $0 ~ /<section/ { print; print "        <FilterBar />"; ins=1; next }
+    { print }
+  ' src/app/chat/ChatClient.tsx > src/app/chat/ChatClient.tsx.tmp && mv src/app/chat/ChatClient.tsx.tmp src/app/chat/ChatClient.tsx
+fi
+
+echo "[7/8] بناء وفحص REST-RTC (قرائي فقط لتقليل التكلفة)"
+set +e
+pnpm build >/tmp/build.log 2>&1
+BUILD_RC=$?
+bash _ops/acc_rtc.sh https://www.ditonachat.com >/tmp/acc.log 2>&1
+ACC_RC=$?
+set -e
+
+echo "[8/8] إضافة، كومِت، دفع الفرع فقط (بدون نشر تلقائي على main)"
+git add -A
+git commit -m "fix(ui): wire FilterBar with local state; place ⚧/🌍 at top-right; keep server untouched" || true
+git push -u origin "$BRANCH"
+
+echo
+echo "-- Acceptance --"
+echo "BACKUP_DIR=$BACKUP_DIR"
+echo "HAS_FilterBarButtons=$(grep -c 'data-ui=\"gender-button\"' src/app/chat/components/FilterBar.tsx || true)"
+echo "CHATCLIENT_IMPORT=$(grep -c 'components/FilterBar' src/app/chat/ChatClient.tsx || true)"
+echo "CHATCLIENT_USAGE=$(grep -c '<FilterBar />' src/app/chat/ChatClient.tsx || true)"
+echo "BUILD_RC=$BUILD_RC  (راجع /tmp/build.log عند الحاجة)"
+echo "ACC_RC=$ACC_RC     (راجع /tmp/acc.log عند الحاجة)"
+echo "NEXT_STEP=افتح /chat واضغط ⚧ ثم 🌍 — يجب أن تفتح الـmodals بلا أخطاء Console."

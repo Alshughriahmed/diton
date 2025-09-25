@@ -1,0 +1,150 @@
+لمطلوب للوكيل (Replit Agent):
+
+الهدف
+
+إصلاح ‎/api/stripe/subscribe‎ ليعمل “Auth-gated”:
+
+يرجع ‎401‎ عند غياب جلسة NextAuth.
+
+يضيف ‎Cache-Control: no-store, no-cache, must-revalidate‎ في كل الردود.
+
+لا حذف ولا تعديل لسلوك أي ميزة أخرى. Minimal-Diff. أقل تكلفة.
+
+الحالة الحالية
+
+البناء ناجح.
+
+طلب POST غير مُوثّق إلى ‎/api/stripe/subscribe‎ يرجع ‎200‎ بدل ‎401‎.
+
+رؤوس ‎no-store‎ غير موجودة على هذا المسار.
+
+ما أريده منك تحديدًا
+
+عدّل الملف ‎src/app/api/stripe/subscribe/route.ts‎ فقط.
+
+أبقِ ‎export const runtime = "nodejs"‎.
+
+أضف حارس جلسة مزدوجًا:
+
+فحص سريع لوجود كوكي NextAuth في ترويسة Cookie.
+
+ثم ‎getServerSession()‎. إن فشل أيّ منهما → ‎401‎ مع رؤوس ‎no-store‎.
+
+استخدم ثابتًا موحدًا للرؤوس:
+
+const NO_STORE = {
+  "cache-control":"no-store, no-cache, must-revalidate",
+  "referrer-policy":"no-referrer",
+  "content-type":"application/json"
+};
+
+
+أي رد عبر ‎NextResponse.json(...)‎ يجب أن يمر بهذه الرؤوس.
+
+قبول كل من ‎priceId‎ المباشر و‎plan‎ مع mapping لبيئة ‎STRIPE_PRICE_ID_EUR_*‎.
+
+إذا ‎STRIPE_SECRET_KEY‎ غير مضبوطة → أعد ‎500 {error:"stripe not configured"}‎ مع ‎NO_STORE‎.
+
+لا تغيّر ملفات أخرى ولا منطق أسعار ‎/api/stripe/prices‎.
+
+شغّل فحوص القبول أدناه.
+
+إن ظهرت عوائق، قدّم إصلاح Minimal-Diff داخل نفس الملف فقط.
+
+سلّمني تقريرًا ختاميًا بملف Markdown يلخّص الفرق والنتائج.
+
+سكربت واحد للتنفيذ والتحقق
+
+انسخ السكربت التالي كما هو وشغّله. يقوم بعمل نسخة احتياطية، يطبّق التصحيحات Minimal-Diff، يبني، ثم يفحص:
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+T="src/app/api/stripe/subscribe/route.ts"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/stripe_subscribe_agent_${TS}"
+RPT_DIR="_ops/reports"; mkdir -p "$BK" "$RPT_DIR"
+RPT="$RPT_DIR/stripe_agent_${TS}.log"
+exec > >(tee -a "$RPT") 2>&1
+
+echo "== backup =="
+mkdir -p "$BK"
+cp -a "$T" "$BK/route.ts.bak"
+
+echo "== patch =="
+# 1) اضمن وجود runtime
+grep -q 'export const runtime' "$T" || \
+  perl -0777 -i -pe 's/^(import[^\n]*\n)/$1export const runtime = "nodejs";\n/s' "$T"
+
+# 2) أضف/وحّد ثابت NO_STORE
+perl -0777 -i -pe '
+  if ($_ !~ /const\s+NO_STORE\s*=\s*\{/) {
+    s/^(import[^\n]*\n)/$1const NO_STORE = {"cache-control":"no-store, no-cache, must-revalidate","referrer-policy":"no-referrer","content-type":"application\/json"};\n/s;
+  }
+' "$T"
+
+# 3) استيراد getServerSession إن غاب
+grep -q 'getServerSession' "$T" || \
+  perl -0777 -i -pe 's/^import\s+\{\s*NextResponse\s*\}\s+from\s+"next\/server";/import { NextResponse } from "next\/server";\nimport { getServerSession } from "next-auth";/s' "$T"
+
+# 4) دالة مُساعدة j توحّد الرؤوس
+perl -0777 -i -pe '
+  if ($_ !~ /function\s+j\s*\(body/) {
+    s/(export\s+async\s+function\s+POST\s*\()/function j(b,s){ return NextResponse.json(b,{status:(typeof s==="number"?s:(s?.status||200)), headers:NO_STORE}); }\n\n$1/s;
+  }
+' "$T"
+
+# 5) احقن حارس الكوكي + الجلسة في بداية POST
+perl -0777 -i -pe '
+  s/(export\s+async\s+function\s+POST\s*\(\s*req:\s*Request\s*\)\s*\{\s*)/$1
+  const ck = req.headers.get("cookie") || "";
+  const hasAuthCookie = ck.includes("next-auth.session-token") || ck.includes("__Secure-next-auth.session-token");
+  if (!hasAuthCookie) { return j({ error: "unauthorized" }, 401); }
+  const session = await getServerSession();
+  if (!session?.user) { return j({ error: "unauthorized" }, 401); }
+  /s' "$T"
+
+# 6) وحّد كل ردود NextResponse.json لتستخدم j(...) ورؤوس NO_STORE
+# استبدال أنماط شائعة للردود المباشرة
+perl -0777 -i -pe 's/NextResponse\.json\s*\(\s*({[^;]+?})\s*,\s*\{\s*status\s*:\s*(\d+)\s*\}\s*\)/j($1, $2)/gs' "$T"
+perl -0777 -i -pe 's/NextResponse\.json\s*\(\s*({[^;]+?})\s*\)/j($1)/gs' "$T"
+
+echo "== build =="
+pnpm -s build
+
+echo "== verify: unauth should be 401 =="
+HTTP=$(curl -sS -o /tmp/sub.json -w "%{http_code}" -XPOST -H "content-type: application/json" -d '{"plan":"daily"}' "https://www.ditonachat.com/api/stripe/subscribe" || true)
+HDR=$(curl -sSI -XPOST -H "content-type: application/json" -d '{"plan":"daily"}' "https://www.ditonachat.com/api/stripe/subscribe" | tr -d "\r" | sed -n '1,20p')
+echo "SUB_HTTP=$HTTP"
+echo "HEADERS_SAMPLE=$(echo "$HDR" | head -n 12 | tr "\n" " ")"
+HAS_NOSTORE=$(echo "$HDR" | grep -qi "cache-control: .*no-store" && echo 1 || echo 0)
+HAS_REF=$(echo "$HDR" | grep -qi "^referrer-policy: no-referrer" && echo 1 || echo 0)
+echo "-- Acceptance --"
+echo "BUILD_RC=0"
+echo "SUB_HTTP=$HTTP"
+echo "HAS_NOSTORE=$HAS_NOSTORE"
+echo "HAS_REFERRER=$HAS_REF"
+echo "BACKUP_DIR=$BK"
+echo "REPORT=$RPT"
+
+القبول النهائي المطلوب
+
+‎BUILD_RC=0‎.
+
+‎SUB_HTTP=401‎ عند POST بدون جلسة.
+
+‎HAS_NOSTORE=1‎ و‎HAS_REFERRER=1‎ في الرد.
+
+لا تغيّر في أي سلوك خارج ‎/api/stripe/subscribe‎.
+
+عند النجاح
+
+أنشئ تقريرًا ‎_ops/reports/stripe_subscribe_agent_DONE_<ts>.md‎ يذكر:
+
+الفرق المطبّق مختصرًا.
+
+مخرجات القبول.
+
+تأكيد عدم تعديل مسارات أخرى.
+
+إذا واجهت عائقًا، اذكر السبب الدقيق والسطور المتأثرة، وقدّم تصحيحًا Minimal-Diff داخل نفس الملف فقط.

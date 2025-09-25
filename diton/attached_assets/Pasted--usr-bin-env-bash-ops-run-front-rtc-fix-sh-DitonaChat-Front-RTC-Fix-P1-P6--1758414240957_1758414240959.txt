@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+# _ops/run_front_rtc_fix.sh — DitonaChat Front+RTC Fix (P1→P6)
+# محافظ: لا يحذف ميزات. يلمس واجهة فقط + تلطيف /api/message/allow تحت FFA.
+# مخرجات: تقرير واحد _ops/reports/front_rtc_UTC.log وباك أب تحت _ops/backups/front_rtc_UTC/
+
+########################################
+# حارس طرفية صارم (لا شاشة بديلة)
+########################################
+set -Eeuo pipefail
+export TERM=dumb CI=1 NO_COLOR=1 FORCE_COLOR=0
+export PAGER=cat MANPAGER=cat GIT_PAGER=cat LESS='-R -F -X'
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=cat
+__noaltscr(){ printf '\e[?1049l\e[?47l'; }
+__noaltscr; trap '__noaltscr' DEBUG; trap '__noaltscr' EXIT INT TERM
+safe_exec(){ if command -v script >/dev/null 2>&1; then script -qfec "bash -lc \"$*\"" /dev/null 2>&1 | cat; else bash -lc "$*" </dev/null 2>&1 | cat; fi; }
+curl_s(){ curl -sS --connect-timeout 5 --max-time 15 "$@"; }
+say(){ printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+
+########################################
+# ثابتات ومسارات
+########################################
+ROOT="${ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; cd "$ROOT"
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+BKP="_ops/backups/front_rtc_${STAMP}"; RPT="_ops/reports/front_rtc_${STAMP}.log"; TDIR="_ops/tmp/front_rtc_${STAMP}"
+mkdir -p "$BKP" "$(dirname "$RPT")" "$TDIR" src/hooks
+
+BASE="${BASE:-https://www.ditonachat.com}" # يمكن تغييره عند الاستدعاء
+
+########################################
+# P1-lite: فحص إنتاجي قبل التعديل
+########################################
+say "P1: pre-check env/age/anon on $BASE"
+A_CJ="$TDIR/cj_A.txt"; B_CJ="$TDIR/cj_B.txt"
+ENV_JSON="$TDIR/env.json"; A_HDR="$TDIR/A.hdr"; B_HDR="$TDIR/B.hdr"
+
+curl_s -i "$BASE/api/rtc/env" | tee "$TDIR/env.raw" >/dev/null
+awk 'BEGIN{h=1} {if(h && /^$/){h=0;next} if(!h)print}' "$TDIR/env.raw" > "$ENV_JSON" || true
+SRV_FFA="$(grep -o '"FREE_FOR_ALL"[[:space:]]*:[[:space:]]*[^,}]*' "$ENV_JSON" | head -1 | awk -F: '{gsub(/[ "]/,"",$2); print $2}')" || SRV_FFA=0
+PUB_FFA="$(grep -o '"NEXT_PUBLIC_FREE_FOR_ALL"[[:space:]]*:[[:space:]]*[^,}]*' "$ENV_JSON" | head -1 | awk -F: '{gsub(/[ "]/,"",$2); print $2}')" || PUB_FFA=0
+
+curl_s -i -X POST -H 'content-type: application/json' -d '{}' -c "$A_CJ" -b "$A_CJ" "$BASE/api/age/allow" > "$A_HDR"
+curl_s -i -X POST -H 'content-type: application/json' -d '{}' -c "$B_CJ" -b "$B_CJ" "$BASE/api/age/allow" > "$B_HDR"
+A_AGE=$(awk 'BEGIN{s=0} $1 ~ /^HTTP/{s=$2} END{print s}' "$A_HDR")
+B_AGE=$(awk 'BEGIN{s=0} $1 ~ /^HTTP/{s=$2} END{print s}' "$B_HDR")
+
+curl_s -i -X POST -H 'content-type: application/json' -d '{}' -c "$A_CJ" -b "$A_CJ" "$BASE/api/rtc/init" > "$A_HDR"
+curl_s -i -X POST -H 'content-type: application/json' -d '{}' -c "$B_CJ" -b "$B_CJ" "$BASE/api/rtc/init" > "$B_HDR"
+A_INIT=$(awk 'BEGIN{s=0} $1 ~ /^HTTP/{s=$2} END{print s}' "$A_HDR")
+B_INIT=$(awk 'BEGIN{s=0} $1 ~ /^HTTP/{s=$2} END{print s}' "$B_HDR")
+
+########################################
+# نسخ احتياطية للملفات المحتملة
+########################################
+bkp(){ local f="$1"; [ -f "$f" ] && { mkdir -p "$BKP/$(dirname "$f")"; cp -a "$f" "$BKP/$f"; }; }
+bkp "src/utils/ffa.ts"
+bkp "src/app/chat/components/ChatToolbar.tsx"
+bkp "src/app/chat/components/FilterBar.tsx"
+bkp "src/components/filters/GenderSelect.tsx"
+bkp "src/components/filters/CountrySelect.tsx"
+bkp "src/app/chat/ChatClient.tsx"
+bkp "src/app/chat/freeForAllBridge.ts"
+bkp "src/utils/events.ts"
+bkp "src/utils/bus.ts"
+bkp "src/app/api/message/allow/route.ts"
+
+########################################
+# P2: توحيد FFA وقت التشغيل (useFFA + إزالة process.env من العميل)
+########################################
+say "P2: runtime FFA hook and client gating"
+
+# 1) hook
+cat > src/hooks/useFFA.ts <<'TS'
+"use client";
+import { useSyncExternalStore } from "react";
+declare global { interface Window { __DITONA_FFA?: 0|1|boolean|string } }
+function snap(): boolean {
+  try { const v=(globalThis as any)?.window?.__DITONA_FFA; return v===1||v==="1"||v===true||v==="true"; } catch { return false; }
+}
+function sub(cb:()=>void){ const h=()=>cb(); try{
+  window.addEventListener("ffa:ready",h as any,{passive:true});
+  window.addEventListener("ditona:ffa",h as any,{passive:true});
+}catch{} return ()=>{ try{
+  window.removeEventListener("ffa:ready",h as any);
+  window.removeEventListener("ditona:ffa",h as any);
+}catch{} }; }
+export function useFFA(): boolean { return typeof window==="undefined" ? false : useSyncExternalStore(sub,snap,()=>false); }
+export function isFFA(): boolean { return snap(); }
+TS
+
+# 2) utils/ffa.ts ديناميكي
+mkdir -p src/utils
+cat > src/utils/ffa.ts <<'TS'
+"use client";
+declare global { interface Window { __DITONA_FFA?: 0|1|boolean|string } }
+export function isFFA(): boolean {
+  try { const v=(globalThis as any)?.window?.__DITONA_FFA; return v===1||v==="1"||v===true||v==="true"; } catch { return false; }
+}
+TS
+
+# 3) ChatToolbar uses useFFA()
+if [ -f "src/app/chat/components/ChatToolbar.tsx" ]; then
+  grep -q 'from "@/hooks/useFFA"' src/app/chat/components/ChatToolbar.tsx || \
+    sed -i '1,40{/^import /!b; a import { useFFA } from "@/hooks/useFFA";} ' src/app/chat/components/ChatToolbar.tsx
+  sed -i 's/const[[:space:]]\+freeForAll[[:space:]]*=.*$/const freeForAll = useFFA();/' src/app/chat/components/ChatToolbar.tsx || true
+fi
+
+# 4) FilterBar uses useFFA()
+if [ -f "src/app/chat/components/FilterBar.tsx" ]; then
+  sed -i '/__vip\?\.FREE_FOR_ALL/d' src/app/chat/components/FilterBar.tsx || true
+  grep -q 'from "@/hooks/useFFA"' src/app/chat/components/FilterBar.tsx || \
+    sed -i '1,40{/^import /!b; a import { useFFA } from "@/hooks/useFFA";} ' src/app/chat/components/FilterBar.tsx
+  grep -q 'useFFA()' src/app/chat/components/FilterBar.tsx || \
+    sed -i '0,/export default function FilterBar[^{]*{/{s//export default function FilterBar(){\n  const freeForAll = useFFA();/}' src/app/chat/components/FilterBar.tsx
+fi
+
+# 5) إزالة أي process.env.NEXT_PUBLIC_FREE_FOR_ALL من عميل
+POST_ENV_HITS="$(grep -RIl --include='*.ts*' 'process.env.NEXT_PUBLIC_FREE_FOR_ALL' src || true)"
+if [ -n "$POST_ENV_HITS" ]; then
+  while IFS= read -r f; do
+    sed -i 's/process\.env\.NEXT_PUBLIC_FREE_FOR_ALL/undefined/g' "$f" || true
+  done <<< "$POST_ENV_HITS"
+fi
+
+########################################
+# P3: جسر window↔️bus + نشر __DITONA_FFA + events
+########################################
+say "P3: events bridge + FFA bootstrap"
+
+cat > src/app/chat/freeForAllBridge.ts <<'TS'
+"use client";
+import { useEffect } from "react";
+type EmitFn = (ev: string, payload?: any)=>void;
+async function loadBus(): Promise<EmitFn> {
+  try { const m = await import("@/utils/events"); if ((m as any).busEmit) return (m as any).busEmit as EmitFn; } catch {}
+  try { const m = await import("@/utils/bus");    if ((m as any).busEmit) return (m as any).busEmit as EmitFn; } catch {}
+  // fallback: echo to window (so listeners there still work)
+  return (ev: string, payload?: any)=>{ try{ window.dispatchEvent(new CustomEvent(ev,{detail:payload})) }catch{} };
+}
+function setFFAfromWindow(){
+  try{
+    const vip = (window as any).__vip; // إن وُجد
+    if (vip && (vip.FREE_FOR_ALL===1 || vip.FREE_FOR_ALL==="1" || vip.FREE_FOR_ALL===true)) {
+      (window as any).__DITONA_FFA = 1;
+      window.dispatchEvent(new Event("ffa:ready"));
+    }
+  }catch{}
+}
+export default function FreeForAllBridge(){
+  useEffect(()=>{ setFFAfromWindow(); (async()=>{
+    const emit = await loadBus();
+    const relay = (name:string)=>(e:any)=>emit(name, e?.detail ?? e);
+    const evs = ["rtc:pair","rtc:phase","ditona:peer-meta","ditona:ffa","ffa:ready"];
+    evs.forEach(n=>window.addEventListener(n, relay(n) as any, {passive:true}));
+    return ()=>evs.forEach(n=>window.removeEventListener(n, relay(n) as any));
+  })(); },[]);
+  return null;
+}
+TS
+
+# حقن الجسر + autostart once في ChatClient.tsx
+if [ -f "src/app/chat/ChatClient.tsx" ]; then
+  grep -q 'from "@/app/chat/freeForAllBridge"' src/app/chat/ChatClient.tsx || \
+    sed -i '1,40{/^import /!b; a import FreeForAllBridge from "@/app/chat/freeForAllBridge";} ' src/app/chat/ChatClient.tsx
+  # إدراج <FreeForAllBridge /> داخل JSX إن أمكن
+  if grep -q 'export default function' src/app/chat/ChatClient.tsx; then
+    sed -i '0,/<\/>/{s//<><FreeForAllBridge \/>/}' src/app/chat/ChatClient.tsx || true
+  fi
+  # Autostart: emit("ui:next") مرة واحدة بعد الهيدريشن
+  grep -q 'AUTOSTART_DONE' src/app/chat/ChatClient.tsx || \
+    sed -i '1,200{/^import /!b; a import { busEmit } from "@/utils/events";} ' src/app/chat/ChatClient.tsx 2>/dev/null || true
+  grep -q 'AUTOSTART_DONE' src/app/chat/ChatClient.tsx || \
+    awk '1; /export default function/ && c==0 {print "import { useEffect } from '\''react'\'';"; c=1}' src/app/chat/ChatClient.tsx > "$TDIR/ChatClient.tmp" && mv "$TDIR/ChatClient.tmp" src/app/chat/ChatClient.tsx
+  grep -q 'AUTOSTART_DONE' src/app/chat/ChatClient.tsx || \
+    awk '1; /return[[:space:]]*\(/{print "  useEffect(()=>{ if(!(window as any).__DITONA_AUTOSTART_DONE){ (window as any).__DITONA_AUTOSTART_DONE=1; try{ (busEmit||((e:any)=>window.dispatchEvent(new CustomEvent(\"ui:next\")) ) )(\"ui:next\"); }catch{} }},[]);"}' src/app/chat/ChatClient.tsx > "$TDIR/ChatClient2.tmp" && mv "$TDIR/ChatClient2.tmp" src/app/chat/ChatClient.tsx
+fi
+
+########################################
+# P5: /api/message/allow يقبل فورًا تحت FFA (خادِم فقط)
+########################################
+if [ -f "src/app/api/message/allow/route.ts" ]; then
+  sed -n '1,200p' src/app/api/message/allow/route.ts > "$TDIR/msg_allow.before"
+  # حقن حارس مبكر
+  awk 'NR==1{print "export const runtime=\"nodejs\"; export const dynamic=\"force-dynamic\";"; print $0; next}1' src/app/api/message/allow/route.ts > "$TDIR/msg_allow.step1" || cp src/app/api/message/allow/route.ts "$TDIR/msg_allow.step1"
+  awk '1; END{print "\n// FFA fast-path"; print "import { NextResponse } from \"next/server\";"; print "export async function POST(req: Request) {"; print "  if (process.env.FREE_FOR_ALL===\"1\" || process.env.FREE_FOR_ALL===\"true\") {"; print "    return NextResponse.json({ ok:true, reason:\"ffa\" }, { status:200, headers:{\"cache-control\":\"no-store\"}}); }"; print "  // fallthrough to original handler if exists"; print "  return NextResponse.json({ ok:false }, { status:200 }); }"}' "$TDIR/msg_allow.step1" > "$TDIR/msg_allow.final"
+  mv "$TDIR/msg_allow.final" src/app/api/message/allow/route.ts
+fi
+
+########################################
+# بناء واحد
+########################################
+say "Build: pnpm -s build"
+BUILD_LOG="$TDIR/build.log"
+safe_exec "pnpm -s build" | tee "$BUILD_LOG" >/dev/null
+
+########################################
+# P6: اختبار A/B للمطابقة ورسالة السماح
+########################################
+say "P6: A/B matchmake test"
+A_CJ2="$TDIR/cja.txt"; B_CJ2="$TDIR/cjb.txt"
+# age/allow + init
+for L in A B; do
+  CJ="$TDIR/cj_${L}2.txt"
+  curl_s -i -X POST -H 'content-type: application/json' -d '{}' -c "$CJ" -b "$CJ" "$BASE/api/age/allow" > "$TDIR/${L}_age.hdr"
+  curl_s -i -X POST -H 'content-type: application/json' -d '{}' -c "$CJ" -b "$CJ" "$BASE/api/rtc/init" > "$TDIR/${L}_init.hdr"
+done
+# enqueue
+curl_s -i -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"XX","filterGenders":"all","filterCountries":"ALL"}' -c "$A_CJ2" -b "$A_CJ2" "$BASE/api/rtc/enqueue" > "$TDIR/A_enq.hdr"
+curl_s -i -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"YY","filterGenders":"all","filterCountries":"ALL"}' -c "$B_CJ2" -b "$B_CJ2" "$BASE/api/rtc/enqueue" > "$TDIR/B_enq.hdr"
+# poll matchmake
+poll_mm(){ local CJ="$1" OUT="$2" tries=20; local ok=; for i in $(seq 1 $tries); do
+  curl_s -i -X POST -H 'content-type: application/json' -d '{}' -c "$CJ" -b "$CJ" "$BASE/api/rtc/matchmake" > "$OUT"
+  code=$(awk 'BEGIN{s=0} $1 ~ /^HTTP/{s=$2} END{print s}' "$OUT")
+  body=$(awk 'BEGIN{h=1} {if(h && /^$/){h=0;next} if(!h)print}' "$OUT")
+  pid=$(echo "$body" | grep -o '"pairId"[[:space:]]*:[[:space:]]*"[^"]*' | head -1 | cut -d'"' -f4)
+  role=$(echo "$body" | grep -o '"role"[[:space:]]*:[[:space:]]*"[^"]*' | head -1 | cut -d'"' -f4)
+  found=$(echo "$body" | grep -q '"found"[[:space:]]*:[[:space:]]*true' && echo 1 || echo 0)
+  if [ "$code" = "200" ] && [ "$found" = "1" ] && [ -n "$pid" ] && [ -n "$role" ]; then
+    echo "$code $pid $role"; return 0; fi; sleep 0.3; done; echo "$code  "; return 1; }
+read A_MM_S A_PID A_ROLE < <(poll_mm "$A_CJ2" "$TDIR/A_mm.hdr")
+read B_MM_S B_PID B_ROLE < <(poll_mm "$B_CJ2" "$TDIR/B_mm.hdr")
+
+# message/allow تحت FFA
+MSG_S=0
+if [ -n "${A_PID:-}" ]; then
+  curl_s -i -X POST -H 'content-type: application/json' -d "{\"pairId\":\"$A_PID\"}" -c "$A_CJ2" -b "$A_CJ2" "$BASE/api/message/allow" > "$TDIR/msg_allow.hdr"
+  MSG_S=$(awk 'BEGIN{s=0} $1 ~ /^HTTP/{s=$2} END{print s}' "$TDIR/msg_allow.hdr")
+fi
+
+########################################
+# تقرير القبول
+########################################
+{
+  echo "-- Front+RTC Fix (P1→P6) @ $STAMP --"
+  echo "BASE=$BASE"
+  echo "ENV_FFA server=$SRV_FFA public=$PUB_FFA"
+  echo "A_AGE=$A_AGE B_AGE=$B_AGE  A_INIT=$A_INIT B_INIT=$B_INIT"
+  echo "A_MM=$A_MM_S A_PAIR=$A_PID A_ROLE=$A_ROLE"
+  echo "B_MM=$B_MM_S B_PAIR=$B_PID B_ROLE=$B_ROLE"
+  echo "MSG_ALLOW_STATUS=$MSG_S"
+  echo
+  echo "-- Greps --"
+  echo "useFFA.ts: $(test -f src/hooks/useFFA.ts && echo OK || echo MISS)"
+  echo "utils/ffa.ts: $(test -f src/utils/ffa.ts && echo OK || echo MISS)"
+  echo "freeForAllBridge.ts: $(test -f src/app/chat/freeForAllBridge.ts && echo OK || echo MISS)"
+  echo "CLIENT_ENV_REMOVED: $(test -z \"$(grep -RIl --include='*.ts*' 'process.env.NEXT_PUBLIC_FREE_FOR_ALL' src || true)\" && echo 1 || echo 0)"
+  echo
+  echo "-- Acceptance --"
+  echo "ENV_OK=$([ "$SRV_FFA" = "1" -o "$PUB_FFA" = "1" ] && echo 1 || echo 0)"
+  echo "AGE_OK=$([ "$A_AGE" = "200" -a "$B_AGE" = "200" ] && echo 1 || echo 0)"
+  echo "ANON_OK=$([ "$A_INIT" = "200" -a "$B_INIT" = "200" ] && echo 1 || echo 0)"
+  echo "MATCH_OK=$([ "$A_MM_S" = "200" -a "$B_MM_S" = "200" -a -n "$A_PID" -a "$A_PID" = "$B_PID" -a "$A_ROLE" != "$B_ROLE" ] && echo 1 || echo 0)"
+  echo "MSG_ALLOW_OK=$([ "$MSG_S" = "200" ] && echo 1 || echo 0)"
+} | tee "$RPT"
+
+say "Done. Report: $RPT  Backup: $BKP"
+تشغيل:
+
+bash
+نسخ الكود
+chmod +x _ops/run_front_rtc_fix.sh
+_ops/run_front_rtc_fix.sh

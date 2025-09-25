@@ -1,0 +1,75 @@
+bash -lc '
+set -Eeuo pipefail
+PORT="${PORT:-3000}"
+BASE="http://127.0.0.1:${PORT}"
+URL="${UPSTASH_REDIS_REST_URL}/pipeline"
+AUTH="Authorization: Bearer ${UPSTASH_REDIS_REST_TOKEN}"
+
+# 0) تأكد أن الخادم شغال
+if [ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)" != 200 ]; then
+  nohup pnpm dev -p "$PORT" -H 0.0.0.0 >/dev/null 2>&1 & sleep 8
+fi
+
+TS="$(date -u +%Y%m%d-%H%M%S)"
+
+# 1) أنشئ جلستين حقيقيتين عبر /api/anon/init والتقط الكوكي
+get_cookie() { curl -sS -D - -o /dev/null "$BASE/api/anon/init" | awk '\''/^[Ss]et-[Cc]ookie:/ {print $2}'\'' | head -n1 | sed "s/;.*//"; }
+COOKIE_A="$(get_cookie)"; COOKIE_B="$(get_cookie)"
+ANON_A="$(printf "%s" "$COOKIE_A" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+ANON_B="$(printf "%s" "$COOKIE_B" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+
+# 2) زرع الخصائص والطابور في Upstash للـA و B
+now="$(date +%s%3N)"
+GA=male; GB=female; CA=DE; CB=DE
+PAYLOAD=$(cat <<JSON
+[
+ ["HSET","rtc:attrs:${ANON_A}","gender","${GA}","country","${CA}"],["EXPIRE","rtc:attrs:${ANON_A}","120"],
+ ["HSET","rtc:filters:${ANON_A}","genders","all","countries","ALL"],["EXPIRE","rtc:filters:${ANON_A}","120"],
+ ["ZADD","rtc:q","${now}","${ANON_A}"],["ZADD","rtc:q:gender:${GA}","${now}","${ANON_A}"],["ZADD","rtc:q:country:${CA}","${now}","${ANON_A}"],
+ ["HSET","rtc:attrs:${ANON_B}","gender","${GB}","country","${CB}"],["EXPIRE","rtc:attrs:${ANON_B}","120"],
+ ["HSET","rtc:filters:${ANON_B}","genders","all","countries","ALL"],["EXPIRE","rtc:filters:${ANON_B}","120"],
+ ["ZADD","rtc:q","${now}","${ANON_B}"],["ZADD","rtc:q:gender:${GB}","${now}","${ANON_B}"],["ZADD","rtc:q:country:${CB}","${now}","${ANON_B}"]
+]
+JSON
+)
+curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAYLOAD" >/dev/null
+
+# 3) تطابق أولي لـ A بهوية الكوكي الحقيقية
+MM1_CODE="$(curl -s -o /tmp/mm1.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: ${COOKIE_A}" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR1="$(sed -nE '\''s/.*"pairId":"([^"]+)".*/\1/p'\'' /tmp/mm1.json)"
+PEER1="$(sed -nE '\''s/.*"peerAnonId":"([^"]+)".*/\1/p'\'' /tmp/mm1.json)"
+
+# 4) امسح خريطتي الزوج لإتاحة إعادة المطابقة ثم أعد إدراج B في الطابور
+curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" \
+  -d "[[\"DEL\",\"rtc:pair:map:${ANON_A}\"],[\"DEL\",\"rtc:pair:map:${ANON_B}\"],[\"ZADD\",\"rtc:q\",\"$((now+1))\",\"${ANON_B}\"],[\"ZADD\",\"rtc:q:gender:${GB}\",\"$((now+1))\",\"${ANON_B}\"],[\"ZADD\",\"rtc:q:country:${CB}\",\"$((now+1))\",\"${ANON_B}\"]]">/dev/null
+
+# 5) طلب Prev من A كـ VIP
+P200="$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: ${COOKIE_A}; vip=1" -H "x-ditona-prev: 1" "$BASE/api/match/next" || echo 000)"
+
+# 6) تحقق أن مفاتيح prev* كتبت بعد الخطوة السابقة (قبل الاستهلاك)
+EXISTS_PREV="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" \
+  -d "[[\"EXISTS\",\"rtc:prev-wish:${ANON_A}\"],[\"EXISTS\",\"rtc:prev-for:${ANON_B}\"]]")"
+OK_PREV=$(echo "$EXISTS_PREV" | sed -nE '\''s/.*\[\{"result":([01])\},\{"result":([01])\}\].*/\1\2/p'\'' | grep -q "^11$" && echo 1 || echo 0)
+
+# 7) دخول B للمطابقة كـ callee لاستهلاك prev-for وكتابة rtc:last:*
+MM2_CODE="$(curl -s -o /tmp/mm2.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: ${COOKIE_B}" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR2="$(sed -nE '\''s/.*"pairId":"([^"]+)".*/\1/p'\'' /tmp/mm2.json)"
+ROLE2="$(sed -nE '\''s/.*"role":"([^"]+)".*/\1/p'\'' /tmp/mm2.json)"
+PEER2="$(sed -nE '\''s/.*"peerAnonId":"([^"]+)".*/\1/p'\'' /tmp/mm2.json)"
+
+# 8) تحقق من مفاتيح rtc:last:* بعد الاستهلاك
+EXISTS_LAST="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" \
+  -d "[[\"EXISTS\",\"rtc:last:${ANON_A}\"],[\"EXISTS\",\"rtc:last:${ANON_B}\"]]")"
+OK_LAST=$(echo "$EXISTS_LAST" | sed -nE '\''s/.*\[\{"result":([01])\},\{"result":([01])\}\].*/\1\2/p'\'' | grep -q "^11$" && echo 1 || echo 0)
+
+# 9) قبولات
+OK_INIT=$([ -n "$PAIR1" ] && [ "$MM1_CODE" = 200 ] && echo 1 || echo 0)
+OK_RECON=$([ -n "$PAIR2" ] && [ "$MM2_CODE" = 200 ] && [ "$ROLE2" = callee ] && [ "$PEER2" = "$ANON_A" ] && echo 1 || echo 0)
+
+echo "-- Acceptance --"
+echo "INITIAL_PAIR_OK=$OK_INIT"
+echo "LAST_KEYS_SET=$OK_LAST"
+echo "PREV_KEYS_WRITTEN=$OK_PREV"
+echo "RECONNECT_OK=$OK_RECON"
+echo "VIP_PREV_ENFORCED=$([ "$P200" = 200 ] && echo 1 || echo 0)"
+'

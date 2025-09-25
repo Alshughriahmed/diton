@@ -1,0 +1,62 @@
+Title: Full /chat UI Audit (visual + behavior) — post-filters patch
+
+Goal:
+وصف بصري/وظيفي كامل لشاشة /chat بقسميها العلوي والسفلي: التموضع، الأزرار، الحالات، القيود (VIP/غير VIP)، والأحداث والشبكة.
+
+Scope:
+- إنتاج: https://www.ditonachat.com
+- تحقق من القيود الجديدة: Countries (غير VIP = All أو بلد المستخدم فقط، VIP ≤15) و Gender (غير VIP = Everyone فقط، VIP ≤2).
+- لا تعديلات على الكود.
+
+Tasks:
+1) Preflight
+   - Set cookie ageok=1 على نطاق الموقع.
+   - احصل على geo: GET /api/geo → countryCode.
+   - لقطة TURN: GET /api/turn (وجود turns:443 + credential غير فارغ).
+
+2) Visual layout (Playwright)
+   - Desktop 1280×800 و Mobile 390×844.
+   - افتح /chat وانتظر تحميل الواجهة.
+   - التقط لقطتين كاملتين للشاشة + لقطات مقربة لـ:
+     a) أعلى يمين القسم العلوي: زر Countries و Gender مع الشارات.
+     b) المنطقة العليا: الفيديو المحلي/الطرف الآخر، الهوية/الشارات.
+     c) الشريط السفلي: Toolbar (Video, Mic, Report, Settings, Prev, Next, Like).
+   - استخرج DOM map لعناصر التحكم الأساسية مع الخصائص:
+     selector, aria-label/text, {x,y,w,h}, position, z-index, visibility, disabled.
+
+3) Behavior wiring
+   - راقب الشبكة أثناء الضغط على Next مرة واحدة:
+     تسلسل /api/rtc/{enqueue,matchmake,offer,answer,ice} مع الطوابع الزمنية وحالات HTTP.
+   - التقط events من الحافلة إن وُجدت: ابحث في الباندل عن emit("ui:*") و on("ui:*") وسردها.
+   - تحقق أن الضغط على Prev يظهر/يُعطّل وفق حالة VIP.
+
+4) Filters audit
+   - Non-VIP: GET /api/user/vip/dev/revoke ثم /chat:
+     * Gender: يظهر Everyone فقط والباقي disabled.
+     * Countries: All افتراضيًا، لا يُسمح إلا ببلد المستخدم؛ الشارة = 0 أو 1.
+   - VIP: GET /api/user/vip/dev/grant ثم /chat:
+     * Gender: اختيار حتى جنسين، الثالث يستبدل الأقدم.
+     * Countries: اختيار حتى 15؛ السادسة عشرة تُسقِط الأقدم؛ الشارة = عدد المختارات.
+   - أكد تخزين:
+     localStorage["ditona:filters:genders"], ["ditona:filters:countries"].
+   - أكد إرسال القيم إلى /api/rtc/enqueue (افتح الجسم JSON).
+
+5) Report
+   - أنشئ ARTIFACTS_DIR=_ops/reports/ui_audit_<ts> يحوي:
+     * screenshots/: desktop.png, mobile.png, top-right.png, toolbar.png
+     * dom.json: مصفوفة كائنات العناصر {role/label/selector/box/z/visible/disabled}
+     * net_flow.json: تسلسل مكالمات /api/rtc/* مع الزمن والpayload والرد
+     * events.txt: قائمة emit/on "ui:*" من الباندل مع المواقع
+     * report.md: وصف نصي 100% للبنية:
+       - القسم العلوي: ما يحتويه، أماكن الأزرار، السلوك الديناميكي.
+       - القسم السفلي: توزيع الأزرار ووظائفها.
+       - حالات Non-VIP/VIP للفلاتر، وما يرسل للشبكة.
+       - أي عناصر ثابتة مقابل ديناميكية.
+     * summary.txt: كسطرين عن أي تعارضات أو مشاكل مرصودة.
+
+Acceptance:
+- موجودة لقطات الشاشة لكلتي الدقة.
+- dom.json ≥ كل الأزرار بعلامات aria-label والمربعات.
+- net_flow.json يُظهر تدفق Next واحدًا فقط مع enqueue→matchmake→SDP/ICE.
+- report.md يصف التموضع والسلوك بدقة ويُشير للصور.
+- لا تغييرات على الكود. فقط فحص وتسليم.

@@ -1,0 +1,7 @@
+# scanning https://www.ditonachat.com bundles
+>> scan /_next/static/chunks/369-cf756ae1304b4680.js
+>> scan /_next/static/chunks/app/layout-d6e1fbd77e988b72.js
+>> scan /_next/static/chunks/d764cd1b-ff94fc829997fa44.js
+>> scan /_next/static/chunks/main-app-122fd0657764f49b.js
+>> scan /_next/static/chunks/webpack-2677eea5025b65de.js
+FOUND_UI_EVENTS=0

@@ -1,0 +1,71 @@
+bash -lc '
+set -Eeuo pipefail
+PORT="${PORT:-3000}"
+BASE="http://127.0.0.1:$PORT"
+
+# صحة الخدمة
+H=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)
+echo "HEALTH=$H"
+[ "$H" = 200 ] || exit 1
+
+# كوكي جلستين حقيقيتين
+get_cookie(){ curl -sS -D - -o /dev/null "$BASE/api/anon/init" | awk "/^[Ss]et-[Cc]ookie:/ {print \$2}" | head -n1 | sed "s/;.*//"; }
+CKA="$(get_cookie)"; CKB="$(get_cookie)"
+echo "CKA=$CKA"
+echo "CKB=$CKB"
+
+# إدراج في الطابور عبر API
+curl -s -X POST "$BASE/api/rtc/enqueue" -H "Cookie: $CKA" -H "content-type: application/json" \
+  -d "{\"gender\":\"male\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+curl -s -X POST "$BASE/api/rtc/enqueue" -H "Cookie: $CKB" -H "content-type: application/json" \
+  -d "{\"gender\":\"female\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+
+# مطابقة أولى للطرف A
+MM1_CODE="$(curl -s -o /tmp/mm1.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKA" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR1="$(sed -nE "s/.*\"pairId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+PEER_B="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+echo "MM1=$MM1_CODE PAIR1=$PAIR1 PEER_B=$PEER_B"
+
+# إعادة إدراج B
+curl -s -X POST "$BASE/api/rtc/enqueue" -H "Cookie: $CKB" -H "content-type: application/json" \
+  -d "{\"gender\":\"female\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+
+# طلب Prev من A كـ VIP
+P200="$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $CKA; vip=1" -H "x-ditona-prev: 1" "$BASE/api/match/next" || echo 000)"
+echo "PREV_HTTP=$P200"
+
+# مطابقة ثانية لـ B: نتوقع callee وpeerAnonId = UUID A
+MM2_CODE="$(curl -s -o /tmp/mm2.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKB" -H "content-type: application/json" -d "{}" || echo 000)"
+ROLE2="$(sed -nE "s/.*\"role\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+PEER_A="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+echo "MM2=$MM2_CODE ROLE2=$ROLE2 PEER_A=$PEER_A"
+
+# فحص Upstash إن كانت بيئة المفاتيح مضبوطة
+URL="${UPSTASH_REDIS_REST_URL:-}/pipeline"
+TOK="${UPSTASH_REDIS_REST_TOKEN:-}"
+if [ -n "${UPSTASH_REDIS_REST_URL:-}" ] && [ -n "$TOK" ]; then
+  AUTH="Authorization: Bearer $TOK"
+  # الفحص يجب أن يتم سريعًا قبل انتهاء TTL
+  PAY_PREV="[ [\"EXISTS\",\"rtc:prev-wish:${PEER_A}\"], [\"EXISTS\",\"rtc:prev-for:${PEER_B}\"] ]"
+  PAY_LAST="[ [\"EXISTS\",\"rtc:last:${PEER_A}\"], [\"EXISTS\",\"rtc:last:${PEER_B}\"] ]"
+  EXPREV="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAY_PREV")"
+  EXLAST="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAY_LAST")"
+  echo "EXPREV=$EXPREV"
+  echo "EXLAST=$EXLAST"
+  ok_prev="$(echo "$EXPREV" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n" || true)"
+  ok_last="$(echo "$EXLAST" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n" || true)"
+else
+  echo "UPSTASH_ENV=ABSENT"
+  ok_prev=""
+  ok_last=""
+fi
+
+echo
+echo "-- Acceptance --"
+echo "INITIAL_PAIR_OK=$([ -n "$PAIR1" ] && [ "$MM1_CODE" = 200 ] && echo 1 || echo 0)"
+echo "RECONNECT_OK=$([ "$MM2_CODE" = 200 ] && [ "$ROLE2" = callee ] && [ "$PEER_A" != "" ] && echo 1 || echo 0)"
+echo "VIP_PREV_ENFORCED=$([ "$P200" = 200 ] && echo 1 || echo 0)"
+# مفاتيح Redis: 11 تعني كلا المفتاحين موجودين
+[ -n "$ok_prev" ] && echo "PREV_KEYS_WRITTEN=$([ "$ok_prev" = 11 ] && echo 1 || echo 0)" || echo "PREV_KEYS_WRITTEN=NA"
+[ -n "$ok_last" ] && echo "LAST_KEYS_SET=$([ "$ok_last" = 11 ] && echo 1 || echo 0)" || echo "LAST_KEYS_SET=NA"
+'

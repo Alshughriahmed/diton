@@ -1,0 +1,216 @@
+# ---------- PHASE 2: Toolbar wiring + filters dropdowns + gestures + layout tweaks ----------
+set -e
+
+mkdir -p src/lib src/lib/ui src/lib/match
+
+# 1) Toast خفيف
+cat > src/lib/ui/toast.ts <<'TS'
+export function toast(msg:string, ms=2500){
+  const el=document.createElement('div');
+  el.textContent=msg;
+  el.style.cssText='position:fixed;left:12px;bottom:12px;z-index:9999;background:#111a;border:1px solid #333;padding:8px 12px;border-radius:10px;color:#fff;font:500 13px system-ui;backdrop-filter:blur(6px)';
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),ms);
+}
+TS
+
+# 2) أدوات مطابقة مبسطة (Next/Prev مع fallback بعد 7 ثوانٍ)
+cat > src/lib/match/controls.ts <<'TS'
+import { toast } from '@/lib/ui/toast';
+
+export async function nextMatch(payload:any={}){
+  try{
+    await fetch('/api/match/next',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+    toast('⏭️ Next…');
+  }catch{ toast('تعذّر طلب Next'); }
+}
+
+export async function tryPrevOrRandom(payload:any={}){
+  // نُطلق حدث داخلي لمن لديه منطق prev، وإن لم يتم خلال 7s نعمل Next
+  const evt = new CustomEvent('ditona:prev-wanted');
+  window.dispatchEvent(evt);
+  toast('⏮️ محاولة الرجوع لآخر متصل…');
+  let resolved=false;
+  const ok=()=>{resolved=true; toast('تم الرجوع لآخر متصل');};
+  window.addEventListener('ditona:prev-ok', ok, {once:true});
+  await new Promise(r=>setTimeout(r,7000));
+  window.removeEventListener('ditona:prev-ok', ok as any);
+  if(!resolved){
+    toast('لم نتمكن من استعادة المتصل السابق — جاري مطابقة عشوائية لطيفة');
+    await nextMatch(payload);
+  }
+}
+TS
+
+# 3) ربط الأزرار في شريط الأدوات بإشارات واضحة
+applypatch << 'PATCH'
+*** Begin Patch
+*** Update File: src/components/chat/ChatToolbar.tsx
+@@
+-  <button 
+-    onClick={() => emit("ui:openSettings")}
++  <button 
++    onClick={() => emit("ui:next")}
+     className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700 transition-colors" 
+-    aria-label="Settings"
++    aria-label="Next"
+   >
+-    ⚙️
++    Next ▶
+   </button>
+*** End Patch
+PATCH
+
+applypatch << 'PATCH'
+*** Begin Patch
+*** Update File: src/components/chat/ChatToolbar.tsx
+@@
+   {/* مثال للأزرار… نضيف سماعة/مايك/إعجاب/ماسك/إعدادات/إيقاف/إبلاغ/سابق */}
+-  {/* الزرّان المفعّلان سابقًا محفوظان */}
++  <button onClick={()=>emit('ui:toggleRemoteAudio')} className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700" aria-label="Mute remote">🔈</button>
++  <button onClick={()=>emit('ui:toggleMic')} className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700" aria-label="Mic">🎙️</button>
++  <button onClick={()=>emit('ui:toggleMasks')} className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700" aria-label="Masks">🤡</button>
++  <button onClick={()=>emit('ui:openSettings')} className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700" aria-label="Settings">⚙️</button>
++  <button onClick={()=>emit('ui:togglePlay')} className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700" aria-label="Stop/Play">⏯️</button>
++  <button onClick={()=>emit('ui:report')} className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700" aria-label="Report">🚩</button>
++  <button onClick={()=>emit('ui:prev')} className="px-3 py-2 rounded-lg bg-neutral-800 text-white text-sm border border-neutral-700 hover:bg-neutral-700" aria-label="Prev">⏮️ Prev</button>
+*** End Patch
+PATCH
+
+# 4) مستمعو الإشارات داخل ChatClient (تفعيل فعلي للأزرار + إيماءات السحب)
+applypatch << 'PATCH'
+*** Begin Patch
+*** Update File: src/app/chat/ChatClient.tsx
+@@
+ import { on, emit } from '@/lib/bus';
++import { toast } from '@/lib/ui/toast';
++import { nextMatch, tryPrevOrRandom } from '@/lib/match/controls';
++import { useProfile } from '@/state/profile';
+@@
+-  let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
++  let off4=on("ui:openSettings",()=>{ try{ window.location.href='/settings'; }catch{} });
++  let offN=on("ui:next", ()=>{ nextMatch({filters}); });
++  let offP=on("ui:prev", ()=>{ tryPrevOrRandom({filters}); });
++  let offR=on("ui:report", async ()=>{ 
++    try{ await fetch('/api/moderation/report',{method:'POST'}); toast('🚩 تم إرسال البلاغ وجاري الانتقال'); }catch{}
++    nextMatch({filters});
++  });
++  let offPlay=on("ui:togglePlay", ()=>{
++    setState(s=>({ ...s, paused: !s.paused }));
++    toast('تبديل حالة المطابقة');
++  });
++  let offMuteRemote=on("ui:toggleRemoteAudio", ()=>{
++    const v=document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement|null;
++    if(v){ v.muted = !v.muted; toast(v.muted?'🔇 صمت الطرف الثاني':'🔈 سماع الطرف الثاني'); }
++  });
++  let offMic=on("ui:toggleMic", ()=>{
++    try{
++      const v=document.querySelector('video[data-role="local"],#localVideo') as HTMLVideoElement|null;
++      const s=v?.srcObject as MediaStream|undefined;
++      if(s){ const on=!s.getAudioTracks()[0]?.enabled; s.getAudioTracks().forEach(t=>t.enabled=on); toast(on?'🎙️ الميك مفعّل':'🔕 الميك مكتوم'); }
++    }catch{}
++  });
+@@
+   useEffect(()=>{
++    // إيماءات السحب: يمين→يسار = Next، يسار→يمين = Prev
++    let x0=0, y0=0, moved=false;
++    const down=(e:PointerEvent)=>{ x0=e.clientX; y0=e.clientY; moved=false; };
++    const up=(e:PointerEvent)=>{
++      const dx=e.clientX-x0, dy=e.clientY-y0;
++      if(Math.abs(dx) > 60 && Math.abs(dy) < 60){
++        if(dx<0) emit('ui:next'); else emit('ui:prev');
++      }
++    };
++    window.addEventListener('pointerdown',down);
++    window.addEventListener('pointerup',up);
+     return ()=>{
++      window.removeEventListener('pointerdown',down);
++      window.removeEventListener('pointerup',up);
++      offN(); offP(); offR(); offPlay(); offMuteRemote(); offMic();
+     };
+   },[]);
+*** End Patch
+PATCH
+
+# 5) تفعيل قوائم الدولة/الجنس (فتح/إغلاق + قفل لغير VIP إن لزم)
+applypatch << 'PATCH'
+*** Begin Patch
+*** Update File: src/components/CountryFilter.tsx
+@@
+ 'use client';
+-import React from 'react';
++import React, { useState } from 'react';
+ import { emit } from '@/lib/bus';
++import { toast } from '@/lib/ui/toast';
++import { useVip } from '@/hooks/useVip' /* إن وُجدت */;
+
+ export default function CountryFilter(){
+-  return (<button className="...">Countries (0)</button>);
++  const [open,setOpen]=useState(false);
++  const { isVip, FREE_FOR_ALL } = (globalThis as any).__vip ?? {isVip:false, FREE_FOR_ALL:true};
++  const lock = !isVip && !FREE_FOR_ALL;
++  return (
++    <div className="relative">
++      <button onClick={()=>{ if(lock){ toast('🔒 ميزة خاصة بـ VIP'); emit('ui:upsell','countries'); } else setOpen(v=>!v); }}
++        className="px-3 py-1.5 rounded-xl bg-neutral-900/70 border border-neutral-700 text-white text-sm">
++        🌐 Countries (0)
++      </button>
++      {open && (
++        <div className="absolute right-0 mt-2 w-[320px] max-h-[320px] overflow-auto bg-neutral-900/95 border border-neutral-700 rounded-xl p-2 grid grid-cols-2 gap-1">
++          {/* TODO: حمّل قائمة الدول من JSON إن لم تكن مضافة */}
++          <button className="px-2 py-1 rounded hover:bg-neutral-800 text-left">All</button>
++        </div>
++      )}
++    </div>
++  );
+ }
+*** End Patch
+PATCH
+
+applypatch << 'PATCH'
+*** Begin Patch
+*** Update File: src/components/GenderFilter.tsx
+@@
+ 'use client';
+-import React from 'react';
++import React, { useState } from 'react';
+ import { emit } from '@/lib/bus';
++import { toast } from '@/lib/ui/toast';
+
+ export default function GenderFilter(){
+-  return (<button className="...">Gender: All</button>);
++  const [open,setOpen]=useState(false);
++  const lock = !(globalThis as any).__vip?.isVip && !(globalThis as any).__vip?.FREE_FOR_ALL;
++  const Opt=(v:string, lbl:string)=>(
++    <button onClick={()=>{ emit('filters:gender', v); setOpen(false); }} className="px-2 py-1 rounded hover:bg-neutral-800 text-left">{lbl}</button>
++  );
++  return (
++    <div className="relative">
++      <button onClick={()=>{ if(lock){ toast('🔒 فلترة الجنس حصرية VIP'); emit('ui:upsell','gender'); } else setOpen(v=>!v); }}
++        className="px-3 py-1.5 rounded-xl bg-neutral-900/70 border border-neutral-700 text-white text-sm">
++        ⚥ Gender
++      </button>
++      {open && (
++        <div className="absolute right-0 mt-2 w-[220px] bg-neutral-900/95 border border-neutral-700 rounded-xl p-2 grid gap-1">
++          {Opt('all','All')} {Opt('male','♂ Male')} {Opt('female','♀ Female')} {Opt('couple','👫 Couple')} {Opt('lgbt','🌈 LGBT')}
++        </div>
++      )}
++    </div>
++  );
+ }
+*** End Patch
+PATCH
+
+# 6) نقل عدّاد إعجابات المستخدم وزري الكاميرا/التجميل إلى أعلى يمين القسم السفلي (حاوية QuickActions إن وُجدت)
+applypatch << 'PATCH'
+*** Begin Patch
+*** Update File: src/components/QuickActions.tsx
+@@
+-<div className="absolute bottom-3 right-3 ...">
++<div className="absolute top-3 right-3 ...">
+*** End Patch
+PATCH || true
+
+# 7) بناء
+pnpm build
+echo "PHASE 2 ready. جرّب الأزرار (Next/Prev/Audio/Mic/Stop/Report) والقوائم (Gender/Countries) والسحب يمين/يسار."

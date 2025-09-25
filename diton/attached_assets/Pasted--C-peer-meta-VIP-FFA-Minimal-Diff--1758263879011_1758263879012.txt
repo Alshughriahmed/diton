@@ -1,0 +1,130 @@
+دفعة C — تفعيل الرسائل وpeer-meta وإغلاق بقايا VIP/FFA (Minimal-Diff)
+
+السياق المختصر:
+الإنتاج يعمل وTURN :443 OK. لدينا جسر الأحداث وpair-bridge. قناة البيانات تفتح (likes/open) لكن:
+
+‎/api/message/allow ترجع 400 في بعض الجلسات ⇒ يمنع الإرسال.
+
+لا يصل EV_META للواجهة إلا نادرًا ⇒ بطاقة البلد/الجنس لا تتحدّث فور المطابقة.
+
+يجب التأكد أن تمكين الميزات لا يزال يقرأ FFA runtime (وليس build-time) في كل المكوّنات.
+
+قواعد التنفيذ:
+
+كل تعديل Minimal-Diff مع نسخ احتياطي تحت _ops/backups/<stamp>/… وتقرير قبول تحت _ops/reports/phaseC_meta_msg_<stamp>.log.
+
+بيئة تنفيذ غير تفاعلية: TERM=dumb وCI=1. لا حذف ولا تعطيل ميزة قائمة.
+
+1) ‎/api/message/allow — إصلاح الـPOST ورؤوس عدم التخزين
+
+الملف: src/app/api/message/allow/route.ts
+
+المطلوب:
+
+دعم POST وإرجاع: 200 {"allow":true} عندما (FREE_FOR_ALL === "1") || isVip(user)؛ وإلا 403 {"allow":false}.
+
+إضافة:
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+
+رؤوس استجابة للمسارين:
+Cache-Control: no-store وReferrer-Policy: no-referrer.
+
+القبول الجزئي:
+
+fetch('/api/message/allow', {method:'POST'}) ⇒ 200 و{"allow":true} في FFA.
+
+2) قناة البيانات — مصافحة meta وإعادة الربط والتنظيف
+
+الملف: src/app/chat/rtcFlow.ts
+
+المطلوب:
+
+عند فتح الـDC (caller بعد createDataChannel، وcallee داخل ondatachannel):
+
+عرّف: window.__ditonaDataChannel = dc; (لا تُغيّر الملصق الحالي).
+
+أرسل تلقائيًا بعد الفتح:
+
+try{ dc.send(JSON.stringify({type:"meta:init"})); setTimeout(()=>dc?.send?.(JSON.stringify({type:"meta:init"})), 300); }catch{}
+
+
+مستمع رسائل موحّد:
+
+عند {type:"meta:init"} أرسل ردًا فوريًا:
+dc.send(JSON.stringify({type:"meta", payload: peerMetaObject})).
+
+عند {type:"like:toggle"}: بث داخلي وتثبيت REST (المنطق موجود؛ فقط تأكد من الربط بعد كل rematch).
+
+في stop() و/أو قبل إعادة المطابقة: إزالة مستمعات الـDC وتصفير المرجع بأمان (بدون رمي):
+try{ dc.onopen = dc.onmessage = dc.onclose = dc.onerror = null as any; }catch{}
+
+الحفاظ على safeAbort(state.ac); state.ac=null; كما هو.
+
+القبول الجزئي:
+
+الكونسول بعد المطابقة:
+window.__ditonaDataChannel?.readyState === "open"
+
+إرسال meta:init يدويًا من الكونسول يعيد رسالة type:"meta" فورًا.
+
+3) ضخ peer-meta إلى الواجهة وتعبئة البطاقات
+
+الملفات:
+
+src/app/chat/ChatClient.tsx (أو) src/components/chat/PeerInfoCard.tsx وsrc/components/chat/PeerMetadata.tsx
+
+المطلوب:
+
+الاستماع لرسائل الـDC:
+عند استقبال {type:"meta", payload} قم بـ window.dispatchEvent(new CustomEvent('ditona:peer-meta', {detail: payload})).
+
+في بطاقة المعلومات/الميتا: مستمع لـditona:peer-meta لتحديث الحقول (country, gender, name, avatar, likes) فورًا.
+
+اربط البطاقة بالحالة الحالية باستخدام window.__ditonaPairId لتبديل المحتوى مع كل match.
+
+القبول الجزئي:
+
+يظهر EV_META {country, gender,…} في الكونسول خلال ≤300ms من فتح الـDC وتُحدّث البطاقات أعلى/أسفل اليسار.
+
+4) مراجعة تمكين FFA على الواجهة (تحقق سريع)
+
+الملفات (تحقق فقط، إن لزم تعديل Minimal-Diff):
+src/app/chat/components/ChatToolbar.tsx, FilterBar.tsx, GenderSelect.tsx, CountrySelect.tsx
+
+المطلوب:
+
+كل تمكين ميزات VIP يكون بالشرط: (isFFA() || isVip)، وقيمة FFA تُقرأ runtime (من /api/rtc/env عبر أداة utils/ffa).
+
+القبول الجزئي:
+
+Prev/Filters/Beauty تعمل عند FFA=1 على نفس الجلسة بدون إعادة البناء.
+
+تقرير القبول المطلوب
+
+اكتب إلى _ops/reports/phaseC_meta_msg_<stamp>.log:
+
+-- Acceptance --
+ALLOW_POST_200=1
+FFA_RUNTIME_OK=1
+DC_OPEN_OK=1
+META_PUSH_OK=1
+MSG_SEND_OK=1
+LIKE_SYNC_OK=1
+UI_FILTERS_FFA_OK=1
+NO_OVERLAY_STOP=1
+
+
+أدلة معززة تُلحق بالتقرير (اختياري لكن مفضل):
+
+رؤوس استجابة cache-control: no-store من POST /api/message/allow.
+
+لقطات كونسول: EV_META …, PAIR <uuid>, DC open.
+
+التراجع
+
+استعادة نسخة _ops/backups/phaseC_* بالكامل عند أي فشل في القبول.
+
+ملاحظة أخيرة: لو تعذر تحقيق أي بند من القبول بسبب اختلاف في البنية الحالية، نسمح للوكيل بإصلاح Minimal-Diff إضافي مع توثيق الفرق في التقرير، بشرط عدم كسر ميزات قائمة.

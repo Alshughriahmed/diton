@@ -1,0 +1,116 @@
+DitonaChat — Task Batch for Replit Agent
+
+الهدف
+إقفال البنود المتبقية بدقة وبـMinimal-Diff بدون حذف أو تعطيل أي ميزة. تنفيذ دفعة واحدة ثم Build واحد، مع تقرير نهائي مفصل.
+
+القيود
+
+لا تغييرات سلوكية خارج المطلوب.
+
+لا حذف ملفات. كل تعديل بسطرين-ثلاثة كحد أقصى لكل موضع.
+
+نسخة احتياطية قبل أي كتابة إلى المسارات المعدّلة.
+
+تقليل تكاليف البناء: جمع التعديلات ثم تشغيل build مرة واحدة.
+
+المهام المطلوبة
+
+Like API hardening + sync
+
+تأكيد أن ‎src/app/api/like/route.ts‎: يستخدم Upstash /pipeline، مفاتيح likes:count:<pair> وlikes:who:<pair>، واستخراج الهوية من الكوكي أو x-anon.
+
+عند op=inc: SADD who anon ثم INCR count فقط إذا نتيجة SADD=1.
+
+عند op=dec: SREM who anon ثم DECR count فقط إذا SREM=1 ولا تسمح بسالب.
+
+على العميل: عند حدث rtc:pair فعّل polling كل 2s لـ/api/like?pairId=… وتحديث HUD. زر ❤️ يرسل op=inc|dec مع تحديث تفاؤلي ثم تصحيح من الرد.
+
+Prev VIP نافذة 7s
+
+تأكد أن المطابقة في src/lib/rtc/mm.ts تبدأ بـ rtc:prev-wish:<A> ثم تسقط إلى rtc:prev-for:<B> عند عدم النجاح.
+
+TTLs الفعلية: prev-wish≈7s, prev-for≈8.5s, claim|pairLock≈6000ms, rtc:pair:<id>≈150s, pair:map≈150000ms, attrs|filters≈120s, seen≈300s.
+
+ثبّت كتابة rtc:last:<A> وrtc:last:<B> عند نجاح prev لضمان إعادة الاتصال التالية.
+
+Messaging bar QA
+
+تأكيد أن ChatMessagingBar.tsx يحتوي data-ui="messages-fixed"، ورفع مع visualViewport، وحارس preventNavIfTyping لتعطيل Next/Prev أثناء الكتابة.
+
+Metrics in prod
+
+تأكيد أن route /api/monitoring/metrics يرى UPSTASH_* ويعيد stored=true عند POST تجريبي.
+
+Headers وأمان
+
+تحقق من وجود CSP، وreferrer-policy: no-referrer، وcache-control: no-store للمسارات الحساسة. لا تغييرات إذا كانت صحيحة.
+
+Stripe sanity
+
+/api/stripe/prices يعرض 4 أسعار بالـEUR.
+
+/api/stripe/subscribe يتحقق من جلسة مصادق عليها؛ غير المصدق يحصل 401. أصلحها بسطرين إن لزم.
+
+خطوات التنفيذ
+
+خذ نسخة احتياطية لأي ملف ستعدله إلى _ops/backups/<stamp>/….
+
+طبّق التعديلات أعلاه بشكل Minimal-Diff.
+
+تشغيل واحد: pnpm -s build.
+
+شغّل فحوص القبول:
+
+# صحّة عامّة
+bash _ops/bin/100_prev_vip_audit.sh
+
+# Like API
+BASE="${BASE:-http://localhost:3000}"
+P="$(uuidgen)"; A="$(uuidgen)"; B="$(uuidgen)"
+curl -sS -XPOST "$BASE/api/like?pairId=$P&op=inc" -H "x-anon: $A"
+curl -sS -XPOST "$BASE/api/like?pairId=$P&op=inc" -H "x-anon: $A"   # لا زيادة ثانية
+curl -sS -XPOST "$BASE/api/like?pairId=$P&op=inc" -H "x-anon: $B"
+curl -sS "$BASE/api/like?pairId=$P" -H "x-anon: $A"                  # count=2
+curl -sS -XPOST "$BASE/api/like?pairId=$P&op=dec" -H "x-anon: $A"
+curl -sS "$BASE/api/like?pairId=$P" -H "x-anon: $B"                  # count=1
+
+# Metrics
+curl -sS -X POST "$BASE/api/monitoring/metrics" -H 'content-type: application/json' \
+  -d '{"ttfmMs":123,"iceOk":true,"turns443":true,"matchMs":456}'
+
+# TURN وStripe
+curl -sS "$BASE/api/turn"
+curl -sS "$BASE/api/stripe/prices"
+
+
+قبول متوقع
+
+من تقرير prev audit:
+INITIAL_PAIR_OK=1, VIP_PREV_ENFORCED=1, PREV_KEYS_WRITTEN=1, LAST_KEYS_SET=1, RECONNECT_OK=1
+
+Like: عدم زيادة مزدوجة لنفس anon، وcount يتغير 0→1→2→1 حسب السيناريو أعلاه.
+
+Metrics: stored=true.
+
+TURN يحوي turns:…:443?transport=tcp.
+
+Stripe: أربع أسعار EUR.
+
+حدود لا تلمسها
+
+منطق RTC الأساسي، تبريد 700ms، أزرار الشريط، وCSP القائمة.
+
+أي كود WebRTC أو إشارة خارج المواضع المذكورة.
+
+التقرير النهائي المطلوب
+أعد ملفًا نصيًا مختصرًا يضم:
+
+قائمة الملفات المعدلة مع عدد الأسطر المضافة/المزالة لكل ملف.
+
+ملخص تغييرات المنطق في نقاط.
+
+مخرجات القبول الرئيسية كسطور.
+
+تأكيد: لا ميزات أُزيلت، ولا تغييرات جانبية.
+
+إن واجهت عائقًا، اذكره وكيف حُلّ Minimal-Diff.

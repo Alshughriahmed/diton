@@ -1,0 +1,97 @@
+Rematch يعمل كل مرة بلا 403. نص الحالة أعلى الفيديو إنجليزي وديناميكي: يظهر فقط أثناء البحث.
+
+Do
+
+عدّل فقط العميل.
+
+1) src/app/chat/rtcFlow.ts — جلسة مضادّة للتسرّب + أدوار صحيحة
+
+أضف آلة حالات وختم جلسة:
+
+let session = 0;
+
+type Phase = 'idle'|'searching'|'matched'|'connected'|'stopped'
+
+state = { sid:number, phase:Phase, role:'caller'|'callee'|null, pairId:string|null, ac:AbortController|null, pc:RTCPeerConnection|null }
+
+دوال مصدَّرة:
+
+start(media: MediaStream, onPhase:(p:Phase)=>void)
+
+next(media: MediaStream) → ينفّذ stop() ثم start()
+
+stop() → abort + close + clear LS (ditona_role/ditona_pair/ditona_ice_sent)
+
+عند start():
+
+نفّذ stop() أولًا، ثم sid=++session, phase='searching', onPhase(phase).
+
+POST /api/rtc/enqueue ثم poll POST /api/rtc/matchmake لقبول الشكلين {pairId,role} و{found:true,...}. خزّن القيم في الذاكرة ثم LS.
+
+تفرّع حسب الدور:
+
+caller: createOffer → POST /offer → poll GET /answer → setRemote
+
+callee: poll GET /offer → setRemote → createAnswer → POST /answer
+
+ICE لكلا الطرفين: onicecandidate → POST /ice; وبالتوازي poll GET /ice.
+
+كل poll/طلب يقرأ const cur = state.sid; ويكمل فقط إن كان cur===session. وإلا return فوري.
+
+عند pc.onconnectionstatechange:
+
+connected ⇒ phase='connected', onPhase(connected).
+
+disconnected/failed/closed ⇒ stop() (ينظّف كل شيء).
+
+لو جاء 403 من أي endpoint ⇒ stop() ثم phase='idle' مع console.warn('[rtc]', role, '403 at', op) لسهولة التشخيص.
+
+لا يستدعي callee أي POST /offer ولا GET /answer. لا يستدعي caller أي GET /offer ولا POST /answer. إن طُلبت دالة خاطئة ترمي Error محليًا.
+
+2) src/app/chat/ChatClient.tsx — ربط الحالة والنص
+
+عند تهيئة الوسائط، استدعِ:
+
+rtcFlow.start(localStream, setPhase)
+
+زر Next يستدعي: rtcFlow.next(localStream)
+
+عند Unmount: rtcFlow.stop()
+
+اعرض سطر الحالة أعلى المعاينة فقط عندما phase==='searching' وبالنص:
+
+Searching for a partner…
+
+أزل أي نص عربي ثابت سابق متعلق بالحالة.
+
+3) حماية LS قبل كل محاولة
+
+تأكد أن stop() وبدء أي محاولة جديدة يمسح:
+
+ditona_role, ditona_pair, ditona_ice_sent
+
+4) Telemetry خفيف
+
+بعد كل طلب fetch اطبع:
+console.log('[rtc]', {sid, phase, role, op:'offer|answer|ice', code:res.status, pair:pairId})
+بدون طباعة SDP.
+
+Acceptance
+
+pnpm build يمر.
+
+تبويبان علويان على https://www.ditonachat.com/chat:
+
+جرّب Next ثلاث مرات متتالية. كل مرة pairId جديد، ولا 403.
+
+Console يُظهر تسلسل صحيح حسب الدور.
+
+نص الحالة يظهر فقط أثناء البحث وبالإنجليزية.
+
+لا تبقى أي pollers بعد stop()، ولا تتسرب اتصالات.
+
+Constraints
+
+لا تغييرات خادمية.
+
+Minimal-Diff. لا مساس بالفلاتر أو VIP.

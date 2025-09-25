@@ -1,0 +1,210 @@
+🎯 DitonaChat — Final Agent Brief (SAFE, ONE-SHOT, ZERO-SURPRISES)
+حدود الأمان (لا تُخالفها)
+
+لا تلمس مصدر النسخة الاحتياطية تحته _ops/backups/… إطلاقًا. العمل يكون فقط على نسخة مستعادة.
+
+Idempotent بالكامل: كل خطوة تتحقق أولًا، وإن كانت مطبّقة تتخطّى بدون تعديل.
+
+نسخ احتياطي قبل أي تعديل إلى: _ops/backups/agent_fix_<UTC>/….
+
+كشف التعارض: إذا وجدت أي ملف هدف موجود ومحتواه مختلف ولا توجد علاماتنا // DitonaChat:، توقّف واطبع سبب التوقف في Acceptance ولا تُكمل.
+
+لا أسرار في Git. .gitignore يجب أن يحجب: .env, .env.local, .next/, dist/, _ops/artifacts/, _ops/backups/, node_modules/.
+
+المرحلة 0 — اكتشاف نسخة العمل والتحقّق (قراءة فقط)
+
+ابحث عن أحدث مجلد مطابق للنمط ./ditonachat_restored_*. إن لم يوجد، توقّف مع Acceptance=FAIL.
+
+اعمل منه فقط. اطبع Acceptance أولي فيه:
+
+RESTORED_DIR
+
+وجود الملفات: page.tsx, ChatClient.tsx, ChatMessages.tsx, media-bridge.ts, webrtc.ts, PeerMeta.tsx, gender.ts, countries.ts
+
+CHAT_MESSAGES فيه slice(-3) (رقم السطر)
+
+thresholds في media-bridge.ts: H=80 وV=50
+
+سطور busEmit('next') في webrtc.ts
+
+استخدام الخلفية /public/hero.webp.webp في page.tsx
+
+الصفحات القانونية الستة: terms, privacy, dmca, content, abuse, 2257
+
+الـAPI routes presence: /_health, /api/monitoring/metrics, /api/turn, /api/stripe/{prices,subscribe,portal,webhook}, /api/age/allow
+
+وجود Quick Dock anchor: className="absolute right-3 -top-24 z-[40]"
+
+توقّعك: ستجد أن PeerMeta.tsx, gender.ts, countries.ts, الخلفية، thresholds، auto-next، الصفحات القانونية ناقصة/غير مطبّقة.
+
+المرحلة 1 — إنشاء/استكمال الملفات الناقصة (بدون تعارض)
+
+قبل كل ملف: إن كان الملف موجودًا ومحتواه لا يتضمن تعليقاتنا // DitonaChat:, توقّف واطبع Conflict في Acceptance.
+
+src/utils/gender.ts
+
+أنشئ خريطة الأنواع الخمسة بالأيقونات والألوان:
+
+male ♂، female ♀، couple 💞، lgbt 🌈، unknown •
+
+صدّر:
+
+type Gender = 'male'|'female'|'couple'|'lgbt'|'unknown'
+
+GENDER_ICON[gender], GENDER_LABEL[gender], GENDER_CLASSES[gender] (Tailwind-ready)
+
+ضع تعليق: // DitonaChat: BEGIN gender-utils … END.
+
+src/data/countries.ts
+
+أنشئ مصفوفة دول شاملة مع استبعاد: GS, KP, MV (كما طلب المالك)، والسماح بـXK (Kosovo).
+
+الهدف العددي في التحقق: COUNTRIES_COUNT=247.
+
+صدّر: COUNTRIES, ودوال: codeToName(code), allCodes().
+
+src/components/chat/PeerMeta.tsx
+
+مكوّن React يعرض أسفل يسار القسم العلوي: Country · City + Badge جنس (أيقونة + لون من GENDER_*).
+
+props: { country?: string; city?: string; gender?: Gender }.
+
+تصميم ثابت: حاوية صغيرة شبه شفافة، tailwind classes مناسبة، pointer-events-none، z-40.
+
+تعليق واضح: // DitonaChat: BEGIN peer-meta.
+
+دمج PeerMeta في src/app/chat/ChatClient.tsx
+
+أضِف الاستيراد والاستخدام داخل overlay أعلى الفيديو/اللوحة، مع className="absolute left-3 bottom-3 z-[40]".
+
+البيانات: استعمل ما هو متاح من حالة المطابقة/peer (country/city/gender). إن لم توجد، مرّر قيمًا افتراضية آمنة (فارغة) — لكن لا تكسِر البناء.
+
+الخلفية في src/app/page.tsx
+
+اربط /public/hero.webp.webp على <main> باستخدام Tailwind (bg-[url('/hero.webp.webp')] bg-cover bg-center إلخ).
+
+لا تغيّر بنية الصفحة أو نصوصها.
+
+thresholds في src/utils/media-bridge.ts
+
+عرّف ثوابت واضحة: export const H = 80; export const V = 50; أو ما يعادلها داخل المنطق.
+
+أضف تعليق // DitonaChat: gesture thresholds.
+
+Auto-next في src/utils/webrtc.ts
+
+ضمّن import { busEmit } from './bus' إن وُجد الـbus.
+
+في callbacks أو حالات peerConnection: عند failed, disconnected, closed (وأيضًا hangup إن موجود):
+
+نفّذ busEmit('next') مع debounce داخلي (حد أدنى 1000ms بين استدعاء وآخر) لمنع الاندفاع.
+
+لا تغيّر سلوكًا آخر.
+
+Quick Dock anchor
+
+تأكد من وجود العنصر بكلاسات: absolute right-3 -top-24 z-[40]. إن لم يوجد، أضِفه في الموضع الصحيح فوق المؤلف.
+
+الصفحات القانونية الستة
+
+أَنشئ:
+src/app/terms/page.tsx, src/app/privacy/page.tsx, src/app/dmca/page.tsx,
+src/app/content/page.tsx, src/app/abuse/page.tsx, src/app/2257/page.tsx
+
+محتوى بسيط منسّق (إنجليزي) مع عناوين واضحة وروابط تنقّل خفيفة.
+
+إزالة أي تكرار في مجموعات مسارات (Route Groups) تؤدي لنفس المسار (سبب خطأ البناء الذي ظهر سابقًا). يجب أن تبقى نسخة واحدة لكل صفحة تحت المسار المباشر (بدون (legal) مزدوج).
+
+لكل بند أعلاه: انسخ الأصل إلى _ops/backups/agent_fix_<UTC>/… قبل التعديل، ثم طبّق التغيير.
+
+المرحلة 2 — تحقق شامل (READ-ONLY)
+
+نفّذ فحصًا شاملًا واطبع:
+
+-- Acceptance --
+RESTORED_DIR=<path>
+FILES=page.tsx:1,ChatClient.tsx:1,ChatMessages.tsx:1,media-bridge.ts:1,webrtc.ts:1,PeerMeta.tsx:1,gender.ts:1,countries.ts:1
+HOME_BG_HERO_WEBP_USAGE=1
+CHAT_MESSAGES_SLICE_MINUS_3_LINE=<number>
+MEDIA_THRESHOLDS=H80:1/V50:1
+WEBRTC_AUTONEXT_LINES=<lineNumbersCSV>
+PEER_META=EXISTS:1 MOUNTED:1 STYLE_BOTTOM_LEFT:1
+GENDER_ICONS=male:1 female:1 couple:1 lgbt:1 unknown:1
+COUNTRIES_FILE=src/data/countries.ts
+COUNTRIES_COUNT=247
+LEGAL_PAGES=terms:1 privacy:1 dmca:1 content:1 abuse:1 2257:1
+ENDPOINTS=/_health:1,/api/monitoring/metrics:1,/api/turn:1,/api/stripe/prices:1,/api/stripe/subscribe:1,/api/stripe/portal:1,/api/age/allow:1,/api/stripe/webhook:1
+QUICK_DOCK_ANCHOR_LINE=<number>
+NOTES=All feature gaps filled
+-- End Acceptance --
+
+
+إذا أي قيمة ليست كما هو متوقع، توقّف واطبع ما الذي اختلف.
+
+المرحلة 3 — Build محلي وفحوص
+
+استخدم Node 20.
+
+npm ci && npm run build
+
+إن ظهرت أخطاء route duplication للصفحات القانونية، أصلِحها بإزالة النسخ المكررة (احتفظ فقط بالمسارات المباشرة).
+
+اطبع Acceptance:
+
+-- Acceptance --
+BUILD_RC=0
+NEXT_VERSION=<>
+ROUTES_OK=1
+NOTES=standalone output ready
+-- End Acceptance --
+
+المرحلة 4 — Git إعداد ودفع إلى GitHub
+
+الجذر: نفس RESTORED_DIR.
+
+.gitignore يجب أن يحتوي:
+.env, .env.local, .next/, dist/, _ops/artifacts/, _ops/backups/, node_modules/
+
+اربط الريموت: https://github.com/Alshughriahmed/projeckt.git
+
+ادفع إلى main (المستودع جديد وفارغ تقريبًا من قبلنا، الدفع يجب أن يكون Fast-Forward).
+
+Acceptance:
+
+-- Acceptance --
+ROOT=<RESTORED_DIR>
+GIT_REMOTE=https://github.com/Alshughriahmed/projeckt.git
+PUSHED_BRANCH=main
+LAST_COMMIT_SHA=<7>
+TREE_TOP_LEVEL=[src, package.json, tsconfig.json, next.config.mjs, .replit, _ops, public]
+PUSH_RESULT=OK
+-- End Acceptance --
+
+المرحلة 5 — تقرير نهائي
+
+أنشئ ملف تقرير: _ops/reports/AGENT_FINAL_<UTC>.md يلخّص:
+
+ما أُضيف/عُدّل (قوائم الملفات، diff مختصر).
+
+COUNTRIES_COUNT وعيّنة رموز.
+
+سطور busEmit('next').
+
+نتيجة build.
+
+رابط الريموت والكومِت.
+
+أرفِق المسار في النهاية، واطبع Acceptance صغير:
+
+-- Acceptance --
+REPORT=_ops/reports/AGENT_FINAL_<UTC>.md
+NOTES=Done
+-- End Acceptance --
+
+ملاحظات ختامية للوكيل
+
+أي تعارض (ملف موجود ومحتواه يختلف ولا توجد علامات // DitonaChat:) → لا تُصلِّح تلقائيًا. توقّف واطبع تفاصيل التعارض (المسار + تجزئة sha256) في Acceptance.
+
+لا تُدخل/تعدّل أي شيء خارج البنود المحدّدة أعلاه.
+
+الهدف أن ينتهي المشروع مطابقًا للمواصفات التي صادق عليها المالك، مع Build ناجح، ثم دفع إلى GitHub.

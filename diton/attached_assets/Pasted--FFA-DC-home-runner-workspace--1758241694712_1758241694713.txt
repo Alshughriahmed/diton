@@ -1,0 +1,108 @@
+“فحص وظيفي متكامل بعد إصلاحات FFA + DC”
+
+البيئة
+
+المسار: /home/runner/workspace
+
+نفّذ كل أوامر الشِّل عبر: _ops/bin/disable_alt_screen.sh bash -lc '<cmd>' مع TERM=dumb CI=1.
+
+لا تغييرات كود. فحوص فقط.
+
+الخطوات المطلوبة
+
+تحقق FFA للواجهة
+
+افتح https://www.ditonachat.com/chat في نافذة خاصة لمستخدم غير VIP.
+
+Console:
+
+fetch("/api/rtc/env",{cache:"no-store"}).then(r=>r.json()).then(j=>console.log("ENV",j));
+console.log("isFFA()", typeof isFFA==="function" && isFFA());
+
+
+قبول: يظهر FREE_FOR_ALL: "1" أو NEXT_PUBLIC_FREE_FOR_ALL: "1" وisFFA()===true.
+
+تأكد أن أزرار Prev والفلاتر والجماليات مفعّلة.
+
+مطابقة بجهازين
+
+افتح الموقع على جهازين A وB. قبل البدء على A:
+
+window.t0=performance.now();
+window.addEventListener("rtc:phase",e=>{ if(e.detail?.phase==="connected"){ console.log("PHASE_CONNECTED_MS",Math.round(performance.now()-t0)); }});
+window.addEventListener("ditona:peer-meta",e=>console.log("PEER_META",e.detail));
+
+
+ابدأ المطابقة على الجهازين.
+
+قبول: تُطبع PHASE_CONNECTED_MS ≤ 3000ms، وتظهر PEER_META خلال ≤ 300ms.
+
+الرسائل
+
+بعد الاتصال:
+
+console.log("DC_STATE",(window.__ditonaDataChannel?.readyState));
+
+
+أرسل رسالة من الحقل واضغط Send.
+
+قبول: DC_STATE="open"، يصل النص للطرف الآخر ويتفرّغ الحقل.
+
+❤️ Like
+
+اضغط القلب في A. راقب B.
+
+قبول: يتزامن التبديل فورًا ولا تظهر رسالة “لا يوجد اتصال نشط”.
+
+القوائم المنسدلة (الجنس/البلد)
+
+افتح القائمتين وغيّر القيم.
+
+قبول: يمكن التحديد وتنعكس الحالة في الواجهة فورًا لمستخدم غير VIP.
+
+السحب للتنقل
+
+على موبايل أو محاكي المتصفح، اسحب يمين/يسار.
+
+قبول: السحب يمين ⇒ Prev، السحب يسار ⇒ Next.
+
+Next/Prev بدون شاشة سوداء
+
+اضغط Next ثم Prev عدة مرات.
+
+قبول: تظل معاينة المستخدم مرئية بين الجلسات، ولا تظهر شاشة سوداء.
+
+تعافي ICE
+
+أثناء اتصال فعّال، فعّل Offline من DevTools لمدة 2–3 ثوان ثم أعد Online.
+
+قبول: يعود الاتصال تلقائيًا بدون Refresh خلال ثوانٍ قليلة.
+
+إخراج تقرير قبول
+
+بعد الانتهاء، أنشئ تقريرًا موحّدًا:
+
+_ops/bin/disable_alt_screen.sh bash -lc '
+set -e; ts=$(date -u +%Y%m%d-%H%M%S); rpt="_ops/reports/ui_acceptance_$ts.log"; mkdir -p "${rpt%/*}";
+# عدّل القيم أدناه وفق ما رصدته فعليًا:
+cat > "$rpt" <<EOF
+-- Acceptance --
+FFA_UI_OK=1
+MATCH_TIME_MS=<أدخل القيمة>
+PEER_META_MS=<أدخل القيمة>
+MSG_SEND_OK=1
+LIKE_SYNC_OK=1
+DROPDOWNS_OK=1
+SWIPE_OK=1
+NO_BLACK_SCREEN_NEXT_PREV=1
+ICE_AUTO_RECOVER_OK=1
+NOTES=<ملاحظات مختصرة أو أخطاء مع آخر 5 أسطر Console لكل جهاز>
+EOF
+echo "[i] Report: $rpt"
+'
+
+في حال الفشل
+
+أرسل: التقرير أعلاه، وآخر 5 أسطر Errors من Console لكل جهاز، ولقطات Network لطلبات /api/rtc/matchmake, /api/rtc/offer|answer|ice.
+
+لا تُجرِ أي تعديل كود. فقط شخّص بدقة أين تعطّل البند.

@@ -1,0 +1,225 @@
+📣 Replit Agent Brief — DitonaChat: Canonical Restore & UI Parity
+
+الهدف النهائي (Goal):
+
+استعادة تطبيق DitonaChat “كامل الميزات” بواجهة Home و**/chat** تمامًا كما صُمّم (Tailwind فعّال، خلفية hero، شريط الأدوات، Peer meta badges، المكوّنات الجانبية… إلخ).
+
+توحيد المشروع في جذر واحد يحتوي: package.json, src/, public/, tsconfig.json, next.config.mjs, tailwind.config.js, postcss.config.js.
+
+إصلاح بناء الإنتاج (npm run build) بلا أخطاء.
+
+فتح فرع إصلاح + Pull Request إلى GitHub: Alshughriahmed/diton (الفرع: main) مع لقطات تحقق.
+
+نشر على Vercel وربط النتيجة بـ main (أو عبر Merge PR).
+
+🔎 ملخص المشكلة كما حدث
+
+لدينا عدّة جذور/نسخ داخل Replit (مثل: ditonachat_restored_20250903-222559/…, ditonachat-clean/DitonaChat/…, ومسارات src متعددة).
+
+الفرع الحالي على GitHub بُنِي لكن الواجهة على Vercel تبدو “خام” (عناصر HTML بدون Tailwind) وفُقِدت مكوّنات عديدة.
+
+سجل بناء الإنتاج يذكر أخطاء Module not found لملفات مثل:
+
+@/components/chat/PeerHeader
+
+@/components/chat/LowerRightQuick
+
+@/components/UpsellModal
+
+@/hooks/useVip
+
+@/components/common/SystemMonitor
+
+@/components/common/HealthIndicator
+
+@/components/chat/FriendsList
+
+@/components/chat/ScreenEffects
+
+@/components/chat/TranslationToggle
+
+هذا يعني أن الكود المصدر الكامل لتلك المكوّنات موجود في مكان آخر ضمن الورك سبيس (نسخ قديمة/مجلدات Backup)، أو أنه تضرر أثناء توحيد الجذر.
+
+مهمتك: استخدم وصولك الكامل وذاكرة السياق للعثور على المكوّنات الأصلية، توحيدها في جذر واحد، إصلاح الاستيرادات، تشغيل Tailwind، وإرجاع الواجهتين كما كانتا بالضبط.
+
+🧭 قواعد الأمان (لا مخاطرة)
+
+لا تحذف أي شيء نهائيًا. أنشئ دائمًا لقطة Snapshot قابلة للاسترجاع قبل أي تعديل.
+
+كل العمل على فرع جديد: repair-restore-ui-<timestamp>. لا تعدّل main مباشرة.
+
+أي سكربتات تستخدمها يجب أن تعتمد أدوات أساسية (bash، cp/tar/find/rg) — بدون rsync.
+
+اترك مجلدات النسخ الاحتياطية _ops/backups كما هي؛ استبعدها من Git بالتجاهل فقط.
+
+🧩 خطة العمل المقترحة (لك حرية التحسين)
+Phase A — Census (قراءة فقط)
+
+اعمل مسحًا لكلّ الملفات التي تبدو “المصدر الحقيقي”:
+
+ابحث عن الملفات/المكوّنات المفقودة بالأسماء أعلاه عبر كامل الورك سبيس.
+
+دوّن مساراتها وتواريخ آخر تعديل.
+
+المُخرَج المطلوب: ملف تقرير مختصر في _ops/reports/CENSUS_<timestamp>.md يذكر:
+
+كل المسارات التي تحتوي على تلك المكوّنات.
+
+أي src/app إضافية / components / hooks مترابطة.
+
+Phase B — Create Canonical Snapshot
+
+أنشئ لقطة “كانونيكال” قابلة للبناء في:
+_ops/exports/canonical_snapshot_<timestamp>/
+
+يجب أن تحتوي:
+package.json, tsconfig.json, next.config.mjs, postcss.config.js, tailwind.config.js, src/, public/.
+
+املأ src/components و**src/hooks** بالمكوّنات الضائعة من مواقعها القديمة.
+
+تأكد أن tsconfig.json يحتوي:
+
+{ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] } } }
+
+
+تأكد أن Tailwind يعمل:
+
+postcss.config.js فيه { tailwindcss: {}, autoprefixer: {} }
+
+tailwind.config.js فيه:
+content: ["./src/**/*.{js,ts,jsx,tsx,mdx}"]
+
+src/app/globals.css يبدأ بـ:
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+src/app/layout.tsx يستورد ./globals.css.
+
+Phase C — Restore Exact UI Parity
+
+صفحة Home (src/app/page.tsx):
+
+خلفية البطل: public/hero.webp.webp صورة حقيقية (>300KB).
+
+عنصر <main> يملك:
+bg-[url('/hero.webp.webp')] bg-cover bg-center bg-no-repeat
+
+صفحة Chat (src/app/chat/ChatClient.tsx):
+
+تأكد من وجود واستيراد المكوّنات التالية (أعد تكوين المسارات تحت src/components/... وsrc/hooks/...):
+
+@/components/chat/PeerHeader
+
+@/components/chat/LowerRightQuick
+
+@/components/UpsellModal
+
+@/hooks/useVip
+
+@/components/common/SystemMonitor
+
+@/components/common/HealthIndicator
+
+@/components/chat/FriendsList
+
+@/components/chat/ScreenEffects
+
+@/components/chat/TranslationToggle
+
+(الموجود أصلًا) @/components/chat/PeerMeta
+
+@/components/chat/ChatMessages (تظهر آخر 3 رسائل: slice(-3))
+
+تأكد من شريط الأدوات (Next/Like)، مرساة Quick Dock، وبادجات الدولة/المدينة/الجندر (PeerMeta) كـ overlay.
+
+صفحات الامتثال القانوني (terms/privacy/dmca/content/abuse/2257) موجودة تحت src/app/....
+
+Phase D — Build & Verify
+
+من داخل الـ Snapshot:
+
+npm ci أو npm install
+
+npm run build ← يجب أن ينجح بلا أخطاء.
+
+لقطة شاشة/Log إلى: _ops/reports/BUILD_<timestamp>.log
+
+Phase E — Repo Canonicalization + PR
+
+انسخ محتوى الـ Snapshot إلى جذر الريبو (بدون .git, .next, node_modules, _ops/backups, attached_assets, dist).
+
+حدّث .gitignore ليشمل أعلاه.
+
+أنشئ فرع: repair-restore-ui-<timestamp>
+
+كومِت واضح:
+feat(ui): restore full DitonaChat UI + components + tailwind
+
+ادفع إلى GitHub: Alshughriahmed/diton وافتح PR إلى main مع وصف ما تمّ.
+
+اربط PR بالتحقق (لقطات، تقارير).
+
+Phase F — Vercel
+
+تأكّد أن المشروع على Vercel مرتبط بفرع main لهذا الريبو.
+
+بعد دمج الـ PR (أو من سحب المعاينة)، تأكد أن:
+
+صفحة / تعرض الخلفية و الـ Tailwind كاملاً.
+
+صفحة /chat تعرض الشريط والبادجات والمكونات بالتصميم المتفق عليه.
+
+ارفع صورتي شاشة (Home + Chat) إلى _ops/exports/verify_<timestamp>/.
+
+✅ Acceptance Checklist (أرفِقها في تقرير أخير)
+
+ جذر واحد فقط يحوي src/, public/, ملفات الإعداد.
+
+ كل المكوّنات المذكورة موجودة تحت src/components/… و src/hooks/… وتُبنى بلا أخطاء.
+
+ Tailwind فعّال (تغيّرات الـ CSS ظاهرة، عناصر مزوّقة).
+
+ public/hero.webp.webp حقيقي ويُستخدم في Home.
+
+ ChatMessages يعرض آخر 3 رسائل (تحقق برمز أو لوج).
+
+ شريط الأدوات وQuick Dock وPeerMeta ظاهرة على /chat.
+
+ npm run build ينجح (أرفِق log).
+
+ PR مفتوح باسم واضح إلى main في Alshughriahmed/diton مع وصف/لقطات.
+
+ نشر Vercel يظهر الواجهتين كما في الصور المرجعية (Home + Chat).
+
+ℹ️ ملاحظات مرجعية للوكيل
+
+تمت رؤية مكوناتنا سابقًا موزّعة ضمن مجلدات مثل:
+
+ditonachat_restored_20250903-222559/**
+
+ditonachat-clean/DitonaChat/**
+
+_ops/backups/**
+
+الاستيراد يستخدم alias @/ ↦ src/*. أي مكوّن تعثر عليه انقله إلى البنية المناسبة وعدّل الاستيرادات إن لزم.
+
+إن تعذّر العثور على مكوّن يُعاد بناؤه مسؤوليةً منك لكن بنفس الواجهة (props) وبحد أدنى من الشكل (مع Tailwind) حتى يمرّ البناء وتعود الواجهة كما كانت.
+
+🧾 سطر قبول مختصر اطبعه عند النهاية
+
+رجاءً اطبع سطرًا مثل:
+
+-- Acceptance --
+PHASES=A..F OK
+SNAPSHOT=_ops/exports/canonical_snapshot_<ts>
+BUILD=SUCCESS
+PR_URL=<link>
+VERCEL_URL=<deployment url>
+UI_PARITY=HOME_OK, CHAT_OK
+-- End Acceptance --
+
+
+شكراً — نفّذ الخطة بأذكى وأقصر طريق تراها مناسباً، مع الالتزام التام بعناصر القبول أعلاه.

@@ -1,0 +1,149 @@
+دفعة 2 — VIP كمصدر حقيقة (Cookie أولًا + JWT)
+1) باتشات جاهزة
+2001 — src/utils/vip.ts (يفضّل الكوكي ثم الجلسة)
+
+احفظ باسم 2001-vip-require-cookie-first.patch ثم طبّق بـgit apply.
+
+*** a/src/utils/vip.ts
+--- b/src/utils/vip.ts
+@@
++import { cookies } from "next/headers";
++import { getServerSession } from "next-auth";
++import { authOptions } from "@/app/api/auth/[...nextauth]/route";
++
++export async function requireVip(): Promise<boolean> {
++  if (process.env.FREE_FOR_ALL === "1") return true;
++  // 1) كوكي HttpOnly vip=1 (الأسرع)
++  try {
++    const c = cookies();
++    if (c.get("vip")?.value === "1") return true;
++  } catch {}
++  // 2) JWT/Session
++  const session = await getServerSession(authOptions as any);
++  return Boolean((session as any)?.vip || (session as any)?.isVip);
++}
+
+
+إن لم يكن الملف موجوداً، سيُنشأ تلقائياً.
+
+2002 — callbacks للـJWT/Session (ينقل vip,vipExp ويُظهر الكوكي إن وُجد)
+
+احفظ باسم 2002-nextauth-callbacks-vip.patch.
+
+*** a/src/app/api/auth/[...nextauth]/route.ts
+--- b/src/app/api/auth/[...nextauth]/route.ts
+@@
+ import NextAuth from "next-auth";
+@@
+ export const authOptions = {
+   providers: [
+     // مزوّد Google الموجود لديك…
+   ],
++  callbacks: {
++    async jwt({ token, user }: any) {
++      if (token.vip === undefined) token.vip = false;
++      if (token.vipExp === undefined) token.vipExp = 0;
++      if (user?.email && token.email === undefined) token.email = user.email;
++      return token;
++    },
++    async session({ session, token }: any) {
++      (session as any).vip = Boolean(token.vip);
++      (session as any).vipExp = Number(token.vipExp || 0);
++      // تفضيل الكوكي للعرض فقط
++      try {
++        const { cookies } = await import("next/headers");
++        if (cookies().get("vip")?.value === "1") (session as any).vip = true;
++      } catch {}
++      return session;
++    },
++  },
+ } satisfies any;
+ 
+ const handler = NextAuth(authOptions as any);
+ export { handler as GET, handler as POST };
+
+2003 — مسارات مساعدة للفحص (آمنة على الإنتاج)
+
+احفظ باسم 2003-vip-dev-tools.patch.
+
+*** /dev/null
+--- b/src/app/api/user/vip-status/route.ts
+@@
++import { cookies } from "next/headers";
++import { getServerSession } from "next-auth";
++import { authOptions } from "@/app/api/auth/[...nextauth]/route";
++export async function GET() {
++  const c = cookies();
++  const cookieVip = c.get("vip")?.value === "1";
++  const session = await getServerSession(authOptions as any);
++  const sessionVip = Boolean((session as any)?.vip || (session as any)?.isVip);
++  const vipExp = Number((session as any)?.vipExp || 0);
++  return Response.json({ cookieVip, sessionVip, vipExp });
++}
+*** /dev/null
+--- b/src/app/api/vip/dev/grant/route.ts
+@@
++import { NextResponse } from "next/server";
++export async function POST() {
++  // ممنوع على الإنتاج
++  const env = process.env.VERCEL_ENV || process.env.NODE_ENV || "development";
++  if (env === "production") return NextResponse.json({ error: "forbidden" }, { status: 403 });
++  const res = NextResponse.json({ ok: true, note: "dev vip cookie set" });
++  res.headers.append(
++    "Set-Cookie",
++    // دومينك الإنتاجي—في المعاينة يمكن سقوطه تلقائياً
++    `vip=1; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`
++  );
++  return res;
++}
+
+
+للإنتاج استخدمتم بالفعل /api/vip/claim (مذكور عندك). هذا المسار dev فقط لتسهيل القبول في Preview/Local.
+
+2) سكربت القبول
+
+احفظ باسم acc_vip_claim.sh واجعله قابلاً للتنفيذ.
+
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+JAR="$(mktemp)"
+
+echo "[Before] GET /api/user/vip-status"
+curl -s "$BASE/api/user/vip-status"; echo
+
+echo "[Grant(dev)] POST /api/vip/dev/grant"
+curl -s -X POST -c "$JAR" "$BASE/api/vip/dev/grant"; echo
+
+echo "[After]  GET /api/user/vip-status (with cookie)"
+curl -s -b "$JAR" "$BASE/api/user/vip-status"; echo
+
+echo "[Session] GET /api/auth/session (with cookie)"
+curl -s -b "$JAR" "$BASE/api/auth/session" | sed -E 's/,"/,\n"/g' | head -n 30
+
+
+تشغيل:
+
+bash acc_vip_claim.sh https://www.ditonachat.com
+
+
+في Production استخدم /api/vip/claim مع Stripe (لا يعمل dev/grant هناك). في Preview/Local يعمل dev/grant لضبط الكوكي سريعاً.
+
+3) طريقة التسليم للوكيل
+git checkout -b feature/batch-2
+git apply 2001-vip-require-cookie-first.patch
+git apply 2002-nextauth-callbacks-vip.patch
+git apply 2003-vip-dev-tools.patch
+pnpm i --frozen-lockfile
+pnpm build || pnpm dev
+bash acc_vip_claim.sh https://www.ditonachat.com
+git add -A && git commit -m "Batch 2: VIP source-of-truth (cookie first) + jwt/session + dev tools"
+
+
+ملاحظات مهمة:
+
+لا نغيّر /api/vip/claim لديك؛ فقط نضمن أن requireVip() يقرأ الكوكي أولاً، وأن الـsession تُظهِر الحالة.
+
+على الإنتاج: احرص أن /api/vip/claim يضع vip=1; HttpOnly; Secure; SameSite=Lax; Path=/ (ودومينك عند الحاجة).
+
+هذه الدفعة لا تُطبّق حواجز 403 بعد؛ سيتم ذلك في الدفعة 3 (Gates على /api/match/next).

@@ -1,0 +1,140 @@
+Task: Fix RTC production 401, unblock match, and prove it (Minimal-Diff)
+
+الهدف
+
+إنهاء 401 في /api/rtc/{enqueue,matchmake} على www.ditonachat.com
+.
+
+بناء ناجح، نشر على Vercel، ومطابقة A/B مؤكدة.
+
+عدم كسر أي ميزة أخرى.
+
+القيود
+
+Minimal-Diff فقط. لا حذف ميزات ولا تغيير VIP.
+
+تثبيت Runtime، إصلاحات موضعية، بناء واحد، نشر واحد مع Clear cache.
+
+تقرير وحيد: _ops/reports/agent_front_rtc_<UTC>.log.
+
+A) إصلاحات الكود الإلزامية
+
+تحكم Runtime وعدم التخزين
+في أعلى كل من:
+
+src/app/api/rtc/enqueue/route.ts
+
+src/app/api/rtc/matchmake/route.ts
+
+أبقِ نسخة واحدة فقط من هذه الأسطر، واحذف أي تكرار لاحق:
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+التقاط كوكي anon بشكل متسامح
+داخل كل Route قبل التحقق، استخدم:
+
+import { cookies, headers } from "next/headers";
+import { NextResponse } from "next/server";
+import { verifySigned } from "@/lib/rtc/auth";
+
+const raw =
+  cookies().get("anon")?.value ??
+  headers().get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
+  null;
+
+const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
+if (!anonId) {
+  return NextResponse.json({ error: "anon-required" }, { status: 401, headers: { "cache-control": "no-store" } });
+}
+
+
+verifySigned
+تأكّد أن src/lib/rtc/auth.ts فيها الصيغة التي تقبل UUID خام:
+
+function verifySigned(raw: string, secret: string) {
+  const [body, sig] = (raw || "").split(".");
+  if (!body || !sig) return null;
+  const calc = createHmac("sha256", secret).update(body).digest("hex");
+  if (calc !== sig) return null;
+  try { return Buffer.from(body, "base64url").toString("utf8"); }
+  catch { return body; }
+}
+
+
+واجهة: تحقق سريع بدون تغيير سلوك
+
+src/app/chat/ChatClient.tsx: لا يوجد import "./freeForAllBridge"; وأبقِ مثيلًا واحدًا لـ<FreeForAllBridge />.
+
+src/app/chat/rtcFlow.ts: موجود مستمع يرسل rtc:phase {phase:"dc-open"} عند dc.open.
+
+src/app/chat/dcMetaResponder.client.ts وmetaInit.client.ts: "use client" أول سطر وحارس typeof window !== "undefined" لكل استعمال للـwindow.
+
+لا تُدخل تغييرات أخرى إن لم تكن مطلوبة لهذا الهدف.
+
+B) بناء ونشر
+
+شغّل: pnpm -s build (أصلح أي كسر Webpack مثل تكرار dynamic حتى ينجح).
+
+التزم: git add -A && git commit -m "fix(api): node runtime + cookie extraction; verifySigned safe; dedupe bridge"
+
+ادفع وافتح PR أو ادمج إلى main.
+
+على Vercel: Production → Redeploy مع Clear build cache. تأكد المتغيّرات: ANON_SIGNING_SECRET, FREE_FOR_ALL=1, NEXT_PUBLIC_FREE_FOR_ALL=1.
+
+C) فحوص القبول على الإنتاج (A/B)
+
+نفّذ على www.ditonachat.com،
+ جلستان مستقلتان (كوكيان مختلفان):
+
+# A
+curl -i -sS https://www.ditonachat.com/api/rtc/env
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt https://www.ditonachat.com/api/age/allow
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt https://www.ditonachat.com/api/rtc/init
+curl -i -sS -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"XX","filterGenders":"all","filterCountries":"ALL"}' -c A.txt -b A.txt https://www.ditonachat.com/api/rtc/enqueue
+# B
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt https://www.ditonachat.com/api/age/allow
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt https://www.ditonachat.com/api/rtc/init
+curl -i -sS -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"YY","filterGenders":"all","filterCountries":"ALL"}' -c B.txt -b B.txt https://www.ditonachat.com/api/rtc/enqueue
+# matchmake
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt https://www.ditonachat.com/api/rtc/matchmake
+curl -i -sS -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt https://www.ditonachat.com/api/rtc/matchmake
+# message/allow تحت FFA باستخدام pairId المُستخرج
+
+
+نجاح مطلوب:
+
+enqueue = 204 للطرفين.
+
+matchmake = 200 مع found=true وpairId واحد وrole مختلف.
+
+message/allow = 200 تحت FFA.
+
+D) فحص واجهة (اختياري لكن موصى به)
+
+افتح /chat على كمبيوتر وموبايل.
+
+على الكمبيوتر Console:
+
+window.addEventListener('rtc:phase', e=>console.log('phase', e.detail));
+window.addEventListener('ditona:peer-meta', e=>console.log('peer', e.detail));
+
+
+توقّع: searching → matched → connected → dc-open ثم peer ≤300ms.
+
+E) التقرير النهائي
+
+اكتب إلى _ops/reports/agent_front_rtc_<UTC>.log:
+
+مفاتيح:
+ENV_OK, AGE_OK, ANON_OK, ENQUEUE_OK, MATCH_OK, MSG_ALLOW_OK, DC_OPEN_OK, CLIENT_ENV_REMOVED
+
+مقتطفا JSON من matchmake للطرفين يوضحان pairId وrole.
+
+الملفات والأسطر التي عُدلت (route.ts ×2 + أي إصلاح Build).
+
+نص مختصر يثبت نشر Vercel (deployment URL ووقت النشر).
+
+إن فشل أي بند، أصلحه محليًا بـ Minimal-Diff ثم أعد الفحص حتى تصبح كل المفاتيح = 1.

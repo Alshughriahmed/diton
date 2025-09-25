@@ -1,0 +1,182 @@
+MASTER TASK: Fix & Prove DitonaChat RTC on Production (Minimal-Diff, Low-Cost)
+
+الهدف النهائي
+
+مطابقة عاملة 100% على الإنتاج (www.ditonachat.com) مع إثبات صريح:
+
+enqueue ⇒ 204 للطرفين.
+
+matchmake ⇒ 200 مع found=true + pairId واحد + role مختلف.
+
+تحت FFA: message/allow ⇒ 200.
+
+واجهة: بث حدث dc-open موجود، وpeer-meta يُطلق خلال ≤300ms.
+
+لا استخدام عميل لـprocess.env.NEXT_PUBLIC_FREE_FOR_ALL.
+
+قواعد التكلفة والتنفيذ
+
+Minimal-Diff فقط. لا حذف ميزات ولا تغيير VIP.
+
+بناء واحد فقط. لا pnpm install ما لم يتغيّر القفل.
+
+كل فحوص الشبكة بـcurl مع مهلات ثابتة (--connect-timeout 5 --max-time 15).
+
+لا أدوات تفاعلية ولا شاشة بديلة. اطبع تقارير نصية فقط.
+
+نسخ احتياطي قبل أي تعديل تحت _ops/backups/<label>_<UTC>/.
+
+تقرير واحد نهائي: _ops/reports/agent_front_rtc_<UTC>.log.
+
+A) إصلاحات خادمية لازمة (إن وُجدت حاجة)
+
+حل 401 وفرض Node Runtime وعدم التخزين لمساري الـRTC:
+
+في src/app/api/rtc/enqueue/route.ts وsrc/app/api/rtc/matchmake/route.ts:
+
+في أعلى كل ملف مرة واحدة فقط:
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+أزل أي تكرار سابق لهذه الأسطر.
+
+التقاط كوكي anon بشكل متسامح ثم التحقق:
+
+import { cookies, headers } from "next/headers";
+import { NextResponse } from "next/server";
+import { verifySigned } from "@/lib/rtc/auth";
+
+const raw =
+  cookies().get("anon")?.value ??
+  headers().get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
+  null;
+
+const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
+if (!anonId) return NextResponse.json({ error: "anon-required" }, { status: 401, headers:{ "cache-control":"no-store" }});
+
+
+تأكيد verifySigned في src/lib/rtc/auth.ts:
+
+function verifySigned(raw: string, secret: string) {
+  const [body, sig] = (raw || "").split(".");
+  if (!body || !sig) return null;
+  const calc = createHmac("sha256", secret).update(body).digest("hex");
+  if (calc !== sig) return null;
+  try { return Buffer.from(body, "base64url").toString("utf8"); }
+  catch { return body; } // UUID خام
+}
+
+
+لا تدع middleware يعترض /api/*. إن وُجد اعتراض، استثنِ /api.
+
+B) إصلاحات واجهة يجب التحقق منها
+
+إزالة ازدواج الجسر: في src/app/chat/ChatClient.tsx
+احذف import "./freeForAllBridge"; وابقِ مثيلاً واحدًا فقط لـ <FreeForAllBridge />.
+
+حدث dc-open: في src/app/chat/rtcFlow.ts
+وجود:
+
+dc.addEventListener("open", () => {
+  try { window.dispatchEvent(new CustomEvent("rtc:phase", { detail:{ phase:"dc-open", role: state?.role ?? null }})); } catch {}
+});
+
+
+حراسة window في ملفات العميل:
+dcMetaResponder.client.ts, metaInit.client.ts تحتوي "use client" وتتحقق من typeof window !== "undefined".
+
+FFA وقت التشغيل: لا وجود لأي process.env.NEXT_PUBLIC_FREE_FOR_ALL في ملفات العميل. الاعتماد على hook/runtime فقط.
+
+C) Build → Push → Vercel
+
+نفّذ بناء واحد. أصلح فقط أخطاء التكرار أو الاستيراد.
+
+كومِت واحد بعنوان:
+fix(api): node runtime + robust anon cookie; ui: dedupe bridge; dc-open
+
+ادفع الفرع ثم ادمج إلى main.
+
+في Vercel (Production): تأكد من ANON_SIGNING_SECRET, FREE_FOR_ALL=1, NEXT_PUBLIC_FREE_FOR_ALL=1. نفّذ Clear build cache ثم انتظر نشرًا ناجحًا.
+
+إن لم تستطع ضبط سرّ الإنتاج بنفسك، اطبع في التقرير خطوات التحقق اليدوي للمستخدم:
+
+احسب HMAC للجزء قبل النقطة من كوكي anon بـANON_SIGNING_SECRET وأثبت المطابقة مع الجزء بعد النقطة.
+
+D) فحوص الإنتاج A/B (دومين: https://www.ditonachat.com
+)
+
+استخدم جلستين مستقلتين (ملفا كوكيز A/B)، بمهلات قصيرة. خزّن الرؤوس والأجسام وملفات الكوكي، ثم استخرج القيم.
+
+الترتيب:
+
+BASE=https://www.ditonachat.com
+
+# A
+curl -sS -i $BASE/api/rtc/env
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt $BASE/api/age/allow
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt $BASE/api/rtc/init
+curl -sS -i -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"XX","filterGenders":"all","filterCountries":"ALL"}' -c A.txt -b A.txt $BASE/api/rtc/enqueue
+
+# B
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt $BASE/api/age/allow
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt $BASE/api/rtc/init
+curl -sS -i -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"YY","filterGenders":"all","filterCountries":"ALL"}' -c B.txt -b B.txt $BASE/api/rtc/enqueue
+
+# matchmake (أعد المحاولة حتى found=true خلال ~10s كحد أقصى)
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt $BASE/api/rtc/matchmake
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt $BASE/api/rtc/matchmake
+
+# message/allow تحت FFA (استخدم pairId من أعلاه)
+# curl -sS -i -X POST -H 'content-type: application/json' -d "{\"pairId\":\"<PAIR>\"}" -c A.txt -b A.txt $BASE/api/message/allow
+
+
+اختصر النتائج في التقرير:
+
+أكواد الاستجابة لكل خطوة.
+
+من matchmake: found, pairId, role للطرفين.
+
+إذا ظهرت أكواد 000 (timeouts): أعد الطلب بمهلات، ثم اطبع curl -v لأول فشل فقط لتشخيص الشبكة، وتابع.
+
+E) تقرير القبول الموحد
+
+اكتب إلى _ops/reports/agent_front_rtc_<UTC>.log:
+
+Status Keys
+
+ENV_OK (env يُظهر FFA=1)
+
+AGE_OK (200 للطرفين)
+
+ANON_OK (كوكي anon موجود ومقبول)
+
+ENQUEUE_OK (204 للطرفين)
+
+MATCH_OK (200 + found=true + pairId موحّد + roles مختلفة)
+
+MSG_ALLOW_OK (200 تحت FFA)
+
+DC_OPEN_OK (بث dc-open موجود في الكود)
+
+CLIENT_ENV_REMOVED (لا استعمال عميل لـ NEXT_PUBLIC_FREE_FOR_ALL)
+
+Evidence
+
+مقتطفا JSON من matchmake للطرفين يظهران pairId وrole.
+
+موقع الأسطر التي عُدِّلت في الملفين (enqueue/matchmake) لتثبيت runtime وقراءة الكوكي.
+
+إن فشل التوقيع: اطبع ناتج مقارنة sig مقابل HMAC محسوبة محليًا مع اسم متغير السرّ.
+
+شرط النجاح: كل المفاتيح = 1. إن فشل أي مفتاح، أصلح السبب محليًا بحد أدنى تغييرات، وأعد الفحوص حتى النجاح.
+
+المخرجات الوحيدة المتوقعة:
+
+تقرير واحد: _ops/reports/agent_front_rtc_<UTC>.log
+
+قائمة الملفات المعدّلة ونسخها الاحتياطية تحت _ops/backups/…
+
+لا تغيّر أي منطق VIP مدفوع. افتح الميزات فقط عبر FFA وقت التشغيل.

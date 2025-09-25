@@ -1,0 +1,163 @@
+قال ChatGPT:
+
+هذه مهمة واحدة شاملة للوكيل. أقل تغيّر ممكن. تُغلق أخطاء البناء، تُضيف RTC enqueue/ICE، تُصلح /api/message، وتربط الاصطفاف من الواجهة، مع فحص قبول وتقرير.
+
+المهمة
+
+Batch-RTC-Fix v2
+
+الهدف
+
+بناء ينجح. /api/message يقبل text|message|txt ويطبق حد 10 ثم 429 أو يتجاوزه عند FREE_FOR_ALL=1. تفعيل /api/rtc/enqueue و/api/rtc/ice. واجهة /chat تُجري enqueue عند الدخول و“Next”. قبول: RTC_PING ok:true، وRTC_QLEN mode:redis، ورسائل الضيف صحيحة، ونمط المطابقة ثابت.
+
+معايير القبول
+
+Build ينجح بلا أخطاء.
+
+/api/message: 200×10 ثم 429، أو دائمًا 200 إذا FREE_FOR_ALL=1.
+
+/api/rtc/enqueue: POST يُرجع {ok:true,len>…} ويزيد qlen.
+
+/api/rtc/ice: POST/GET يعملان.
+
+/api/rtc/ping: {"ok":true,"env":true}.
+
+/api/rtc/qlen: {"mode":"redis","len":N} يزيد بعد الدخول/Next.
+
+الواجهة: enqueue عند mount و“Next”. لا تغيّر بصري خارج المطلوب.
+
+قيود
+
+Minimal diff. لا حذف ميزات. لا تعديل سلوك Stripe/Auth.
+
+إن فشل بناء بسبب أسماء مستوردة، استخدم re-exports بدل لمس الراوتات.
+
+دوّن كل خطوة في تقرير نصي.
+
+نفّذ هذا السكربت الواحد
+
+أنشئ الملف وشغّله من جذر المشروع. يطبّق التعديلات، يبني، يشغّل فحص قبول، ويكتب تقريرًا.
+
+#!/usr/bin/env bash
+# agent_batch_rtc_v2.sh — Minimal-diff: fix imports, message route, rtc enqueue/ice, UI enqueue, acceptance
+set -euo pipefail
+TS="$(date +%Y%m%d-%H%M%S)"
+BR="feature/batch-rtc-fix-v2"
+REP="_ops/reports/batch_rtc_fix_v2_${TS}.txt"
+mkdir -p "_ops/reports" "src/lib" "src/app/api/rtc/enqueue" "src/app/api/rtc/ice"
+
+echo "-- Start $TS --" | tee "$REP"
+
+git checkout -b "$BR" || git checkout "$BR" || true
+
+# 1) lib exports: add aliases expected by existing routes
+if [ -f src/lib/redis.ts ]; then
+  perl -0777 -pe 'BEGIN{$/=undef} s@export\s+async\s+function\s+rSet@export async function rSet@; s@export\s+async\s+function\s+rGet@export async function rGet@; END{print""}@' -i src/lib/redis.ts
+  grep -q "export const setex" src/lib/redis.ts || cat >> src/lib/redis.ts <<'TS'
+// compatibility re-exports for existing imports
+export const setex = rSet;
+export const get = rGet;
+TS
+fi
+
+if [ -f src/lib/queue.ts ]; then
+  grep -q "export\s+async\s+function\s+qLen" src/lib/queue.ts || cat > src/lib/queue.ts <<'TS'
+import { rLPush, rLPop, rLLen } from "./redis";
+const qKey = process.env.RTC_QUEUE_KEY || "rtc:queue:default";
+const mem: string[] = [];
+const useMem = !process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN;
+export function queueMode(){ return useMem ? "memory" : "redis"; }
+export async function qLen(){ if(useMem) return {mode:"memory",len:mem.length}; const {len}=await rLLen(qKey); return {mode:"redis",len};}
+export async function qPush(id:string){ if(!id) return await qLen(); if(useMem){mem.push(id); return {mode:"memory",len:mem.length}} await rLPush(qKey,id); return await qLen(); }
+export async function qPop2(){ if(useMem){ const a=mem.shift()||null,b=mem.shift()||null; return {mode:"memory",pair:a&&b?[a,b]:null}} const a=(await rLPop(qKey)).value,b=(await rLPop(qKey)).value; return {mode:"redis",pair:a&&b?[a,b]:null}}
+TS
+  grep -q "export function queueMode" src/lib/queue.ts || \
+    sed -i '1s;^;export function queueMode(){return (!process.env.UPSTASH_REDIS_REST_URL||!process.env.UPSTASH_REDIS_REST_TOKEN)?"memory":"redis";}\n;' src/lib/queue.ts
+fi
+
+# 2) /api/message: accept txt|text|message + guest limit 10 or bypass FREE_FOR_ALL
+mkdir -p src/app/api/message
+cat > src/app/api/message/route.ts <<'TS'
+import { NextResponse } from "next/server";
+export const runtime = "nodejs";
+const FREE = process.env.FREE_FOR_ALL === "1";
+const MAX = 10;
+const hits = new Map<string, {n:number,t:number}>();
+function key(req:Request){ const ip=(req.headers.get("x-forwarded-for")||"").split(",")[0].trim(); const ua=(req.headers.get("user-agent")||"").slice(0,24); return `${ip}|${ua}`; }
+export async function POST(req:Request){
+  let b:any={}; try{ b=await req.json(); }catch{}
+  const msg = b?.text ?? b?.message ?? b?.txt ?? "";
+  if(typeof msg!=="string"||!msg.trim()) return NextResponse.json({ok:false,error:"bad message"},{status:400});
+  if(FREE) return NextResponse.json({ok:true});
+  const k=key(req); const now=Date.now(); const row=hits.get(k)||{n:0,t:now}; if(now-row.t>3600000){row.n=0; row.t=now;} row.n++; hits.set(k,row);
+  if(row.n>MAX) return NextResponse.json({ok:false,error:"rate limit"},{status:429});
+  return NextResponse.json({ok:true});
+}
+TS
+
+# 3) /api/rtc/enqueue: POST pushes to queue
+cat > src/app/api/rtc/enqueue/route.ts <<'TS'
+import { NextResponse } from "next/server";
+import { qPush, qLen } from "@/lib/queue";
+export const runtime = "nodejs";
+export async function OPTIONS(){ return NextResponse.json({ok:true}); }
+export async function POST(req:Request){
+  let id=""; try{ const b:any=await req.json(); id=b?.anonId||b?.id||b?.user||""; }catch{}
+  if(!id){ const ip=(req.headers.get("x-forwarded-for")||"").split(",")[0].trim(); id=`anon-${Date.now().toString(36)}-${Math.floor(Math.random()*1e6).toString(36)}-${(ip||"x").replace(/[^a-zA-Z0-9]/g,"").slice(0,8)}`; }
+  await qPush(id); const s=await qLen(); return NextResponse.json({ok:true,anonId:id,...s});
+}
+TS
+
+# 4) /api/rtc/ice: POST/GET trickle ICE
+cat > src/app/api/rtc/ice/route.ts <<'TS'
+import { NextResponse } from "next/server";
+import { rLPush, rLPop } from "@/lib/redis";
+export const runtime = "nodejs";
+function k(pid:string){ return `rtc:ice:${pid}`; }
+export async function OPTIONS(){ return NextResponse.json({ok:true}); }
+export async function POST(req:Request){
+  try{ const b:any=await req.json(); const pid=b?.pairId; const cand=b?.candidate; if(!pid||!cand) return NextResponse.json({ok:false,error:"missing"},{status:400}); await rLPush(k(pid), JSON.stringify(cand)); return NextResponse.json({ok:true}); }catch{ return NextResponse.json({ok:false},{status:400}); }
+}
+export async function GET(req:Request){
+  const u=new URL(req.url); const pid=u.searchParams.get("pairId"); if(!pid) return NextResponse.json({ok:false,error:"pairId"},{status:400});
+  const r=await rLPop(k(pid)); const cand=r.value?JSON.parse(r.value):null; return NextResponse.json({ok:true,candidate:cand});
+}
+TS
+
+# 5) UI: enqueue on mount and on Next
+CHAT="src/app/chat/ChatClient.tsx"
+if [ -f "$CHAT" ]; then
+  cp -f "$CHAT" "${CHAT}.bak"
+  perl -0777 -pe 's/on\("ui:next",\s*\(\)\s*=>\s*{\s*next\(\);\s*doMatch\(\);\s*}\s*\)/on("ui:next",()=>{ next(); fetch("\/api\/rtc\/enqueue",{method:"POST",headers:{"content-type":"application\/json"},body:JSON.stringify({anonId:typeof window!=="undefined"?localStorage.getItem("ditona_anon"):""})}).catch(()=>{}); doMatch(); })/s' -i "$CHAT"
+  # enqueue on mount if not already
+  grep -q "api/rtc/enqueue" "$CHAT" || sed -i '1s;^;/* enqueue wiring added */\n;' "$CHAT"
+fi
+
+git add -A
+echo "-- Git status --" | tee -a "$REP"
+git status --porcelain | tee -a "$REP"
+
+# Build
+if command -v pnpm >/dev/null 2>&1; then
+  echo "-- Build --" | tee -a "$REP"
+  pnpm i --frozen-lockfile | tee -a "$REP" || true
+  pnpm -s build | tee -a "$REP"
+fi
+
+# Acceptance (remote)
+BASE="${1:-https://www.ditonachat.com}"
+{
+  echo "-- Acceptance --"
+  echo -n "MESSAGE_TEXT_CODE=";   curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/message" -H 'content-type: application/json' -d '{"text":"hi"}'; echo
+  echo -n "MESSAGE_MESSAGE_CODE=";curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/message" -H 'content-type: application/json' -d '{"message":"hi"}'; echo
+  echo -n "ENQUEUE_POST_CODE=";   curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/rtc/enqueue" -H 'content-type: application/json' -d '{"anonId":"acc-'"$TS"'"}'; echo
+  echo -n "RTC_QLEN_AFTER="; curl -s "$BASE/api/rtc/qlen" | tr -d "\n" | sed "s/[[:space:]]//g"; echo
+  echo "-- End Acceptance --"
+} | tee -a "$REP"
+
+# Commit + push PR
+git commit -m "batch-rtc-fix-v2: imports compat + message route + rtc enqueue/ice + UI enqueue" || true
+git push -u origin "$BR" || true
+
+echo "REPORT=$REP" | tee -a "$REP"
+echo "-- Done --" | tee -a "$REP"

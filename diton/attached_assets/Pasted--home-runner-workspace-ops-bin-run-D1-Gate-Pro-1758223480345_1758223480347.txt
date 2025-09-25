@@ -1,0 +1,128 @@
+اعمل في /home/runner/workspace. شغّل بالترتيب عبر _ops/bin/run. لا عمليات ريموت.
+
+# D1 — Gate (Prod): فحص قبول على الإنتاج
+cat > D1_release_gate_prod.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+BASE="${BASE:-https://www.ditonachat.com}"
+OUT="_ops/reports/release_gate_$(date -u +%Y%m%d-%H%M%S).log"; mkdir -p _ops/reports
+
+h(){ curl -s -o /dev/null -w '%{http_code}' "$BASE/api/health"; }
+t(){ curl -s "$BASE/api/turn" | tr -d '\r\n' | grep -Eo '(turns?:[^"]*:(443|5349))' | head -n1; }
+s(){ curl -s "$BASE/api/stripe/prices" | tr -d '\r' | grep -Eo '"id"|"unit_amount' -c; }  # يقبل fallback
+e(){ curl -s "$BASE/api/rtc/env" | tr -d '\r'; }
+hdr_ok(){ local p="$1"; local H="$(curl -s -I "$BASE$p")"; echo "$H" | grep -qi '^content-type:.*application/json' && echo "$H" | grep -qi '^cache-control:.*no-store'; }
+
+HEALTH_OK=$([ "$(h)" = "200" ] && echo 1 || echo 0)
+TURN_443_OK=$([ -n "$(t)" ] && echo 1 || echo 0)
+STRIPE_JSON_OK=$([ "$(s)" -ge 4 ] && echo 1 || echo 0)
+ENV_OUT="$(e)"
+ENV_FFA_OK=$([[ "$ENV_OUT" =~ FREE_FOR_ALL ]] && [[ "$ENV_OUT" =~ NEXT_PUBLIC_FREE_FOR_ALL ]] && echo 1 || echo 0)
+API_JSON_NOCACHE_OK=$(
+  hdr_ok "/api/rtc/env" >/dev/null 2>&1 && hdr_ok "/api/rtc/qlen" >/dev/null 2>&1 && echo 1 || echo 0
+)
+
+{
+  echo "-- Acceptance --"
+  echo "HEALTH_OK=$HEALTH_OK"
+  echo "TURN_443_OK=$TURN_443_OK"
+  echo "STRIPE_JSON_OK=$STRIPE_JSON_OK"
+  echo "ENV_FFA_OK=$ENV_FFA_OK"
+  echo "API_JSON_NOCACHE_OK=$API_JSON_NOCACHE_OK"
+  echo "BASE=$BASE"
+  echo
+  echo "-- Snippets --"
+  echo "[/api/health]";  curl -s -I "$BASE/api/health" | sed -n '1,10p'
+  echo; echo "[/api/turn]";  curl -s "$BASE/api/turn" | head -c 300; echo
+  echo; echo "[/api/stripe/prices]"; curl -s "$BASE/api/stripe/prices" | head -c 300; echo
+  echo; echo "[/api/rtc/env]"; curl -s -I "$BASE/api/rtc/env" | sed -n '1,10p'
+  echo; echo "[/api/rtc/qlen]"; curl -s -I "$BASE/api/rtc/qlen" | sed -n '1,10p'
+  echo; echo "REPORT=$OUT"
+} | tee "$OUT"
+EOF
+chmod +x D1_release_gate_prod.sh
+_ops/bin/run ./D1_release_gate_prod.sh
+
+# D2 — TTLs على الإنتاج: محاولة قراءة عبر Upstash REST إن توفّرت مفاتيح، وإلا SKIP
+cat > D2_ttls_prod_check.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/ttls_prod_$(date -u +%Y%m%d-%H%M%S).log"; mkdir -p _ops/reports
+URL="${UPSTASH_REDIS_REST_URL:-}"; TOK="${UPSTASH_REDIS_REST_TOKEN:-}"
+if [ -z "$URL" ] || [ -z "$TOK" ]; then
+  echo "-- Acceptance --" | tee "$OUT"
+  echo "TTLS_CHECK_SKIPPED=1" | tee -a "$OUT"
+  echo "REASON=NO_UPSTASH_CREDS" | tee -a "$OUT"
+  echo "REPORT=$OUT" | tee -a "$OUT"
+  exit 0
+fi
+auth(){ echo "Authorization: Bearer $TOK"; }
+jqpttl(){ curl -s -X POST "$URL/pipeline" -H "$(auth)" -H "content-type: application/json" -d "$1" | tr -d '\r'; }
+PAY='{"commands":[["PTTL","rtc:prev-wish:*"],["PTTL","rtc:prev-for:*"],["PTTL","rtc:last:*"],["PTTL","rtc:pair:*"],["PTTL","rtc:pair:map:*"],["PTTL","rtc:attrs:*"],["PTTL","rtc:filters:*"],["PTTL","rtc:seen:*"]]}'
+RES="$(jqpttl "$PAY")"
+echo "-- Acceptance --" | tee "$OUT"
+echo "TTLS_CHECK_SKIPPED=0" | tee -a "$OUT"
+echo "RAW=$RES" | tee -a "$OUT"
+echo "REPORT=$OUT" | tee -a "$OUT"
+EOF
+chmod +x D2_ttls_prod_check.sh
+_ops/bin/run ./D2_ttls_prod_check.sh
+
+# D3 — توليد آثار Git وملخص PR
+cat > D3_git_artifacts.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+mkdir -p _ops/reports _ops/artifacts
+PATCH="_ops/artifacts/release.patch"
+DIFFS="_ops/reports/release_diffs_$(date -u +%Y%m%d-%H%M%S).log"
+git status -uno > "$DIFFS" || true
+git diff --patch > "$PATCH" || true
+
+# سحب خلاصات تقارير A/B/C
+sum(){ local f="$1"; [ -f "$f" ] && { echo "## $(basename "$f")"; sed -n '/-- Acceptance --/,$p' "$f"; echo; } || true; }
+OUT="_ops/reports/PR_SUMMARY.md"; :> "$OUT"
+{
+  echo "# Release Summary"
+  echo
+  for f in _ops/reports/batch_A_report.log _ops/reports/batch_B_report.log _ops/reports/batch_C_report.log; do sum "$f"; done
+  echo "## Artifacts"; echo "- Patch: $PATCH"; echo "- Diffs: $DIFFS"
+} >> "$OUT"
+
+echo "-- Acceptance --"
+echo "PATCH_CREATED=$([ -s "$PATCH" ] && echo 1 || echo 0)"
+echo "PR_SUMMARY=_ops/reports/PR_SUMMARY.md"
+EOF
+chmod +x D3_git_artifacts.sh
+_ops/bin/run ./D3_git_artifacts.sh
+
+# D4 — تقرير موحد للدفعة D
+cat > D4_batch_D_report.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/batch_D_report.log"; :> "$OUT"
+last(){ ls -1t "$1" 2>/dev/null | head -1; }
+GATE="$(last _ops/reports/release_gate_*.log)"
+TTLS="$(last _ops/reports/ttls_prod_*.log)"
+PRSM="_ops/reports/PR_SUMMARY.md"
+
+gv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit}' "$2" 2>/dev/null || echo 0; }
+
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "GATE_HEALTH_OK=$(gv HEALTH_OK "$GATE")" | tee -a "$OUT"
+echo "GATE_TURN_443_OK=$(gv TURN_443_OK "$GATE")" | tee -a "$OUT"
+echo "GATE_STRIPE_JSON_OK=$(gv STRIPE_JSON_OK "$GATE")" | tee -a "$OUT"
+echo "GATE_ENV_FFA_OK=$(gv ENV_FFA_OK "$GATE")" | tee -a "$OUT"
+echo "API_JSON_NOCACHE_OK=$(gv API_JSON_NOCACHE_OK "$GATE")" | tee -a "$OUT"
+echo "TTLS_CHECK_SKIPPED=$(gv TTLS_CHECK_SKIPPED "$TTLS")" | tee -a "$OUT"
+echo "PR_SUMMARY=$PRSM" | tee -a "$OUT"
+echo -e "\nREPORT=$OUT" | tee -a "$OUT"
+EOF
+chmod +x D4_batch_D_report.sh
+_ops/bin/run ./D4_batch_D_report.sh
+
+# أعِد لي من فضلك:
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_D_report.log

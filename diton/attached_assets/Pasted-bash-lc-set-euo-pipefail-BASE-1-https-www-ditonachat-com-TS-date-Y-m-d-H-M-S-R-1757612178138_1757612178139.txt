@@ -1,0 +1,431 @@
+bash -lc 'set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+TS="$(date +%Y%m%d-%H%M%S)"
+REPORT="_ops/reports/rtc_final_${TS}.txt"
+mkdir -p _ops/reports src/lib/rtc src/app/api/rtc/{enqueue,matchmake,offer,answer,ice,qlen,ping} src/app/api/anon/init
+
+say(){ printf "\n== %s ==\n" "$*" | tee -a "$REPORT"; }
+
+###############################################################################
+# 1) Write/Update core RTC libs and routes (Minimal-Diff but idempotent)
+###############################################################################
+
+# upstash.ts
+cat > src/lib/rtc/upstash.ts << "EOF"
+// "use server";
+const URL = process.env.UPSTASH_REDIS_REST_URL!;
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
+if (!URL || !TOKEN) console.warn("[upstash] Missing UPSTASH envs");
+
+type Cmd = (string|number)[];
+async function pipe(commands: Cmd[]): Promise<any[]>{
+  const r = await fetch(`${URL}/pipeline`, {
+    method:"POST", headers:{ "content-type":"application/json", authorization:`Bearer ${TOKEN}`},
+    body: JSON.stringify({ commands }), cache:"no-store"
+  });
+  if(!r.ok){ throw new Error(`[upstash] ${r.status} ${await r.text()}`); }
+  const json = await r.json(); return json.map((e:any)=>e.result);
+}
+export async function setNxPx(k:string,v:string,px:number){ const [res]=await pipe([["SET",k,v,"NX","PX",px]]); return res==="OK"; }
+export async function setPx(k:string,v:string,px:number){ const [res]=await pipe([["SET",k,v,"PX",px]]); return res==="OK"; }
+export async function set(k:string,v:string){ const [res]=await pipe([["SET",k,v]]); return res==="OK"; }
+export async function get(k:string){ const [res]=await pipe([["GET",k]]); return res??null; }
+export async function del(k:string){ await pipe([["DEL",k]]); }
+export async function expire(k:string,s:number){ await pipe([["EXPIRE",k,s]]); }
+export async function exists(k:string){ const [n]=await pipe([["EXISTS",k]]); return n===1; }
+export async function hset(k:string,o:Record<string,string|number>){ const flat:(string|number)[]=[]; Object.entries(o).forEach(([k,v])=>flat.push(k,String(v))); await pipe([["HSET",k,...flat]]); }
+export async function hgetall(k:string){ const [arr]=await pipe([["HGETALL",k]]); const out:Record<string,string>={}; if(Array.isArray(arr)){ for(let i=0;i<arr.length;i+=2) out[arr[i]]=arr[i+1]; } return out; }
+export async function sadd(k:string,m:string){ await pipe([["SADD",k,m]]); }
+export async function sismember(k:string,m:string){ const [n]=await pipe([["SISMEMBER",k,m]]); return n===1; }
+export async function zadd(k:string,score:number,m:string){ await pipe([["ZADD",k,score,m]]); }
+export async function zrem(k:string,m:string){ await pipe([["ZREM",k,m]]); }
+export async function zcard(k:string){ const [n]=await pipe([["ZCARD",k]]); return Number(n||0); }
+export async function zrange(k:string,s=0,e=49){ const [res]=await pipe([["ZRANGE",k,s,e]]); return Array.isArray(res)?res:[]; }
+export async function zremrangebyscore(k:string,min:string,max:string){ await pipe([["ZREMRANGEBYSCORE",k,min,max]]); }
+export async function lpush(k:string,v:string){ await pipe([["LPUSH",k,v]]); }
+export async function lrange(k:string,start=0,stop=49){ const [res]=await pipe([["LRANGE",k,start,stop]]); return Array.isArray(res)?res:[]; }
+export async function ltrim(k:string,start:number,stop:number){ await pipe([["LTRIM",k,start,stop]]); }
+/* simple rate limit: limit per windowSec */
+export async function rateLimit(key:string, limit:number, windowSec:number){
+  const bucket=`rl:${key}:${Math.floor(Date.now()/(windowSec*1000))}`;
+  const [count]=await pipe([["INCR",bucket],["EXPIRE",bucket,windowSec]]);
+  return Number(count||0) <= limit;
+}
+EOF
+
+# ids.ts
+cat > src/lib/rtc/ids.ts << "EOF"
+export function ulid(){ if("randomUUID" in crypto) return (crypto as any).randomUUID(); return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`; }
+export function pairLockKey(a:string,b:string){ const [x,y]=[a,b].sort(); return `rtc:pairlock:${x}:${y}`; }
+EOF
+
+# auth.ts
+cat > src/lib/rtc/auth.ts << "EOF"
+import { cookies, headers } from "next/headers";
+import { createHmac } from "crypto";
+function verifySigned(raw:string, secret:string){ const [b64,sig]=raw.split("."); if(!b64||!sig) return null; const calc=createHmac("sha256",secret).update(b64).digest("hex"); if(calc!==sig) return null; return Buffer.from(b64,"base64url").toString("utf8"); }
+export function getAnonIdUnsafe(): string | null {
+  const h=headers(); const test=h.get("x-anon-id"); if(test) return test;
+  try{ const c=cookies(); const raw=c.get("anon")?.value; if(!raw) return null;
+    const sec=process.env.ANON_SIGNING_SECRET || process.env.VIP_SIGNING_SECRET || ""; if(!sec) return null;
+    return verifySigned(raw, sec);
+  }catch{ return null; }
+}
+EOF
+
+# mm.ts
+cat > src/lib/rtc/mm.ts << "EOF"
+import {
+  setNxPx,setPx,get,del,expire,exists,hset,hgetall,sadd,sismember,
+  zadd,zrem,zcard,zrange,zremrangebyscore,lpush,lrange,ltrim,rateLimit
+} from "./upstash";
+import { ulid, pairLockKey } from "./ids";
+
+export type Attrs={ gender:string; country:string; };
+export type Filters={ genders?:string; countries?:string; };
+
+export function intersectOk(f:Filters,a:Attrs){
+  const gs=(f.genders||"all").toLowerCase(); const cs=(f.countries||"ALL").toUpperCase();
+  const gOk= gs==="all" || gs.split(",").includes(a.gender.toLowerCase());
+  const cOk= cs==="ALL" || cs.split(",").includes(a.country.toUpperCase());
+  return gOk && cOk;
+}
+export async function enqueue(anonId:string, attr:Attrs, filt:Filters){
+  await Promise.all([
+    hset(`rtc:attrs:${anonId}`,{gender:attr.gender,country:attr.country}), expire(`rtc:attrs:${anonId}`,120),
+    hset(`rtc:filters:${anonId}`,{genders:(filt.genders||"all"),countries:(filt.countries||"ALL")}), expire(`rtc:filters:${anonId}`,120),
+    zadd(`rtc:q`,Date.now(),anonId),
+    zadd(`rtc:q:gender:${attr.gender.toLowerCase()}`,Date.now(),anonId),
+    zadd(`rtc:q:country:${attr.country.toUpperCase()}`,Date.now(),anonId),
+  ]);
+}
+export async function touchQueue(anonId:string, attr:Attrs){
+  await Promise.all([
+    zadd(`rtc:q`,Date.now(),anonId),
+    zadd(`rtc:q:gender:${attr.gender.toLowerCase()}`,Date.now(),anonId),
+    zadd(`rtc:q:country:${attr.country.toUpperCase()}`,Date.now(),anonId),
+  ]);
+}
+export async function cleanStaleQueue(){ const cutoff=Date.now()-60_000; await zremrangebyscore(`rtc:q`,"-inf",`(${cutoff}`); }
+
+async function candidatePool(selfAttr:Attrs, selfFilt:Filters){
+  const wantedC=(selfFilt.countries||"ALL").toUpperCase(); const wantedG=(selfFilt.genders||"all").toLowerCase();
+  const sets:string[][]=[];
+  if(wantedC!=="ALL"){ for(const cc of wantedC.split(",").slice(0,6)){ sets.push(await zrange(`rtc:q:country:${cc}`,0,19)); } }
+  if(wantedG!=="all"){ for(const g of wantedG.split(",").slice(0,2)){ sets.push(await zrange(`rtc:q:gender:${g}`,0,19)); } }
+  sets.push(await zrange(`rtc:q`,0,49));
+  const seen=new Set<string>(); const out:string[]=[];
+  for(const arr of sets){ for(const id of arr){ if(!seen.has(id)){ seen.add(id); out.push(id); } } }
+  return out;
+}
+
+export async function matchmake(self:string){
+  const rlOk=await rateLimit(`mm:${self}`,8,5); if(!rlOk) return {status:429 as const, body:{error:"rate"}};
+  const selfLock=await setNxPx(`rtc:matching:${self}`,"1",5000); if(!selfLock) return {status:204 as const};
+  try{
+    const [selfAttr,selfFilt]=await Promise.all([hgetall(`rtc:attrs:${self}`),hgetall(`rtc:filters:${self}`)]);
+    if(!selfAttr?.gender||!selfAttr?.country){ return {status:400 as const, body:{error:"missing-attrs"}}; }
+    const pool=await candidatePool(selfAttr,selfFilt);
+    for(const cand of pool){
+      if(cand===self) continue;
+      if(await sismember(`rtc:seen:${self}`,cand)) continue;
+
+      const alive=await exists(`rtc:attrs:${cand}`);
+      if(!alive){ await zrem(`rtc:q`,cand); continue; }
+
+      if(!(await setNxPx(`rtc:claim:${cand}`,self,6000))) continue;
+      const pairLock=pairLockKey(self,cand);
+      if(!(await setNxPx(pairLock,"1",6000))){ await del(`rtc:claim:${cand}`); continue; }
+
+      const [candMap,candAttr,candFilt]=await Promise.all([get(`rtc:pair:map:${cand}`),hgetall(`rtc:attrs:${cand}`),hgetall(`rtc:filters:${cand}`)]);
+      if(candMap){ await del(`rtc:claim:${cand}`); await del(pairLock); continue; }
+
+      const okA=intersectOk(selfFilt,candAttr); const okB=intersectOk(candFilt||{},selfAttr);
+      if(!okA||!okB){ await del(`rtc:claim:${cand}`); await del(pairLock); continue; }
+
+      const pairId=ulid();
+      await Promise.all([
+        hset(`rtc:pair:${pairId}`,{a:self,b:cand,role_a:"caller",role_b:"callee",created:Date.now()}),
+        expire(`rtc:pair:${pairId}`,150),
+        setPx(`rtc:pair:map:${self}`,`${pairId}|caller`,150_000),
+        setPx(`rtc:pair:map:${cand}`,`${pairId}|callee`,150_000),
+        zrem(`rtc:q`,self), zrem(`rtc:q`,cand),
+        zrem(`rtc:q:gender:${selfAttr.gender.toLowerCase()}`,self),
+        zrem(`rtc:q:gender:${candAttr.gender?.toLowerCase?.()||""}`,cand),
+        zrem(`rtc:q:country:${selfAttr.country.toUpperCase()}`,self),
+        zrem(`rtc:q:country:${candAttr.country?.toUpperCase?.()||""}`,cand),
+        sadd(`rtc:seen:${self}`,cand), expire(`rtc:seen:${self}`,300),
+        sadd(`rtc:seen:${cand}`,self), expire(`rtc:seen:${cand}`,300),
+        del(`rtc:claim:${cand}`), del(pairLock),
+      ]);
+      return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};
+    }
+    return {status:204 as const};
+  }catch(e:any){
+    return {status:500 as const, body:{error:"mm-fail", info:String(e?.message||e).slice(0,140)}};
+  }finally{ await del(`rtc:matching:${self}`); }
+}
+
+export async function pairMapOf(anonId:string){ const map=await get(`rtc:pair:map:${anonId}`); if(!map) return null; const [pairId,role]=String(map).split("|"); return {pairId, role}; }
+EOF
+
+# enqueue route
+cat > src/app/api/rtc/enqueue/route.ts << "EOF"
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { enqueue } from "@/lib/rtc/mm";
+export const runtime="nodejs";
+export async function POST(req:NextRequest){
+  try{
+    const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+    const json=await req.json().catch(()=>({} as any));
+    const gender=String(json.gender||"").toLowerCase(); const country=String(json.country||"").toUpperCase();
+    if(!gender||!country) return NextResponse.json({error:"missing-attrs"},{status:400});
+    const filters={ genders:String(json.filterGenders||"all"), countries:String(json.filterCountries||"ALL") };
+    await enqueue(anon,{gender,country},filters);
+    return new NextResponse(null,{status:204});
+  }catch(e:any){ return NextResponse.json({error:"enqueue-fail",info:String(e?.message||e).slice(0,140)},{status:500}); }
+}
+EOF
+
+# matchmake route
+cat > src/app/api/rtc/matchmake/route.ts << "EOF"
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { matchmake, pairMapOf } from "@/lib/rtc/mm";
+export const runtime="nodejs";
+export async function POST(req:NextRequest){
+  const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+  const mapped=await pairMapOf(anon); if(mapped){ return NextResponse.json({pairId:mapped.pairId, role:mapped.role},{status:200}); }
+  const res=await matchmake(anon);
+  if(res.status===200) return NextResponse.json(res.body,{status:200});
+  if(res.status===204) return new NextResponse(null,{status:204});
+  return NextResponse.json(res.body,{status:res.status});
+}
+EOF
+
+# offer route
+cat > src/app/api/rtc/offer/route.ts << "EOF"
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, setNxPx, expire } from "@/lib/rtc/upstash";
+export const runtime="nodejs";
+async function authPair(anon:string,pairId:string){ const map=await get(`rtc:pair:map:${anon}`); if(!map) return null; const [pid,role]=String(map).split("|"); return pid===pairId?{role}:null; }
+export async function POST(req:NextRequest){
+  try{
+    const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+    const {pairId,sdp}=await req.json(); if(!pairId||!sdp) return NextResponse.json({error:"bad-input"},{status:400});
+    const auth=await authPair(anon,pairId); if(!auth||auth.role!=="caller") return NextResponse.json({error:"forbidden"},{status:403});
+    const ok=await setNxPx(`rtc:pair:${pairId}:offer`, sdp, 120_000); if(!ok) return NextResponse.json({error:"exists"},{status:409});
+    await expire(`rtc:pair:${pairId}`,150); return new NextResponse(null,{status:204});
+  }catch(e:any){ return NextResponse.json({error:"offer-fail",info:String(e?.message||e).slice(0,120)},{status:500}); }
+}
+export async function GET(req:NextRequest){
+  const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+  const pairId=String(new URL(req.url).searchParams.get("pairId")||""); if(!pairId) return NextResponse.json({error:"bad-input"},{status:400});
+  const auth=await authPair(anon,pairId); if(!auth||auth.role!=="callee") return NextResponse.json({error:"forbidden"},{status:403});
+  const sdp=await get(`rtc:pair:${pairId}:offer`); if(!sdp) return new NextResponse(null,{status:204});
+  await expire(`rtc:pair:${pairId}`,150); return NextResponse.json({sdp},{status:200});
+}
+EOF
+
+# answer route
+cat > src/app/api/rtc/answer/route.ts << "EOF"
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, setNxPx, expire } from "@/lib/rtc/upstash";
+export const runtime="nodejs";
+async function authPair(anon:string,pairId:string){ const map=await get(`rtc:pair:map:${anon}`); if(!map) return null; const [pid,role]=String(map).split("|"); return pid===pairId?{role}:null; }
+export async function POST(req:NextRequest){
+  try{
+    const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+    const {pairId,sdp}=await req.json(); if(!pairId||!sdp) return NextResponse.json({error:"bad-input"},{status:400});
+    const auth=await authPair(anon,pairId); if(!auth||auth.role!=="callee") return NextResponse.json({error:"forbidden"},{status:403});
+    const ok=await setNxPx(`rtc:pair:${pairId}:answer`, sdp, 120_000); if(!ok) return NextResponse.json({error:"exists"},{status:409});
+    await expire(`rtc:pair:${pairId}`,150); return new NextResponse(null,{status:204});
+  }catch(e:any){ return NextResponse.json({error:"answer-fail",info:String(e?.message||e).slice(0,120)},{status:500}); }
+}
+export async function GET(req:NextRequest){
+  const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+  const pairId=String(new URL(req.url).searchParams.get("pairId")||""); if(!pairId) return NextResponse.json({error:"bad-input"},{status:400});
+  const auth=await authPair(anon,pairId); if(!auth||auth.role!=="caller") return NextResponse.json({error:"forbidden"},{status:403});
+  const sdp=await get(`rtc:pair:${pairId}:answer`); if(!sdp) return new NextResponse(null,{status:204});
+  await expire(`rtc:pair:${pairId}`,150); return NextResponse.json({sdp},{status:200});
+}
+EOF
+
+# ice route
+cat > src/app/api/rtc/ice/route.ts << "EOF"
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { get, lpush, lrange, ltrim, expire } from "@/lib/rtc/upstash";
+export const runtime="nodejs";
+async function auth(anon:string,pairId:string){ const map=await get(`rtc:pair:map:${anon}`); if(!map) return null; const [pid,role]=String(map).split("|"); return pid===pairId ? (role as "caller"|"callee") : null; }
+export async function POST(req:NextRequest){
+  try{
+    const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+    const {pairId,candidate}=await req.json(); if(!pairId||!candidate) return NextResponse.json({error:"bad-input"},{status:400});
+    const role=await auth(anon,pairId); if(!role) return NextResponse.json({error:"forbidden"},{status:403});
+    const dest= role==="caller" ? "b" : "a"; const key=`rtc:pair:${pairId}:ice:${dest}`;
+    await lpush(key, JSON.stringify({from: role==="caller"?"a":"b", cand: candidate})); await expire(key,150); await expire(`rtc:pair:${pairId}`,150);
+    return new NextResponse(null,{status:204});
+  }catch(e:any){ return NextResponse.json({error:"ice-post-fail",info:String(e?.message||e).slice(0,120)},{status:500}); }
+}
+export async function GET(req:NextRequest){
+  const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({error:"anon-required"},{status:403});
+  const pairId=String(new URL(req.url).searchParams.get("pairId")||""); if(!pairId) return NextResponse.json({error:"bad-input"},{status:400});
+  const role=await auth(anon,pairId); if(!role) return NextResponse.json({error:"forbidden"},{status:403});
+  const me= role==="caller" ? "a" : "b"; const key=`rtc:pair:${pairId}:ice:${me}`;
+  const items=await lrange(key,0,49); if(!items||items.length===0) return new NextResponse(null,{status:204});
+  await ltrim(key, items.length, -1); await expire(`rtc:pair:${pairId}`,150);
+  return NextResponse.json(items.map(s=>JSON.parse(s)),{status:200});
+}
+EOF
+
+# qlen
+cat > src/app/api/rtc/qlen/route.ts << "EOF"
+import { NextResponse } from "next/server";
+import { zcard, zremrangebyscore } from "@/lib/rtc/upstash";
+export const runtime="nodejs";
+export async function GET(){
+  const cutoff=Date.now()-60_000;
+  await zremrangebyscore(`rtc:q`,"-inf",`(${cutoff}`);
+  const len=await zcard(`rtc:q`);
+  return NextResponse.json({mode:"redis", len},{status:200});
+}
+EOF
+
+# ping
+cat > src/app/api/rtc/ping/route.ts << "EOF"
+import { NextRequest, NextResponse } from "next/server";
+import { getAnonIdUnsafe } from "@/lib/rtc/auth";
+import { hgetall, expire } from "@/lib/rtc/upstash";
+import { touchQueue } from "@/lib/rtc/mm";
+export const runtime="nodejs";
+export async function GET(req:NextRequest){
+  const anon=getAnonIdUnsafe(); if(!anon) return NextResponse.json({ok:false},{status:403});
+  const attr=await hgetall(`rtc:attrs:${anon}`);
+  if(attr?.gender && attr?.country){
+    await touchQueue(anon,{gender:attr.gender, country:attr.country});
+    await Promise.all([ expire(`rtc:attrs:${anon}`,120), expire(`rtc:filters:${anon}`,120) ]);
+  }
+  return NextResponse.json({ok:true},{status:200});
+}
+EOF
+
+# anon/init
+cat > src/app/api/anon/init/route.ts << "EOF"
+import { NextResponse } from "next/server";
+import { createHmac } from "crypto";
+export const runtime="nodejs";
+function sign(v:string, sec:string){ const b=Buffer.from(v,"utf8").toString("base64url"); const s=createHmac("sha256",sec).update(b).digest("hex"); return `${b}.${s}`; }
+export async function GET(){
+  const sec=process.env.ANON_SIGNING_SECRET || process.env.VIP_SIGNING_SECRET || "";
+  if(!sec) return NextResponse.json({error:"secret-missing"},{status:500});
+  const id=(crypto as any).randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`;
+  const cookie=sign(id,sec);
+  const res=NextResponse.json({ok:true, anonId:id},{status:200});
+  res.cookies.set("anon", cookie, {httpOnly:true, secure:true, sameSite:"lax", path:"/", maxAge:60*60*24*180, domain:".ditonachat.com"});
+  return res;
+}
+EOF
+
+###############################################################################
+# 2) Acceptance script (REST only, no WebRTC) – simplified SDP quoting
+###############################################################################
+cat > _ops/acc_rtc.sh << "EOF"
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+
+say(){ printf "\n-- %s --\n" "$*"; }
+
+# create two test anon IDs (using header shortcut)
+A="anonA-$(date +%s)"
+B="anonB-$(date +%s)"
+
+say "1) enqueue A (m,US all)"
+curl -s -H "x-anon-id: $A" -H "content-type: application/json" -X POST \
+  -d '{"gender":"m","country":"US","filterGenders":"all","filterCountries":"ALL"}' \
+  "$BASE/api/rtc/enqueue" -o /dev/null -w "HTTP=%{http_code}\n"
+
+say "2) qlen"
+curl -s "$BASE/api/rtc/qlen"
+
+say "3) A matchmake (expect 204 if alone)"
+curl -s -H "x-anon-id: $A" -X POST "$BASE/api/rtc/matchmake" -o /dev/null -w "\nHTTP=%{http_code}\n"
+
+say "4) enqueue B (f,US accepts m)"
+curl -s -H "x-anon-id: $B" -H "content-type: application/json" -X POST \
+  -d '{"gender":"f","country":"US","filterGenders":"m","filterCountries":"ALL"}' \
+  "$BASE/api/rtc/enqueue" -o /dev/null -w "HTTP=%{http_code}\n"
+
+say "5) Matchmake loop"
+R_A="$(curl -s -H "x-anon-id: $A" -X POST "$BASE/api/rtc/matchmake")"; echo "$R_A"
+PAIR="$(printf "%s" "$R_A" | sed -n "s/.*\"pairId\":\"\\([^\"]\\+\\)\".*/\\1/p")"
+ROLE_A="$(printf "%s" "$R_A" | sed -n "s/.*\"role\":\"\\([^\"]\\+\\)\".*/\\1/p")"
+
+R_B="$(curl -s -H "x-anon-id: $B" -X POST "$BASE/api/rtc/matchmake")"; echo "$R_B"
+PAIR_B="$(printf "%s" "$R_B" | sed -n "s/.*\"pairId\":\"\\([^\"]\\+\\)\".*/\\1/p")"
+ROLE_B="$(printf "%s" "$R_B" | sed -n "s/.*\"role\":\"\\([^\"]\\+\\)\".*/\\1/p")"
+
+echo "PAIR(A)=$PAIR roleA=$ROLE_A"
+echo "PAIR(B)=$PAIR_B roleB=$ROLE_B"
+
+say "6) Offer/Answer"
+curl -s -H "x-anon-id: $A" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-offer\"}" "$BASE/api/rtc/offer" -o /dev/null -w "offerPOST=%{http_code}\n"
+curl -s -H "x-anon-id: $B" "$BASE/api/rtc/offer?pairId=$PAIR" ; echo
+
+curl -s -H "x-anon-id: $B" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"sdp\":\"v=0-dummy-answer\"}" "$BASE/api/rtc/answer" -o /dev/null -w "answerPOST=%{http_code}\n"
+curl -s -H "x-anon-id: $A" "$BASE/api/rtc/answer?pairId=$PAIR" ; echo
+
+say "7) ICE"
+curl -s -H "x-anon-id: $A" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candA\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" "$BASE/api/rtc/ice" -o /dev/null -w "iceApost=%{http_code}\n"
+curl -s -H "x-anon-id: $B" "$BASE/api/rtc/ice?pairId=$PAIR" ; echo
+
+curl -s -H "x-anon-id: $B" -H "content-type: application/json" -X POST \
+  -d "{\"pairId\":\"$PAIR\",\"candidate\":{\"candidate\":\"candB\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0}}" "$BASE/api/rtc/ice" -o /dev/null -w "iceBpost=%{http_code}\n"
+curl -s -H "x-anon-id: $A" "$BASE/api/rtc/ice?pairId=$PAIR" ; echo
+
+say "8) qlen final"
+curl -s "$BASE/api/rtc/qlen"
+echo
+EOF
+chmod +x _ops/acc_rtc.sh
+
+###############################################################################
+# 3) Build and Run Acceptance
+###############################################################################
+say "Env snapshot"
+echo "FREE_FOR_ALL=${FREE_FOR_ALL:-<unset>}" | tee -a "$REPORT"
+echo "UPSTASH_REDIS_REST_URL=${UPSTASH_REDIS_REST_URL:+<set>}" | tee -a "$REPORT"
+echo "UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN:+<set>}" | tee -a "$REPORT"
+
+say "pnpm build"
+pnpm i --frozen-lockfile || pnpm i
+pnpm build | tee -a "$REPORT" || true
+
+say "Run acc_rtc.sh"
+_ops/acc_rtc.sh "${BASE}" | tee -a "$REPORT" || true
+
+say "Files presence"
+for f in \
+  src/lib/rtc/upstash.ts \
+  src/lib/rtc/mm.ts \
+  src/lib/rtc/ids.ts \
+  src/lib/rtc/auth.ts \
+  src/app/api/rtc/enqueue/route.ts \
+  src/app/api/rtc/matchmake/route.ts \
+  src/app/api/rtc/offer/route.ts \
+  src/app/api/rtc/answer/route.ts \
+  src/app/api/rtc/ice/route.ts \
+  src/app/api/rtc/qlen/route.ts \
+  src/app/api/rtc/ping/route.ts \
+  src/app/api/anon/init/route.ts ; do
+  test -f "$f" && echo "OK $f" || echo "MISS $f" ; done | tee -a "$REPORT"
+
+echo -e "\nSaved: ${REPORT}\n" | tee -a "$REPORT"
+'

@@ -1,0 +1,52 @@
+المهمة: UI-M1 (دفعة واجهة الموبايل الأولى)
+
+الهدف: جعل التولبار شفافًا ومتجاوبًا، إصلاح تموضع قوائم Gender/Countries، تثبيت شريط الرسائل أسفل الشاشة — دون كسر المنطق.
+
+معايير القبول:
+- HAS_MOBILE_CSS=1, CSS_IMPORTED=1
+- HAS_TOOLBAR_ATTR=1, HAS_TOPRIGHT_ATTR=1, HAS_MSGBAR_ATTR=1
+- BUILD_OK=1
+- يظهر التولبار شفافًا مع تمرير أفقي على الموبايل، والقوائم لا تغطي بطاقة الطرف، وشريط الرسائل ثابت بالأسفل.
+
+نفّذ على فرع واحد ثم PR:
+1) git checkout -b feature/ui-m1 || git checkout feature/ui-m1
+2) أنشئ الملف src/styles/mobile-fixes.css بالمحتوى:
+   ---
+   [ضع CSS التالي]
+   /* Toolbar */
+   [data-chat-container] [data-toolbar]{position:absolute;left:.5rem;right:.5rem;bottom:.75rem;display:flex;gap:.5rem;overflow-x:auto;-webkit-overflow-scrolling:touch;align-items:center;justify-content:flex-start;padding:.25rem .25rem;}
+   [data-chat-container] [data-toolbar] button,[data-chat-container] [data-toolbar] .btn{background:transparent!important;border:0!important;box-shadow:none!important;outline:none!important;}
+   [data-chat-container] [data-toolbar] [data-state~="off"]{opacity:.55;filter:saturate(.6)}
+   /* Filters popovers */
+   [data-remote-top-right]{position:absolute;top:.5rem;right:.5rem;z-index:50;pointer-events:auto;}
+   [data-remote-top-right] .menu,[data-remote-top-right] [role="menu"]{margin-top:.5rem;right:0;inset-inline-start:auto;}
+   /* Messaging bar */
+   [data-messaging-bar]{position:fixed;left:.5rem;right:.5rem;bottom:calc(env(safe-area-inset-bottom) + .5rem);display:flex;gap:.5rem;align-items:center;z-index:40;}
+   [data-messaging-bar] input,[data-messaging-bar] textarea{flex:1;min-height:2.5rem;}
+   ---
+3) أضِف في نهاية src/app/globals.css:
+   @import "../styles/mobile-fixes.css";
+4) أضِف data-toolbar على الغلاف الخارجي في src/components/chat/ChatToolbar.tsx
+   مثال: `return (<div data-toolbar className="...">`
+5) أضِف data-remote-top-right على الغلاف الخارجي في src/components/chat/RemoteTopRight.tsx
+   مثال: `return (<div data-remote-top-right className="...">`
+6) أضِف data-messaging-bar على الغلاف الخارجي لمكوّن شريط الرسائل:
+   - src/components/chat/ChatMessaging.tsx أو src/components/chat/ChatMessagingBar.tsx
+   مثال: `return (<div data-messaging-bar className="...">`
+7) pnpm i --no-frozen-lockfile && pnpm build
+
+طباعة قبول واحد:
+- اطبع الأسطر التالية بالقيم:
+-- Acceptance --
+HAS_MOBILE_CSS=
+CSS_IMPORTED=
+HAS_TOOLBAR_ATTR=
+HAS_TOPRIGHT_ATTR=
+HAS_MSGBAR_ATTR=
+BUILD_OK=
+-- End Acceptance --
+
+تسليم:
+- ادفع الفرع: git add -A && git commit -m "ui-m1: mobile css + attrs" && git push -u origin feature/ui-m1
+- افتح PR إلى main
+- أرسل لقطة شاشة موبايل للتولبار والفلتر وشريط الرسائل.

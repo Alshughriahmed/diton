@@ -1,0 +1,66 @@
+الموضوع: تناقض بين تقرير “Stripe Subscribe Auth-Gated” ونتائج الفحص لدينا — نحتاج توضيحًا وأدلة تنفيذ + سكربت تحقق نهائي
+
+السلام عليكم،
+قدّمتَ تقريرًا بعنوان: “Stripe Subscribe Auth-Gated Implementation – COMPLETE” تؤكد فيه:
+
+إرجاع 401 عند غياب جلسة NextAuth.
+
+إضافة رؤوس Cache-Control: no-store, no-cache, must-revalidate و Referrer-Policy: no-referrer لكل الاستجابات.
+
+قبول priceId أو plan، مع حارس مزدوج (cookie + getServerSession())، وبدون تغيير أي مسارات أخرى.
+
+لكن عندنا فحص حيّ (على https://www.ditonachat.com
+) ظهرت النتائج التالية:
+
+== GET /api/stripe/prices (EUR sanity) ==
+PRICES_SAMPLE=<json مختصر من الاستجابة>
+EUR_OK=0
+
+-- Local code guards (موجودة في الكود) --
+RUNTIME_NODEJS=1
+HAS_GETSERVERSESSION=1
+NOSTORE_IN_CODE=1
+
+-- Acceptance --
+SUB_HTTP_401=0
+HEADERS_OK=0
+PRICES_EUR_OK=0
+
+
+كما أن محاولات POST غير الموثّقة إلى /api/stripe/subscribe لم تُرجِع 401 ولا رأينا رؤوس no-store/no-referrer.
+
+أسئلتنا المباشرة
+
+لماذا تختلف النتائج الفعلية عن تقريرك؟ هل التعديلات لم تُنشر للإنتاج، أم عُدّل ملف آخر غير src/app/api/stripe/subscribe/route.ts الذي يُبنى فعليًا؟
+
+لماذا فشل فحص الأسعار (EUR_OK=0) بينما ذكرتَ أن التسعير 1.49 / 5.99 / 16.99 / 99.99 مؤكد؟ هل تغيّر شكل استجابة /api/stripe/prices عن توقعاتك؟
+
+ما نحتاجه منك الآن (بدون أي تعديل قبل موافقتنا):
+
+(A) ملف diff موحّد للتغييرات التي أجريتها على src/app/api/stripe/subscribe/route.ts (Unified Patch).
+
+(B) رقم الـ commit الذي يحتوي هذه التغييرات على الفرع main.
+
+(C) سكربت واحد idempotent يشغَّل عبر الـShell عندنا، يقوم بـ:
+
+طباعة رأس الملف الحالي src/app/api/stripe/subscribe/route.ts (أول 60 سطرًا) لإثبات وجود التعديلات.
+
+pnpm build مع إخراج مختصر.
+
+تنفيذ فحوص غير موثّقة ضد /api/stripe/subscribe و/api/stripe/prices على BASE=https://www.ditonachat.com وإظهار:
+
+SUB_HTTP_401=1 عند POST بلا جلسة.
+
+HEADERS_OK=1 (يتحقق من وجود cache-control: no-store وreferrer-policy: no-referrer).
+
+PRICES_EUR_OK=1 (التحقق من مبالغ EUR المتفق عليها).
+
+استخدام heartbeat بسيط (echo "[HB] HOLD" && sleep 3 متكرر) لتفادي مشكلة اختفاء شاشة Replit ومنع تكرار التنفيذ.
+
+(D) تفسير سبب التناقض (اختلاف بيئة/كاش/مسار مبني؟) وخطوة نشر واضحة لضمان وصول التغيير إلى الإنتاج (Vercel).
+
+(E) تأكيد عدم المساس بأي ميزات أخرى (FREE_FOR_ALL، Like API، VIP priority، RTC…)، وبقاء النهج Minimal-Diff.
+
+ملاحظة مهمة: طلبات التحقق ستكون بلا جلسة عمدًا، لذلك النتيجة المتوقعة لـ /api/stripe/subscribe هي 401 مع رؤوس no-store/no-referrer. لا نريد أي تغيير في الأسعار (قيم EUR الحالية صحيحة لدينا).
+
+نرجو الرد بالـdiff + رقم الـcommit + السكربت المطلوب أعلاه. بعد مراجعتها وتشغيل السكربت عندنا، سنوافق على النشر النهائي. شكراً.

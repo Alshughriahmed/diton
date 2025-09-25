@@ -1,0 +1,97 @@
+Task: Fix ChatToolbar Prev gating (file-only, idempotent)
+
+Repo root (must match): /home/runner/workspace/diton
+Verify first:
+
+pwd && git rev-parse --show-toplevel
+
+
+Both must print /home/runner/workspace/diton. If not, cd /home/runner/workspace/diton.
+
+Scope
+
+Single file: src/app/chat/components/ChatToolbar.tsx.
+
+No Git commands. No file renames. LF + UTF-8.
+
+Idempotent: re-run changes nothing.
+
+Edit rules
+
+After the last local state definitions (just after const isVip = useVip();), ensure this block exists exactly once:
+
+// FFA runtime from window.__vip
+const ffa =
+  typeof window !== "undefined" &&
+  (globalThis as any).__vip &&
+  ((((globalThis as any).__vip).FREE_FOR_ALL === 1) ||
+   (((globalThis as any).__vip).FREE_FOR_ALL === "1"));
+
+// DataChannel + pairId
+const dc = (globalThis as any).__ditonaDataChannel as RTCDataChannel | null;
+const [pairId, setPairId] = useState<string | null>(
+  typeof window !== "undefined" ? ((globalThis as any).__ditonaPairId ?? null) : null
+);
+
+// Update pairId on rtc:pair
+useEffect(() => {
+  const handlePair = (event: any) => setPairId(event?.detail?.pairId || null);
+  if (typeof window !== "undefined") {
+    window.addEventListener("rtc:pair", handlePair as any);
+    return () => window.removeEventListener("rtc:pair", handlePair as any);
+  }
+}, []);
+
+// Prev gating
+const canPrev = ffa || (dc?.readyState === "open" && !!pairId);
+
+
+Remove any duplicates of the following, anywhere in the file:
+
+const dc = (globalThis as any).__ditonaDataChannel
+
+const pairId = (globalThis as any).__ditonaPairId
+
+const [pairId, setPairId] = useState<string | null>(null
+
+const canPrev = ... (any prior definition)
+
+In the JSX for the Prev button only, set:
+
+disabled={!canPrev}
+
+
+Do not change handlers.
+
+Safety
+
+Do not add imports (useState/useEffect already imported).
+
+Keep other logic unchanged.
+
+Preserve formatting.
+
+Acceptance: run and return outputs
+echo '--- markers ---'
+grep -n "FREE_FOR_ALL" src/app/chat/components/ChatToolbar.tsx
+grep -n "addEventListener(\"rtc:pair\"" src/app/chat/components/ChatToolbar.tsx
+grep -n "const canPrev" src/app/chat/components/ChatToolbar.tsx
+grep -n "disabled={!canPrev}" src/app/chat/components/ChatToolbar.tsx || true
+
+echo '--- build ---'
+(if command -v pnpm >/dev/null 2>&1; then pnpm -s build; elif command -v npm >/dev/null 2>&1; then npm run -s build; else echo "build tool not found"; fi) || true
+
+echo '--- manifest ---'
+sha256sum src/app/chat/components/ChatToolbar.tsx 2>/dev/null || shasum -a 256 src/app/chat/components/ChatToolbar.tsx
+wc -c < src/app/chat/components/ChatToolbar.tsx
+
+
+Return:
+
+Confirmation block inserted once.
+
+List of removed duplicates (if any).
+
+The four grep lines and manifest values.
+
+Build status.

@@ -1,0 +1,76 @@
+تذكرة الوكيل — Batch 2
+الهدف
+
+حل أخطاء البناء في src/app/api/rtc/matchmake/route.ts الناتجة عن إضافة prevFor, وتثبيت تدفق “Prev أحادي الطرف” دون المساس بأي ميزة أخرى. Minimal-Diff فقط.
+
+الحالة الحالية
+
+خطأ TypeScript: Cannot find name 'setPx' في route.ts.
+
+خطأ سابق: if (!anon) return NextResponse.json({ error:"anon-required" } غير مُغلق.
+
+منطق prev-wish مضاف في mm.ts ويُستخدم مفاتيح: rtc:prev-wish:<anon>. البناء كان ناجحًا بعد إصلاح مفاتيح القوائم في mm.ts.
+
+ما المطلوب تنفيذه
+
+route.ts
+
+تأكد من التواقيع والاستيرادات:
+
+يجب وجود:
+import { NextRequest, NextResponse } from "next/server";
+import { matchmake } from "@/lib/rtc/mm";
+import { setPx } from "@/lib/rtc/upstash"; ← اسم ودالة صحيحان حسب الموديول.
+
+أصلح شرط المجهول:
+
+الصيغة المعتمدة:
+if (!anon) return NextResponse.json({ error:"anon-required" }, { status:401 });
+
+قراءة prevFor:
+
+إذا content-type يحتوي application/json فمرّة واحدة await _req.json() ثم const prevFor = body?.prevFor || null.
+
+وإلا استخرج من _req.nextUrl.searchParams.get("prevFor").
+
+عند وجود prevFor:
+await setPx(\rtc:prev-wish:${anon}`, String(prevFor), 7000);`
+
+لا تغيّر أي منطق آخر في الملف.
+
+mm.ts (تحقق فقط)
+
+تأكد أن كتلة “prev wish single-sided” تستدعي: get/exists/get hgetall, intersectOk, setNxPx, pairLockKey, وتُنظّف claim والـpairLock وتُزيل rtc:prev-wish:<self> بعد النجاح.
+
+لا تغييرات إذا كان الكود صحيحًا.
+
+rtcFlow.ts (تحقق فقط)
+
+عند ضغط Prev يُرسِل طلب matchmake بجسم JSON {prevFor: state.lastPeer} مع الهيدر content-type: application/json مرة واحدة, ثم يُصفّر state.prevForOnce. لا تغيير إذا مطابق.
+
+قيود
+
+لا حذف ولا تعطيل لميزات VIP/Like/Stripe/Age/Rate-limit/RTC الأساسية.
+
+أي تعديل احفظ قبله نسخة إلى /_ops/backups/<datetime>/….
+
+فحوص القبول
+
+نفّذ وأرفق نتائج هذه الأوامر:
+
+pnpm -s build
+grep -n 'export async function POST' src/app/api/rtc/matchmake/route.ts
+grep -n 'anon-required' src/app/api/rtc/matchmake/route.ts
+grep -n 'setPx(`rtc:prev-wish:' src/app/api/rtc/matchmake/route.ts
+grep -n 'prev-wish' src/lib/rtc/mm.ts
+
+
+المتوقع: بناء ناجح. وجود استيراد صحيح لـsetPx. شرط 401 سليم. كتابة المفتاح تتم عند وجود prevFor.
+
+تسليم
+
+تقرير Diff لكل ملف غُيّر.
+
+ملخص ما أصلحته ولماذا ظهر الخطأ.
+
+تأكيد أن السلوك العام لم يتغير، وأن “Prev أحادي الطرف” يعمل.

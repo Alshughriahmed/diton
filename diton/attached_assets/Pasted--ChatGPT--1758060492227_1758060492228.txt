@@ -1,0 +1,49 @@
+قال ChatGPT:
+
+نفّذ كالتالي. قراءة فقط. لا تغيّر أي ملف ولا تشغّل أي خدمة إضافية. أعطني المخرجات كما تظهر.
+
+bash -lc '
+set -Eeuo pipefail
+echo "=== Read-Only: TURN & Stripe Audit ==="
+
+echo "[TURN env usage]"
+grep -nR -E "TWILIO|TURN" src/app/api/turn 2>/dev/null || echo "NO_TURN_API_DIR"
+
+echo; echo "[TURN route.ts head]"
+[ -f src/app/api/turn/route.ts ] && sed -n "1,160p" src/app/api/turn/route.ts || echo "MISSING: src/app/api/turn/route.ts"
+
+echo; echo "[Stripe env usage]"
+grep -nR -E "STRIPE_" src/app/api/stripe 2>/dev/null || echo "NO_STRIPE_API_DIR"
+
+echo; echo "[Stripe prices route.ts]"
+[ -f src/app/api/stripe/prices/route.ts ] && sed -n "1,200p" src/app/api/stripe/prices/route.ts || echo "MISSING: src/app/api/stripe/prices/route.ts"
+
+echo; echo "[HTTP endpoints]"
+BASE="http://127.0.0.1:${PORT:-3000}"
+
+TURN_RAW="$(curl -sS --max-time 5 "$BASE/api/turn" -w "\n__CODE__:%{http_code}\n" || echo "__CODE__:000")"
+TURN_CODE="$(printf "%s" "$TURN_RAW" | sed -n "s/^__CODE__:\([0-9][0-9][0-9]\)$/\1/p")"
+echo "[/api/turn body]"; printf "%s" "$TURN_RAW" | sed "/^__CODE__/d" | head -c 400; echo
+echo "TURN_HTTP=$TURN_CODE"
+
+PRICES_RAW="$(curl -sS --max-time 5 "$BASE/api/stripe/prices" -w "\n__CODE__:%{http_code}\n" || echo "__CODE__:000")"
+PRICES_CODE="$(printf "%s" "$PRICES_RAW" | sed -n "s/^__CODE__:\([0-9][0-9][0-9]\)$/\1/p")"
+echo "[/api/stripe/prices body]"; printf "%s" "$PRICES_RAW" | sed "/^__CODE__/d" | head -c 400; echo
+echo "STRIPE_PRICES_HTTP=$PRICES_CODE"
+
+echo; echo "[Env presence]"
+echo "TWILIO_TURN_URL=${TWILIO_TURN_URL:+SET}"
+echo "TWILIO_TURN_USERNAME=${TWILIO_TURN_USERNAME:+SET}"
+echo "TWILIO_TURN_PASSWORD=${TWILIO_TURN_PASSWORD:+SET}"
+echo "STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:+SET}"
+echo "STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:+SET}"
+echo "STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:+SET}"
+
+echo; echo "-- Acceptance --"
+TURN_ENV_PRESENT=$([ -n "${TWILIO_TURN_URL:-}" ] && [ -n "${TWILIO_TURN_USERNAME:-}" ] && [ -n "${TWILIO_TURN_PASSWORD:-}" ] && echo 1 || echo 0)
+STRIPE_KEYS_PRESENT=$([ -n "${STRIPE_SECRET_KEY:-}" ] && [ -n "${STRIPE_PUBLISHABLE_KEY:-}" ] && echo 1 || echo 0)
+echo "TURN_ENV_PRESENT=$TURN_ENV_PRESENT"
+echo "STRIPE_KEYS_PRESENT=$STRIPE_KEYS_PRESENT"
+echo "TURN_HTTP=$TURN_CODE"
+echo "STRIPE_PRICES_HTTP=$PRICES_CODE"
+'

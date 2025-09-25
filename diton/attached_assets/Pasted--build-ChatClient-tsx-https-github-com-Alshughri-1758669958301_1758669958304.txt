@@ -1,0 +1,91 @@
+المطلوب: تصحيح build خطأ ChatClient.tsx + تدقيق شامل قبل الدفع
+
+الريبو: https://github.com/Alshughriahmed/diton.git (فرع الإنتاج: main)
+
+آخر نشر فشل على Vercel بسبب compile error في src/app/chat/ChatClient.tsx:110:
+
+Expected ‘,’, got ‘;’ — داخل الـ IIFE الخاص بـ autostart
+
+1) إصلاح الكود (autostart)
+
+تأكد أن البلوك من الأسطر ~100–116 هو بالضبط:
+
+(async () => {
+  try { await fetch("/api/age/allow", opts); } catch {}
+  try { await fetch("/api/anon/init", opts); } catch {}
+  emit("ui:next"); console.log("AUTO_NEXT: fired");
+})();
+
+
+لا توجد فاصلة بعد الاستدعاء الأول، والصياغة الصحيحة هي:
+fetch("/api/anon/init", opts) (الفاصلة داخل أقواس fetch فقط).
+
+راجع بقية الملف من الأسطر ~570–600 (سحب next/prev): لا توجد أقواس/فواصل زائدة.
+
+2) مزامنة، فرع إصلاح، بناء محلي
+
+اسحب آخر origin/main، أنشئ فرع: fix/autostart-compile.
+
+طبّق الإصلاحات يدويًا (دون سكربت توليد) على الملفين:
+
+src/app/chat/ChatClient.tsx
+
+src/app/chat/rtcFlow.ts (ابقِ credentials: 'include' وcache: 'no-store').
+
+شغّل محليًا:
+
+pnpm install
+
+pnpm build (يجب أن ينجح بلا أخطاء TypeScript/webpack).
+
+3) التحقق الوظيفي قبل الدفع
+
+افتح الملف الناتج: .next/static/chunks/app/chat/page-*.js وتحقق بوضوح من وجود:
+
+النص /api/anon/init
+
+السطر log: AUTO_NEXT: fired
+
+شغّل curl محليًا بعد بدء سيرفر preview (إن لزم)، وتأكّد أن:
+
+/api/rtc/env يعيد FREE_FOR_ALL: 1 (أصل المشكلة: أحيانًا تكون 0 في الإنتاج).
+
+أعطِ سببًا واضحًا إن كانت 0: من أين تُقرأ (env/flags) وما الذي يمنع رفعها إلى 1 في prod.
+
+4) فحص البيئة (Prod parity)
+
+راجع كود /api/rtc/env وتأكّد أنه يقرأ المصدر الصحيح للـ FFA (flags/vars) وأن المسار لا يقع تحت middleware يحجبه.
+
+وسّق ما يضمن أن prod سيعكس 1 (أسماء المتغيرات، مكان قراءتها، أي تحويلات/parse).
+
+5) التسليم + الدفع
+
+ادفع الفرع fix/autostart-compile وافتح PR إلى main مع:
+
+رابط الـ PR + diff واضح.
+
+مخرجات pnpm build الملخصة.
+
+مقتطف من page-*.js يثبت وجود /api/anon/init وAUTO_NEXT: fired.
+
+تقرير قصير لماذا كان يظهر الخطأ في السطر 110 وكيف مُنع تكراره.
+
+تحقق curl على بيئة Preview لنفس الـ PR:
+
+/_next/static/chunks/app/chat/page-*.js يحتوي /api/anon/init
+
+/api/rtc/env يعيد FREE_FOR_ALL: 1
+
+بعد الدمج إلى main، تأكّد في نشر Vercel (Production) من:
+
+curl -s https://www.ditonachat.com/api/rtc/env ⇒ FREE_FOR_ALL: 1
+
+curl -s https://www.ditonachat.com/_next/static/chunks/app/chat/page-*.js | grep /api/anon/init ⇒ موجود
+
+معايير القبول (Acceptance)
+
+Build يمر محليًا و على Vercel.
+
+Prod: FREE_FOR_ALL=1 ووجود /api/anon/init في chunk.
+
+عند فتح /chat: يتم استدعاء /api/anon/init (200) تلقائيًا ثم يبدأ الـ matchmake بدون 401، ويظهر log AUTO_NEXT: fired.

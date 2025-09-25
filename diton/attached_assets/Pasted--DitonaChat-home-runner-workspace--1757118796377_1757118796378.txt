@@ -1,0 +1,105 @@
+أريدك أن تنفّذ المهمات التالية في مشروع DitonaChat داخل المسار /home/runner/workspace فقط، ثم تزوّدني بتقرير قبول:
+
+إيقاف أي خادم وتشغيل نسخة احتياطية خفيفة:
+
+تأكد أنّك في /home/runner/workspace.
+
+أوقف أي next dev/start.
+
+أنشئ نسخة احتياطية: _ops/backups/tailwind_fix_<UTC>/src_backup.tgz (استثنِ node_modules و .next و dist و _ops/backups).
+
+توحيد إعدادات Tailwind/PostCSS بصيغة ESM وإزالة التعارضات:
+
+اكتب ملف postcss.config.js هكذا:
+
+/** @type {import("postcss-load-config").Config} */
+export default { plugins: { tailwindcss: {}, autoprefixer: {} } };
+
+
+اكتب ملف tailwind.config.js هكذا:
+
+/** @type {import("tailwindcss").Config} */
+export default {
+  content: ["./src/app/**/*.{ts,tsx,mdx}", "./src/components/**/*.{ts,tsx}"],
+  darkMode: "class",
+  theme: { extend: {} },
+  plugins: []
+};
+
+
+احذف أي نسخ ‎.cjs‎: postcss.config.cjs وtailwind.config.cjs إن وُجدت.
+
+CSS عالمي واستيراده في layout.tsx:
+
+أنشئ/استبدل src/app/globals.css بالمحتوى:
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+:root { --bg: 10 10 12; --fg: 250 250 252; }
+html, body { height: 100%; }
+body { background-color: rgb(var(--bg)); color: rgb(var(--fg)); }
+
+
+ضمن src/app/layout.tsx: تأكد وجود السطر في الأعلى:
+
+import "./globals.css";
+
+
+وإن لم يوجد فأضِفه، مع الحفاظ على بقية الملف كما هو.
+
+تثبيت الصفحة الرئيسية EN بهيرو مُصمَّم وCTA يعمل:
+
+استبدل محتوى src/app/page.tsx بصفحة إنجليزية مع هيرو وزري CTA (Start chatting now → ينفّذ POST /api/age/allow ثم يوجّه إلى /chat، وView VIP plans يذهب إلى /plans). استخدم Tailwind classes لتدرّج خلفية من slate-900 إلى slate-950 ونص أبيض. إن احتجت نموذجًا، استخدم نفس الهيكلية التالية (أبقه EN):
+
+Header: شعار “DitonaChat” وروابط Plans/Chat/Safety.
+
+Hero: عنوان “Meet. Match. Go Live.” وفق نصوص EN موجزة.
+
+CTA: زر primary يرسل POST /api/age/allow ثم window.location.href="/chat".
+
+Footer: روابط Terms/Privacy/DMCA/Content.
+
+تشغيل dev على المنفذ 3000 والتحقّق آليًا:
+
+شغّل: PORT=3000 pnpm dev بالخلفية وسجّل إلى /tmp/app.log.
+
+اجلب HTML الصفحة الرئيسية ثم استخرج أوّل مسار CSS من _next/static/css/*.css وتحقق أن الاستجابة content-type: text/css وبها utilities مثل .min-h-screen, .bg-gradient-to-b, .text-slate-100.
+
+افحص /api/health (توقّع 200).
+
+افحص age gate: احصل على كود /chat بدون كوكي (توقّع 307/302)، ثم أرسل POST /api/age/allow بكوكي، وأعد طلب /chat (توقّع 200).
+
+تقرير + قبول:
+
+أنشئ تقريرًا في _ops/reports/TAILWIND_FIX_<UTC>.md يتضمن:
+
+ملخص ما تم تغييره (الملفات التي كتبتها/عدلتها).
+
+رابط الـCSS المُكتشَف وحجم أول 200 بايت.
+
+نتائج الأكواد (health/age gate).
+
+لقطة من آخر 40 سطر من /tmp/app.log لو ظهرت تحذيرات.
+
+اطبع بلوك القبول التالي بقيم حقيقية:
+
+-- Acceptance --
+ROOT=/home/runner/workspace
+TAILWIND=css_link:<0/1> utilities:<0/1>
+GLOBALS_IMPORT=<present/missing>
+HOME=styled_if_tailwind_ok
+AGE_GATE=/chat:<pre_redirect_code> -> age_allow -> /chat:<final_code>
+HEALTH=/api/health:<code>
+REPORT=_ops/reports/TAILWIND_FIX_<UTC>.md
+NOTES=no edits outside workspace; EN homepage
+-- End Acceptance --
+
+
+دفع إلى GitHub (إن مرّت القبولات):
+
+تأكد من .gitignore يحتوي: node_modules/, .next/, dist/, _ops/backups/, .vercel/.
+
+git add -A && git commit -m "fix: Tailwind ESM configs + EN home + age CTA (pre-deploy)" && git push -u origin main.
+
+شروط النجاح: الصفحة الرئيسية تظهر بتصميم Tailwind (خلفية متدرّجة ونص أبيض)، /api/health=200, و/chat يعمل بعد age/allow. أي فشل = أصلحه وأعد المحاولة ثم حدّث التقرير بما فعلته.

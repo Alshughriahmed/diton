@@ -1,0 +1,16 @@
+HTTP/2 200 
+cache-control: no-store
+content-type: application/json
+date: Sun, 21 Sep 2025 00:26:42 GMT
+referrer-policy: no-referrer
+server: Vercel
+set-cookie: anon=a46cf4d4-92c1-4b06-b98c-2665e3fa94d9.2e3110c2f950bdb09dfe72ceee881caaab8dfe60340d74dcef8b1d5e1329cda7; Path=/; Expires=Mon, 21 Sep 2026 00:26:42 GMT; Max-Age=31536000; Secure; HttpOnly; SameSite=lax
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+x-content-type-options: nosniff
+x-frame-options: SAMEORIGIN
+x-matched-path: /api/rtc/init
+x-vercel-cache: MISS
+x-vercel-id: sfo1::iad1::cgpwz-1758414402473-785b371768e1
+
+{"ok":true}

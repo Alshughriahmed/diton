@@ -1,0 +1,161 @@
+set -euo pipefail
+
+BR="fix/abort_and_msgbar_$(date -u +%Y%m%d-%H%M%S)"
+echo "[1/7] git branch"; git checkout -b "$BR" >/dev/null 2>&1 || git checkout "$BR"
+
+echo "[2/7] backup"
+BK="_ops/backups/$BR"; mkdir -p "$BK"
+for f in \
+  src/app/chat/rtcFlow.ts \
+  src/app/chat/ChatClient.tsx \
+  src/app/chat/components/ChatMessagingBar.tsx \
+  src/app/chat/components/FilterBar.tsx \
+; do [ -f "$f" ] && install -D "$f" "$BK/$f"; done
+
+echo "[3/7] fix: AbortError — replace broken block in rtcFlow.ts (idempotent abort)"
+# يستبدل الكتلة بين تعليق "Abort any ongoing requests" وسطر state.ac=null;
+perl -0777 -i -pe '
+  s|(// Abort any ongoing requests\s*)if\s*\(state\.ac\)\s*\{.*?\}\s*state\.ac\s*=\s*null;|
+     ${1}if (state.ac) { try { if (!state.ac.signal || !state.ac.signal.aborted) state.ac.abort("stop"); } catch {} }\n    state.ac = null;|s
+' src/app/chat/rtcFlow.ts
+
+echo "[4/7] patch: ChatMessagingBar.tsx — self-contained bar with events + visualViewport"
+cat > src/app/chat/components/ChatMessagingBar.tsx <<'TSX'
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { on, emit } from "@/utils/events";
+
+export default function ChatMessagingBar() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // استماع لحافلة الأحداث الداخلية (بدلاً من window)
+  useEffect(() => {
+    const off1 = on("ui:openMessaging" as any, () => setOpen(true));
+    const off2 = on("ui:closeMessaging" as any, () => setOpen(false));
+    return () => { try { off1?.(); off2?.(); } catch {} };
+  }, []);
+
+  // دعم أزرار قديمة لا تطلق events (data-ui="msg-toggle")
+  useEffect(() => {
+    const h = (e: any) => {
+      const el = e?.target as HTMLElement | null;
+      if (!el) return;
+      const hit = el.closest?.('[data-ui="msg-toggle"]');
+      if (hit) {
+        setOpen((v) => !v);
+        emit((open ? "ui:closeMessaging" : "ui:openMessaging") as any);
+      }
+    };
+    document.addEventListener("click", h, true);
+    return () => document.removeEventListener("click", h, true);
+  }, [open]);
+
+  // رفع الشريط فوق لوحة المفاتيح على الموبايل
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const vv: any = (window as any).visualViewport;
+    if (!vv) return;
+    const adjust = () => {
+      const offset = Math.max(0, vv.height + vv.offsetTop - window.innerHeight);
+      if (ref.current) ref.current.style.bottom = `${offset}px`;
+    };
+    adjust();
+    vv.addEventListener("resize", adjust);
+    vv.addEventListener("scroll", adjust);
+    return () => { vv.removeEventListener("resize", adjust); vv.removeEventListener("scroll", adjust); };
+  }, []);
+
+  if (!open) return null;
+
+  return (
+    <div ref={ref} className="fixed inset-x-0 bottom-0 z-[60] pointer-events-auto">
+      <div className="mx-auto max-w-3xl bg-black/60 backdrop-blur rounded-t-2xl p-2">
+        <div className="flex gap-2 items-center">
+          <input
+            data-ui="msg-input"
+            className="flex-1 rounded-xl bg-black/40 text-white placeholder-white/60 px-3 py-2 outline-none"
+            placeholder="Type a message…"
+          />
+          <button
+            data-ui="msg-send"
+            className="rounded-xl px-3 py-2 bg-blue-600 text-white"
+            onClick={() => {/* TODO: hook send */}}
+          >Send</button>
+          <button
+            data-ui="msg-close"
+            className="rounded-xl px-3 py-2 bg-black/40 text-white"
+            onClick={() => { setOpen(false); emit("ui:closeMessaging" as any); }}
+          >Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+TSX
+
+echo "[5/7] patch: FilterBar icons (top-right corner, minimal-diff)"
+cat > src/app/chat/components/FilterBar.tsx <<'TSX'
+"use client";
+import dynamic from "next/dynamic";
+import { useState } from "react";
+
+const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
+const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
+
+export default function FilterBar() {
+  const [openGender, setOpenGender] = useState(false);
+  const [openCountry, setOpenCountry] = useState(false);
+
+  return (
+    <div className="absolute top-2 right-2 z-[40] flex items-center gap-2">
+      <button
+        type="button"
+        data-ui="gender-button"
+        aria-label="Gender"
+        onClick={() => setOpenGender(true)}
+        className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur"
+      >
+        <span aria-hidden className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-rose-400">⚧</span>
+      </button>
+
+      <button
+        type="button"
+        data-ui="country-button"
+        aria-label="Countries"
+        onClick={() => setOpenCountry(true)}
+        className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur"
+      >
+        <span aria-hidden>🌍</span>
+      </button>
+
+      {openGender && <GenderModal open={true} onClose={() => setOpenGender(false)} />}
+      {openCountry && <CountryModal open={true} onClose={() => setOpenCountry(false)} />}
+    </div>
+  );
+}
+TSX
+
+echo "[6/7] build & quick accept"
+pnpm -s build
+BASE="https://www.ditonachat.com"
+bash _ops/acc_rtc.sh "$BASE" || true
+echo "== metrics ping =="; curl -s "$BASE/api/monitoring/metrics" | jq -r '.ok, .env'
+
+echo "[7/7] git commit & push"
+git add -A
+git commit -m "fix(rtc): idempotent abort w/o overlays; feat(ui): messaging bar wiring + viewport; tweak(filterbar icons top-right)"
+git push -u origin "$BR"
+
+echo "DONE. Open /chat then click ⚧ و 🌍، وأيقونة الرسائل (data-ui=msg-toggle)."
+
+قبول المهمة (مختصر)
+
+لا أخطاء بناء.
+
+الضغط على أيقونة الرسائل يفتح الشريط ويغلقه، ويعلو لوحة المفاتيح على الموبايل.
+
+أزرار ⚧ و🌍 في أقصى أعلى يمين الفيديو وتفتح الـModals.
+
+_ops/acc_rtc.sh https://www.ditonachat.com يمر (PAIR_ID_MATCH=1، NO_403_ON_RTC=1).

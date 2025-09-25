@@ -1,0 +1,132 @@
+
+جاهزية كاملة للمطابقة والاتصال وواجهة ‎/chat‎ حسب المواصفات. بدون كسر ميزات.
+
+Do (single bash)
+
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+BR="fix/predeploy-ui-rtc"
+mkdir -p _ops/backups
+
+echo "[1/8] Branch"
+git checkout -b "$BR" 2>/dev/null || git checkout "$BR"
+
+echo "[2/8] Back up touched files (if exist)"
+for f in \
+  src/middleware.ts \
+  src/app/chat/ChatClient.tsx \
+  src/app/api/rtc/matchmake/route.ts \
+  src/app/chat/components/FilterBar.tsx \
+  src/app/chat/components/ChatToolbar.tsx \
+  src/app/chat/components/ChatMessagingBar.tsx \
+  src/app/chat/components/MessageHud.tsx \
+  src/styles/globals.css
+do [ -f "$f" ] && install -D "$f" "_ops/backups/$f"; done
+
+echo "[3/8] Force www redirect (Next.js middleware)"
+cat > src/middleware.ts <<'TS'
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export function middleware(req: NextRequest) {
+  const host = req.headers.get("host") || "";
+  if (host === "ditonachat.com") {
+    const url = new URL(req.url);
+    url.host = "www.ditonachat.com";
+    return NextResponse.redirect(url.toString(), 308);
+  }
+  return NextResponse.next();
+}
+export const config = { matcher: ["/((?!_next|api/turn).*)"] };
+TS
+
+echo "[4/8] Matchmake: include found:true (server) + accept both shapes (client)"
+# server: add found:true whenever pairId exists
+if [ -f src/app/api/rtc/matchmake/route.ts ]; then
+  perl -0777 -pe 's/return\s+NextResponse\.json\(\{\s*pairId:\s*([^)]+?)\}\s*,\s*\{status:200\}\);/return NextResponse.json({ found:true, pairId:$1 }, {status:200});/g' -i src/app/api/rtc/matchmake/route.ts || true
+  perl -0777 -pe 's/return\s+NextResponse\.json\(\{\s*pairId:\s*([^,]+),\s*role:\s*([^)]+?)\}\s*,\s*\{status:200\}\);/return NextResponse.json({ found:true, pairId:$1, role:$2 }, {status:200});/g' -i src/app/api/rtc/matchmake/route.ts || true
+fi
+
+# client: condition = j.pairId && j.role
+if grep -q 'api/rtc/matchmake' src/app/chat/ChatClient.tsx; then
+  perl -0777 -pe 's/j\?\.\s*found\s*&&\s*j\?\.\s*pairId/j?.pairId \&\& j?.role/g' -i src/app/chat/ChatClient.tsx || true
+fi
+
+echo "[5/8] UI hardening: disable demo messages + hide QueueBadge + ensure HUD mount"
+# 5.1 disable any MessageSystem import/usage
+sed -i 's/import .*MessageSystem.*//g' src/app/chat/ChatClient.tsx || true
+perl -0777 -pe 's/<MessageSystem[\s\S]*?\/MessageSystem>//g' -i src/app/chat/ChatClient.tsx || true
+perl -0777 -pe 's/<MessageSystem[^>]*\/>\s*//g' -i src/app/chat/ChatClient.tsx || true
+
+# 5.2 hide QueueBadge if mounted anywhere
+sed -i 's/import .*QueueBadge.*//g' src/app/chat/ChatClient.tsx || true
+perl -0777 -pe 's/<QueueBadge[\s\S]*?\/QueueBadge>//g' -i src/app/chat/ChatClient.tsx || true
+perl -0777 -pe 's/<QueueBadge[^>]*\/>\s*//g' -i src/app/chat/ChatClient.tsx || true
+
+# 5.3 ensure MessageHud is mounted once
+if ! grep -Rqs 'MessageHud' src/app/chat/ChatClient.tsx; then
+  grep -q 'MessageHud' src/app/chat/components/MessageHud.tsx || cat > src/app/chat/components/MessageHud.tsx <<'TSX'
+"use client";
+import { useEffect, useState } from "react";
+type Line = { text:string; ts:number; dir:"out"|"in" };
+export default function MessageHud(){
+  const [lines,setLines]=useState<Line[]>([]);
+  useEffect(()=>{
+    const add = (dir:"out"|"in") => (e:CustomEvent)=> setLines(l=>[...l,{text:String(e.detail?.text||""), ts:Date.now(), dir}].slice(-3));
+    const sent = add("out"), recv = add("in");
+    window.addEventListener("ditona:chat:sent", sent as any);
+    window.addEventListener("ditona:chat:recv", recv as any);
+    return ()=>{ window.removeEventListener("ditona:chat:sent",sent as any); window.removeEventListener("ditona:chat:recv",recv as any); };
+  },[]);
+  if(lines.length===0) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55] space-y-1">
+      {lines.map((l,i)=>(
+        <div key={i} onPointerDown={(e)=>{ e.preventDefault(); navigator.clipboard?.writeText(l.text).catch(()=>{}); }}
+             className="text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm">
+          <span className={l.dir==="in"?"text-white/80":"text-emerald-300"}>{l.dir==="in"?"• ":"▲ "}</span>{l.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+TSX
+  sed -i '1i import MessageHud from "@\/app\/chat\/components\/MessageHud";' src/app/chat/ChatClient.tsx
+  awk '1; /<FilterBar[^>]*>.*<\/FilterBar>|<FilterBar[^>]*\/>/ && !p { print "      <MessageHud />"; p=1 }' src/app/chat/ChatClient.tsx > /tmp/cc && mv /tmp/cc src/app/chat/ChatClient.tsx
+fi
+
+echo "[6/8] Filter popovers guard (2-col countries & 60vh)"
+# enforce grid-cols-2 and max-h in FilterBar if missing; no-op if already present
+grep -q 'grid-cols-2' src/app/chat/components/FilterBar.tsx || sed -i '0,/<div className="grid/{s//<div className="grid grid-cols-2/}' src/app/chat/components/FilterBar.tsx || true
+grep -q 'max-h-\[60vh\]' src/app/chat/components/FilterBar.tsx || sed -i 's/max-h-\[[^]]*\]/max-h-\[60vh\]/' src/app/chat/components/FilterBar.tsx || true
+
+echo "[7/8] Build & smoke tests"
+pnpm -s build
+
+BASE="https://www.ditonachat.com"
+echo "-- env";  curl -s "$BASE/api/rtc/env" | jq .
+echo "-- turn"; curl -s "$BASE/api/turn" | jq '{has443:([.iceServers[].urls]|flatten|map(tostring)|map(contains(":443"))|any)}'
+echo "-- acc rtc"; bash _ops/acc_rtc.sh "$BASE" || true
+
+echo "[8/8] Commit"
+git add -A
+git commit -m "fix: www redirect via middleware; unify matchmake response; disable demo msgs; hide queue; ensure HUD; filter popovers polish" || true
+git push -u origin "$BR"
+
+echo "READY: branch $BR"
+
+
+Acceptance
+
+middleware.ts يفرض التحويل إلى ‎www‎.
+
+‎/api/rtc/matchmake يعيد {found:true,...} والعميل يقبل أيًا منهما.
+
+لا رسائل تلقائية، ولا QueueBadge. HUD يظهر آخر 3 رسائل فقط.
+
+Location Popover بعمودين وارتفاع ‎60vh‎ كحد أقصى.
+
+‎pnpm build PASS، و‎_ops/acc_rtc.sh PASS.
+
+فرع ‎fix/predeploy-ui-rtc‎ جاهز للدفع إلى ‎main‎ بعد التأكد.

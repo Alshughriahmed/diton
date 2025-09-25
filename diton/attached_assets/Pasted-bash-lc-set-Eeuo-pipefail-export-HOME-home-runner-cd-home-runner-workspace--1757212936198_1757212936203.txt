@@ -1,0 +1,61 @@
+bash -lc '
+set -Eeuo pipefail
+export HOME=/home/runner
+cd /home/runner/workspace
+
+# نسخ احتياطي
+STAMP=$(date -u +%Y%m%d-%H%M%S); BK="_ops/backups/finalfix_${STAMP}.tgz"
+mkdir -p _ops/backups
+tar -czf "$BK" --exclude=node_modules --exclude=.next --exclude=_ops/backups .
+
+# تنظيف منفذ/عمليات
+pkill -f "next (dev|start)" 2>/dev/null || true
+( command -v fuser >/dev/null && fuser -k 3000/tcp ) || true
+:>/tmp/app.log
+
+# تثبيت وبناء
+if command -v corepack >/dev/null; then corepack enable >/dev/null 2>&1 || true; fi
+if command -v pnpm >/dev/null; then pnpm install --frozen-lockfile || pnpm install; else npm ci || npm install; fi
+if command -v pnpm >/dev/null; then pnpm build; else npm run build; fi
+
+# تشغيل dev بأمان
+nohup env PORT=3000 node node_modules/.bin/next dev -p 3000 -H 0.0.0.0 >>/tmp/app.log 2>&1 &
+PID=$!
+
+# انتظار الصحة
+H=000
+for i in {1..60}; do
+  H=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/health || echo 000)
+  [ "$H" = "200" ] && break
+  sleep 1
+done
+
+# فحوص القبول
+COOKIE=/tmp/c.txt; :>"$COOKIE"
+CHAT1=$(curl -s -D - -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/chat -c "$COOKIE" | awk "NR==1{print \$2}")
+curl -s -X POST -c "$COOKIE" http://127.0.0.1:3000/api/age/allow >/dev/null || true
+CHAT2=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE" http://127.0.0.1:3000/chat || echo 000)
+PP=$(curl -s -I -b "$COOKIE" http://127.0.0.1:3000/chat | tr -d "\r" | awk -F": " "/^Permissions-Policy:/ {print \$2}" || true)
+
+HTML=/tmp/home.html
+curl -s http://127.0.0.1:3000/ -o "$HTML" >/dev/null || true
+CSS_PATH=$(grep -oE "/_next/static/css/[^\"]+\\.css" "$HTML" | head -n1 || true)
+CT=na
+[ -n "${CSS_PATH:-}" ] && CT=$(curl -sI "http://127.0.0.1:3000$CSS_PATH" | tr -d "\r" | awk "/^Content-Type:/ {print \$0}" || true)
+
+VIP_PRE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/user/vip-status || echo 000)
+VIP_POST=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: vip=1" http://127.0.0.1:3000/api/user/vip-status || echo 000)
+
+echo "-- Acceptance --"
+echo "HEALTH=$H"
+echo "AGE_FLOW=$CHAT1->$CHAT2"
+echo "PERMISSIONS_POLICY=${PP:-na}"
+echo "CSS_LINK=$( [ -n "$CSS_PATH" ] && echo 1 || echo 0 ) CONTENT_TYPE=${CT}"
+echo "VIP=pre:$VIP_PRE post:$VIP_POST"
+echo "BACKUP=$BK LOG=/tmp/app.log"
+echo "-- End Acceptance --"
+
+# إيقاف
+kill $PID 2>/dev/null || true
+sleep 1
+'

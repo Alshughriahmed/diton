@@ -1,0 +1,92 @@
+دفعة جاهزة للوكيل (Phase 2.2 — إصلاحات حرجة)
+1) إلغاء تعارض الـ SSR/CSR (Hydration)
+
+أضِف هوك ترطيب واستخدمه على المكوّنات التي تقرأ حالة عميل (Zustand، MediaPipe، window):
+
+// src/hooks/useHydrated.ts
+'use client'
+import { useEffect, useState } from 'react';
+export function useHydrated() {
+  const [ok, setOk] = useState(false);
+  useEffect(() => setOk(true), []);
+  return ok;
+}
+
+
+لفّ المكوّنات العميلية (على الأقل ChatClient، PeerInfoCard، FiltersBar، MyControls، Beauty/Masks):
+
+// src/app/chat/ChatClient.tsx
+'use client'
+import { useHydrated } from '@/hooks/useHydrated';
+export default function ChatClient() {
+  const hydrated = useHydrated();
+  if (!hydrated) return null;          // أو سكيليتون خفيف بنفس البنية
+  // ... بقية الكود كما هو
+}
+
+
+واجعل MediaPipe/Jeeliz import ديناميكيًا بدون SSR إن لم يكن كذلك:
+
+const Beauty = dynamic(() => import('@/components/BeautyControls'), { ssr: false });
+
+
+(بديل سريع إضافي: ضع suppressHydrationWarning على حاوية الجذر التي تتغيّر فورًا بعد mount).
+
+2) إصلاح NextAuth
+
+تحقّق من هذه النقاط:
+
+على Vercel (Production وPreview):
+
+NEXTAUTH_URL=https://www.ditonachat.com
+
+NEXTAUTH_SECRET=<قيمة قوية>
+
+GOOGLE_CLIENT_ID=<من الكونسول>
+
+GOOGLE_CLIENT_SECRET=<من الكونسول>
+
+AUTH_TRUST_HOST=true (لبيئات المعاينة والـApp Router)
+
+تأكّد من معالج الراوت:
+
+// src/app/api/auth/[...nextauth]/route.ts
+import NextAuth from "next-auth";
+import Google from "next-auth/providers/google";
+export const authOptions = {
+  providers: [Google({
+    clientId: process.env.GOOGLE_CLIENT_ID!,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+  })],
+  secret: process.env.NEXTAUTH_SECRET,
+};
+const handler = NextAuth(authOptions);
+export { handler as GET, handler as POST };
+
+
+اختباران سريعان بعد البناء:
+
+افتح ‎/api/auth/providers → يجب أن يُرجع JSON فيه google.
+
+افتح ‎/api/auth/session → يجب أن يُرجع {user:...} بعد تسجيل الدخول أو {} قبلها (بدون 500).
+
+3) أيقونة الموقع (favicon) 404
+
+أضِف ملف ‎/app/favicon.ico أو رابط في layout:
+
+// src/app/layout.tsx
+export const metadata = { icons: { icon: '/favicon.ico' } };
+
+4) تلميع تجاوب الشريط (اختياري الآن لكن سهل)
+
+أضِف auto-hide على أدواتي (MyControls) عند عدم الحركة: تايمر 3 ثوانٍ + إظهار عند تحريك المؤشر/اللمس.
+
+5) قبول الدفعة
+
+لا وجود لأخطاء hydration في الكونسول عند فتح ‎/chat.
+
+‎/api/auth/providers و‎/api/auth/session يعملان بدون 500.
+
+تسجيل دخول Google ناجح ويُعيد إلى ‎/chat.
+
+لا أخطاء favicon/NextAuth في الكونسول.

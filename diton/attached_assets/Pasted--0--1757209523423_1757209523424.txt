@@ -1,0 +1,100 @@
+سأنفّذ مهمة صغيرة دقيقة (بدون تبعيات خارجية) مع نسخ احتياطي وفحوص قبول.
+
+# 0) نسخة احتياطية سريعة
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/chat_dyn_emoji_${STAMP}.tgz"
+mkdir -p _ops/backups && tar -czf "$BK" --exclude=node_modules --exclude=.next .
+
+# 1) إجبار /chat أن تكون ديناميكية (منع أي كاش يتجاوز بوابة +18)
+# أ) إن وُجد src/app/chat/page.tsx أضف في أعلى الملف:
+#    export const dynamic = 'force-dynamic'; export const revalidate = 0;
+# ب) إن لم يوجد page.tsx وأُديرت من layout.tsx فأضف السطرين في src/app/chat/layout.tsx
+apply_dynamic(){
+  f1="src/app/chat/page.tsx"; f2="src/app/chat/layout.tsx"
+  if [ -f "$f1" ]; then
+    grep -q "dynamic = 'force-dynamic'" "$f1" || \
+      sed -i "1iexport const dynamic = 'force-dynamic';\nexport const revalidate = 0;\n" "$f1"
+  elif [ -f "$f2" ]; then
+    grep -q "dynamic = 'force-dynamic'" "$f2" || \
+      sed -i "1iexport const dynamic = 'force-dynamic';\nexport const revalidate = 0;\n" "$f2"
+  fi
+}
+apply_dynamic
+
+# 2) تحويل نص الحقل إلى الإنجليزية + إضافة مُعرّفات للاختبار
+# ابحث عن مكوّن إدخال الرسائل (غالباً داخل src/app/chat/ChatClient.tsx أو src/components/chat/*)
+# واستبدل placeholder العربي بـ Type a message… وأضف data-testid="chat-input"
+set_placeholder(){
+  for f in src/app/chat/ChatClient.tsx src/components/chat/*.tsx; do
+    [ -f "$f" ] || continue
+    sed -i "s/اكتب رسالة/Type a message…/g" "$f"
+    grep -q 'data-testid="chat-input"' "$f" || \
+      sed -i "s/placeholder=\(\"[^\"]*\"\\|{\[^}]*}\)/data-testid=\"chat-input\" placeholder=\1/" "$f"
+  done
+}
+set_placeholder
+
+# 3) إنشاء Emoji Picker خفيف وربط زر الإيموجي به (بدون مكتبات)
+# - مكوّن بسيط شبكة 48 إيموجي شائعة
+# - عند النقر يُدرِج الإيموجي في موضع المؤشر داخل حقل الرسائل
+# - data-testid="emoji-button" و data-testid="emoji-panel" للاختبارات
+cat > src/components/chat/EmojiPicker.tsx <<'TSX'
+"use client";
+import React from "react";
+const EMOJIS = "😀😄😁😆🥹😊🙂😉😍😘😜🤪🤗🤔🤨😐😴🥳🤩😎😇😭😤😡👍👎👏🙏💪🔥✨🎉❤️🧡💛💚💙💜🖤🤍💯✅❌".split("");
+export default function EmojiPicker({ onPick }: { onPick: (e: string)=>void }) {
+  return (
+    <div data-testid="emoji-panel" className="absolute bottom-14 left-2 z-50 grid grid-cols-8 gap-2 p-2 rounded-2xl bg-neutral-900/95 shadow-lg border border-neutral-700">
+      {EMOJIS.map((e, i)=>(
+        <button key={i} onClick={()=>onPick(e)} className="text-xl hover:scale-110 transition" aria-label={`emoji ${e}`}>{e}</button>
+      ))}
+    </div>
+  );
+}
+TSX
+
+# 4) توصيل زر الإيموجي بالمكوّن:
+# - في المكوّن الذي يحتوي زر الإيموجي وحقل الرسائل:
+#   * أضف useState لفتح/إغلاق اللوحة
+#   * احتفظ بـ ref للـ textarea/input لإدراج الإيموجي في موضع المؤشر
+wire_emoji(){
+  target="src/app/chat/ChatClient.tsx"
+  [ -f "$target" ] || target=$(ls src/components/chat/*Toolbar*.tsx 2>/dev/null | head -n1)
+  [ -f "$target" ] || return 0
+  # إضافة الاستيراد إن لم يوجد
+  grep -q "EmojiPicker" "$target" || sed -i "1i import EmojiPicker from \"@/components/chat/EmojiPicker\";\nimport { useRef, useState } from \"react\";" "$target"
+  # إضافة حالة ومرجع للحقل
+  grep -q "const \\[showEmoji" "$target" || sed -i "s/function ChatClient/function ChatClient/" "$target"
+  grep -q "showEmoji" "$target" || sed -i "0,/return/s//const inputRef = useRef<HTMLTextAreaElement|HTMLInputElement|null>(null);\nconst [showEmoji,setShowEmoji]=useState(false);\nreturn/" "$target"
+  # وسم زر الإيموجي
+  sed -i '0,/\<button[^\n]*emoji/s//& data-testid="emoji-button" onClick={(e)=>{e.preventDefault(); setShowEmoji(v=>!v);}}/' "$target" || true
+  # وسم حقل الإدخال وإسناد المرجع
+  sed -i '0,/<textarea/ s//<textarea ref={inputRef} /' "$target" || sed -i '0,/<input[^>]*type="text"/ s//<input type="text" ref={inputRef} /' "$target"
+  # حقن الـ EmojiPicker أسفل شريط الرسائل
+  grep -q "EmojiPicker" "$target" || \
+  sed -i '0,/<\/form>\|<\/div>\|<\/section>/s//{showEmoji && <EmojiPicker onPick={(e)=>{const el=inputRef.current; if(!el) return; const s=(el as any).selectionStart||el.value.length; const t=(el as any).selectionEnd||s; el.value = el.value.slice(0,s)+e+el.value.slice(t); (el as any).selectionStart=(el as any).selectionEnd=s+e.length; el.dispatchEvent(new Event("input",{bubbles:true})); setShowEmoji(false);}} />}\n&/' "$target"
+}
+wire_emoji
+
+# 5) تشغيل dev مؤقتاً وفحوص قبول سريعة
+pkill -f "next.*dev" 2>/dev/null || true
+( PORT=3000 pnpm dev >/tmp/app.log 2>&1 & ) ; sleep 6
+ORIGIN="http://127.0.0.1:3000"
+COOKIE=/tmp/c.txt; :> "$COOKIE"
+CHAT1=$(curl -s -D - -o /dev/null "$ORIGIN/chat" | awk 'NR==1{print $2}')
+curl -s -X POST -c "$COOKIE" "$ORIGIN/api/age/allow" >/dev/null
+CHAT2=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE" "$ORIGIN/chat")
+PP=$(curl -sI -b "$COOKIE" "$ORIGIN/chat" | awk 'BEGIN{IGNORECASE=1}/^Permissions-Policy:/{sub(/\r$/,"");print}')
+HTML=$(curl -s "$ORIGIN/")
+CSS=$(echo "$HTML" | grep -oE "/_next/static/css/[^\"']+\\.css" | head -1)
+PLH=$(echo "$HTML" | grep -o "Type a message…" || true)
+PANEL_TAG=$(grep -Rni 'data-testid=\"emoji-panel\"' src | wc -l)
+
+echo "-- Acceptance --"
+echo "AGE_FLOW=$CHAT1->$CHAT2"
+echo "PERMISSIONS_POLICY=${PP}"
+echo "CSS_LINK=$([ -n "$CSS" ] && echo 1 || echo 0)"
+echo "PLACEHOLDER=$([ -n "$PLH" ] && echo ok || echo missing)"
+echo "EMOJI_WIRED=$([ "$PANEL_TAG" -gt 0 ] && echo yes || echo no)"
+echo "LOG=/tmp/app.log BK=$BK"
+echo "-- End Acceptance --"

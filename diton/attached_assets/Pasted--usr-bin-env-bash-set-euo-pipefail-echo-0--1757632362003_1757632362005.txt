@@ -1,0 +1,111 @@
+📦 دفعة أوامر للوكيل (انسخها كما هي)
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== 0) فرع آمن ونسخ احتياطي ==="
+git checkout -b hotfix/rtc-once-guard || git checkout hotfix/rtc-once-guard || true
+mkdir -p _ops/backup || true
+cp -f src/app/chat/rtcFlow.ts _ops/backup/rtcFlow.ts.bak 2>/dev/null || true
+cp -f src/app/chat/ChatClient.tsx _ops/backup/ChatClient.tsx.bak 2>/dev/null || true
+
+###############################################################################
+# Patch-1: إضافة startRtcFlowOnce() (حارس منع الازدواج) داخل rtcFlow.ts
+###############################################################################
+if ! grep -q 'startRtcFlowOnce' src/app/chat/rtcFlow.ts 2>/dev/null; then
+  cat >> src/app/chat/rtcFlow.ts <<'TSX'
+
+/** ------------------------------------------------------------------------
+ * Once-guard: يمنع إطلاق تدفّق RTC مرتين في آنٍ واحد (double-start).
+ * لا يغيّر منطق startRtcFlow نفسه؛ مجرد غلاف آمن.
+ * ---------------------------------------------------------------------- */
+let __rtcOnceFlag = false;
+export async function startRtcFlowOnce() {
+  if (__rtcOnceFlag) return;
+  __rtcOnceFlag = true;
+  try {
+    // نفترض وجود startRtcFlow الأصلي في نفس الملف (كما هو معمَّم في المشروع)
+    // إن كان اسمه مختلفًا لديك، استبدله هنا بنفس الاسم.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+    // @ts-ignore
+    return await startRtcFlow();
+  } finally {
+    __rtcOnceFlag = false;
+  }
+}
+TSX
+  echo "Patch-1: startRtcFlowOnce() appended to rtcFlow.ts"
+else
+  echo "Patch-1: موجود مسبقاً — تم تجاوزه."
+fi
+
+###############################################################################
+# Patch-2: ربط زر NEXT بـ startRtcFlowOnce() داخل ChatClient.tsx
+# - يحاول إحلال أي استدعاء startRtcFlow() بـ startRtcFlowOnce()
+# - إن لم يجد، يضيف الاستيراد ويحقن الاستدعاء داخل معالج 'ui:next'
+###############################################################################
+node --input-type=module <<'JS'
+import fs from 'fs';
+const p = 'src/app/chat/ChatClient.tsx';
+let s = fs.readFileSync(p, 'utf8');
+let changed = false;
+
+// 1) تضمين الاستيراد
+if (!/startRtcFlowOnce/.test(s)) {
+  if (/from\s+["']\.\/rtcFlow["']/.test(s)) {
+    // يوجد استيراد لنفس الملف: أعد تسمية أي startRtcFlow -> startRtcFlowOnce
+    s = s.replace(/\bstartRtcFlow\b/g, 'startRtcFlowOnce');
+    if (!/startRtcFlowOnce/.test(s)) {
+      s = s.replace(/from\s+["']\.\/rtcFlow["']/,
+                    `, { startRtcFlowOnce } from "./rtcFlow"`);
+    }
+    changed = true;
+  } else {
+    // أضف سطر استيراد جديد بعد أول import
+    s = s.replace(/^(import[^\n]*\n)/, `$1import { startRtcFlowOnce } from "./rtcFlow";\n`);
+    changed = true;
+  }
+}
+
+// 2) حقن الاستدعاء داخل مستمع ui:next إذا لم يوجد
+if (!/ui:next[^]*startRtcFlowOnce\(\)/m.test(s)) {
+  // حاول الحقن مباشرة بعد next();
+  const before = s;
+  s = s.replace(/(on\(['"]ui:next['"][^]*?\{[^]*?next\(\);)/m,
+                `$1 startRtcFlowOnce();`);
+  if (s === before) {
+    // وإن فشل، احقنه في بداية جسم المعالج
+    s = s.replace(/(on\(['"]ui:next['"][^]*?\{)/m,
+                  `$1 startRtcFlowOnce();`);
+  }
+  changed = true;
+}
+
+fs.writeFileSync(p, s);
+console.log("Patch-2: ChatClient.tsx updated. Has startRtcFlowOnce:", /startRtcFlowOnce/.test(s));
+JS
+
+echo "=== 1) بناء المشروع ==="
+pnpm install
+pnpm build
+
+echo "=== 2) فحص أن الباتشات مطبَّقة فعلاً ==="
+grep -n "startRtcFlowOnce" src/app/chat/rtcFlow.ts || true
+grep -n "startRtcFlowOnce" src/app/chat/ChatClient.tsx || true
+
+echo "=== 3) قبول نهائي (إنتاج) — REST RTC E2E ==="
+bash _ops/acc_rtc.sh https://www.ditonachat.com || (echo '✗ ACCEPTANCE FAILED' && exit 1)
+
+echo "=== 4) تلخيص وتسليم ==="
+git add -A
+git commit -m "RTC: once-guard + wire NEXT to startRtcFlowOnce() (prevent double-start)"
+echo "✓ Patch-1 & Patch-2 applied and verified via acc_rtc.sh on Production."
+echo "✓ يُنصح بفحص بصري سريع: نافذتان /chat → Next في الطرفين → اتصال خلال ≤10s."
+
+
+ما الذي سيتحقق به الوكيل في النهاية؟
+
+وجود startRtcFlowOnce في rtcFlow.ts ووجود استدعائه في ChatClient.tsx.
+
+نجاح بناء المشروع.
+
+مرور فحص القبول الكامل على الإنتاج (enqueue=204, matchmake=200, offer/answer=204، تبادل ICE كمصفوفات). يعتمد هذا الفحص على سكربتنا المعتمد _ops/acc_rtc.sh.
