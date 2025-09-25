@@ -2,20 +2,29 @@
 import { useState, useEffect } from "react";
 import { emit } from "@/utils/events";
 import { useVip } from "@/hooks/useVip";
-import { useFFA } from "@/hooks/useFFA";
 
 export default function ChatToolbar(){
   const [msgOpen,setMsgOpen]=useState(false);
   const [micOn,setMicOn]=useState(true);
   const [paused,setPaused]=useState(false);
   const { isVip } = useVip();
-  const freeForAll = useFFA();
-  
-  // FFA runtime detection
-  const ffa = (typeof window !== "undefined" && (window as any).__vip?.FREE_FOR_ALL == 1);
-  if (ffa) console.log("FFA_FORCE: enabled");
-  
-  // DataChannel and pair state for button guards
+ 
+// FFA runtime from window.__vip
+const ffa =
+  typeof window !== "undefined" &&
+  (globalThis as any).__vip &&
+  ((((globalThis as any).__vip).FREE_FOR_ALL === 1) ||
+   (((globalThis as any).__vip).FREE_FOR_ALL === "1"));
+
+// DataChannel + pairId from globals
+const dc = (globalThis as any).__ditonaDataChannel as RTCDataChannel | null;
+const pairId = (globalThis as any).__ditonaPairId as string | null;
+
+// Prev gating
+const canPrev = ffa || (dc?.readyState === "open" && !!pairId);
+
+if (ffa) console.log("[FFA] runtime enabled");
+
   const dc = (globalThis as any).__ditonaDataChannel;
   const [pairId, setPairId] = useState<string | null>(null);
   
