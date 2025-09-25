@@ -1,4 +1,5 @@
 "use client";
+import { safeFetch } from "../safeFetch";
 import { isFFA } from "@/utils/ffa";
 import { useEffect, useState } from "react";
 
@@ -23,7 +24,7 @@ export default function GenderModal({ open, onClose, selected, onChange }: Props
   const [isVip, setIsVip] = useState(false);
 
   useEffect(()=>{
-    fetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
+    safeFetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
       setIsVip(!!(j?.isVip || j?.vip));
     }).catch(()=>{});
   },[]);
