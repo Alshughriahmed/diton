@@ -11,7 +11,7 @@ export default function RoleBadge() {
   useEffect(() => {
     // Check for debug mode
     const isDebugMode = process.env.NODE_ENV === 'development' || 
-                       process.env.NEXT_PUBLIC_DEBUG === 'true';
+    (typeof window!=='undefined') && (globalThis as any).__vip && ((((globalThis as any).__vip).DEBUG===true) || (((globalThis as any).__vip).DEBUG==='true'))                   
     setShowDebug(isDebugMode);
 
     // Determine role
