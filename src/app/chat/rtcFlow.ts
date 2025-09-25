@@ -1,3 +1,4 @@
+import { safeFetch } from "./safeFetch";
 /* Anti-leak WebRTC flow with session stamping and phase tracking */
 function safeAbort(ac?: AbortController|null){ try{ if(ac && !ac.signal?.aborted) ac.abort("stop"); }catch{} }
 if (typeof window!=="undefined" && process.env.NODE_ENV!=="production"){
@@ -201,7 +202,7 @@ try{ __ditonaSetPair(null as any, (state as any).role); }catch{};
     try{
       const peer = (state && (state.lastPeer||null)) as any;
       if(peer){
-        fetch("/api/rtc/prev/for", {
+        safeFetch("/api/rtc/prev/for", {
           method:"POST",
           headers:{ "content-type":"application/json" },
           body: JSON.stringify({ peer })
@@ -510,7 +511,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
 
     // Initialize anon cookie
     try {
-      await fetch("/api/anon/init", { 
+      await safeFetch("/api/anon/init", { 
         method: "GET", 
         cache: "no-store",
         signal: state.ac.signal 
