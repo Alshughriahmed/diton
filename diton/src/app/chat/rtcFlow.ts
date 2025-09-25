@@ -303,11 +303,6 @@ function ensureCalleeOnly(operation: string) {
 }
 
 // Safe fetch with session checking and telemetry
-async function safeFetch(url: string, options: RequestInit = {}, operation: string, sessionId: number) {
-  if (!checkSession(sessionId)) {
-    logRtc(operation, 499, { reason: 'session-mismatch' });
-    return null;
-  }
 
   const signal = state.ac?.signal;
   let response: Response;
