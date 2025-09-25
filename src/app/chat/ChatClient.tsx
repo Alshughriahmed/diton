@@ -1,9 +1,9 @@
 "use client";
-import { isFFA } from "@/utils/ffa";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 // startRtcFlowOnce guard marker
 
+import "./freeForAllBridge";
 import "./dcMetaResponder.client";
 
 import "./likeSyncClient";
@@ -36,7 +36,6 @@ import ChatToolbar from "./components/ChatToolbar";
 import ChatMessagingBar from "./components/ChatMessagingBar";
 import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
-import FreeForAllBridge from "./components/FreeForAllBridge";
 import LikeHud from "./LikeHud";
 // import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
 import { getMobileOptimizer } from "@/lib/mobile";
@@ -90,27 +89,6 @@ export default function ChatClient(){
   const lastTsRef = useRef(0);
   const busyRef = useRef(false);
   const lastNextTsRef = useRef(0);
-  
-  // Autostart: age/allow ⇒ rtc/init ⇒ ui:next (once)
-  useEffect(() => {
-    if (!hydrated || typeof window === "undefined") return;
-    const w = window as any;
-    if (w.__DITONA_AUTOSTART_DONE) return;
-    w.__DITONA_AUTOSTART_DONE = 1;
-
-    const opts: RequestInit = {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { accept: "application/json" }
-    };
-
-    (async () => {
-      try { await fetch("/api/age/allow", opts); } catch {}
-      try { await fetch("/api/anon/init", opts); } catch {}
-      emit("ui:next"); console.log("AUTO_NEXT: fired");
-    })();
-  }, [hydrated]);
   const localRef = useRef<HTMLVideoElement>(null);
   const [ready,setReady]=useState(false);
   const [like,setLike]=useState(false);
@@ -295,7 +273,7 @@ let offTogglePlay=on("ui:togglePlay", ()=>{
       });
     });
     let offUpsell=on("ui:upsell", (feature)=>{
-      const freeForAll = isFFA();
+      const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
       if (freeForAll) {
         // In free mode, don't show upsell, just show notification
         toast(`🔒 ميزة ${feature} حصرية لـ VIP`);
@@ -487,7 +465,9 @@ try{
           setCameraPermissionHint('قم بإغلاق التبويب الثاني أو اسمح للكاميرا');
         } else if (error?.name === 'NotFoundError') {
           setCameraPermissionHint('لم يتم العثور على كاميرا أو ميكروفون');
-        } 
+        } else {
+          setCameraPermissionHint('خطأ في الوصول للكاميرا - تأكد من الأذونات');
+        }
         return;
       }
     }
@@ -510,13 +490,19 @@ try{
                 setEffectsStream(processedStream);
                 localRef.current.srcObject = processedStream;
                 effects.start();
-              } 
-            } 
+              } else {
+                localRef.current.srcObject = s;
+              }
+            } else {
+              localRef.current.srcObject = s;
+            }
           } catch (error) {
             console.warn('Effects initialization failed, using original stream:', error);
             localRef.current.srcObject = s;
           }
-        } 
+        } else {
+          localRef.current.srcObject = s;
+        }
         
         localRef.current.muted = true; 
         localRef.current.play().catch(()=>{}); 
@@ -583,6 +569,15 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
         if(dx<0) {
           toast('⏭️ سحب للمطابقة التالية');
           emit('ui:next'); 
+        } else {
+          const freeForAll = process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1";
+          if (!vip && !freeForAll) {
+            toast('🔒 العودة للسابق متاحة لـ VIP فقط');
+            emit('ui:upsell', 'prev');
+          } else {
+            toast('⏮️ محاولة العودة للمطابقة السابقة...');
+            emit('ui:prev');
+          }
         }
       }
     };
@@ -624,7 +619,6 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
 
   return (
     <>
-      <FreeForAllBridge />
       <LikeHud />
       <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
       <div className="h-full grid grid-rows-2 gap-2 p-2">
@@ -722,13 +716,19 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
                                   setEffectsStream(processedStream);
                                   localRef.current.srcObject = processedStream;
                                   effects.start();
-                                } 
-                              } 
+                                } else {
+                                  localRef.current.srcObject = s;
+                                }
+                              } else {
+                                localRef.current.srcObject = s;
+                              }
                             } catch (error) {
                               console.warn('Effects initialization failed, using original stream:', error);
                               localRef.current.srcObject = s;
                             }
-                          } 
+                          } else {
+                            localRef.current.srcObject = s;
+                          }
                           
                           localRef.current.muted = true; 
                           localRef.current.play().catch(()=>{}); 
@@ -745,7 +745,9 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
                           setCameraPermissionHint('قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح');
                         } else if (error?.name === 'NotReadableError' || error?.name === 'AbortError') {
                           setCameraPermissionHint('قم بإغلاق التبويب الثاني أو اسمح للكاميرا');
-                        } 
+                        } else {
+                          setCameraPermissionHint('خطأ في الوصول للكاميرا - تأكد من الأذونات');
+                        }
                       });
                     }}
                     className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
