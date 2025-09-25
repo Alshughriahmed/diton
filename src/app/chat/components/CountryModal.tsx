@@ -1,4 +1,5 @@
 "use client";
+import { safeFetch } from "../safeFetch";
 import { isFFA } from "@/utils/ffa";
 import { useEffect, useMemo, useState } from "react";
 import { getAllRegions, Region } from "@/lib/regions";
@@ -19,12 +20,12 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
   useEffect(() => {
     setRegions(getAllRegions());
     // user country
-    fetch("/api/geo").then(r=>r.json()).then(j=>{
+    safeFetch("/api/geo").then(r=>r.json()).then(j=>{
       const code = (j?.countryCode || j?.country || "").toString().toUpperCase();
       if (code && /^[A-Z]{2}$/.test(code)) setUserCode(code);
     }).catch(()=>{});
     // vip status
-    fetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
+    safeFetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
       setIsVip(!!(j?.isVip || j?.vip));
     }).catch(()=>{});
   }, []);
