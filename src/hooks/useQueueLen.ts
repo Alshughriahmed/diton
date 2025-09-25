@@ -1,4 +1,5 @@
 "use client";
+import { safeFetch } from "../app/chat/safeFetch";
 import { useEffect, useState } from "react";
 type Mode = "memory" | "redis" | null;
 export function useQueueLen(intervalMs: number = 5000) {
@@ -7,7 +8,7 @@ export function useQueueLen(intervalMs: number = 5000) {
   useEffect(() => {
     let stop = false;
     const tick = () =>
-      fetch("/api/rtc/qlen", { cache: "no-store" })
+      safeFetch("/api/rtc/qlen", { cache: "no-store" })
         .then((r) => r.json())
         .then((j) => {
           if (stop) return;
