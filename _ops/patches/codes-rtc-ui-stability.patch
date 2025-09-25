@@ -1,228 +1,3064 @@
 diff --git a/src/app/chat/ChatClient.tsx b/src/app/chat/ChatClient.tsx
+
 index 5fe9c85..073329e 100644
+
 --- a/src/app/chat/ChatClient.tsx
+
 +++ b/src/app/chat/ChatClient.tsx
+
 @@ -28,8 +28,7 @@ import { useFilters } from "@/state/filters";
- import type { GenderOpt } from "@/utils/filters";
- import ChatComposer from "@/components/chat/ChatComposer";
- import LikeSystem from "@/components/chat/LikeSystem";
--import PeerInfoCard from "@/components/chat/PeerInfoCard";
--import PeerMetadata from "@/components/chat/PeerMetadata";
-+import PeerBadge from "@/components/chat/PeerBadge";
- import MyControls from "@/components/chat/MyControls";
- import UpsellModal from "@/components/chat/UpsellModal";
- import ChatToolbar from "./components/ChatToolbar";
+
+&nbsp;import type { GenderOpt } from "@/utils/filters";
+
+&nbsp;import ChatComposer from "@/components/chat/ChatComposer";
+
+&nbsp;import LikeSystem from "@/components/chat/LikeSystem";
+
+\-import PeerInfoCard from "@/components/chat/PeerInfoCard";
+
+\-import PeerMetadata from "@/components/chat/PeerMetadata";
+
+\+import PeerBadge from "@/components/chat/PeerBadge";
+
+&nbsp;import MyControls from "@/components/chat/MyControls";
+
+&nbsp;import UpsellModal from "@/components/chat/UpsellModal";
+
+&nbsp;import ChatToolbar from "./components/ChatToolbar";
+
 @@ -37,6 +36,7 @@ import ChatMessagingBar from "./components/ChatMessagingBar";
- import MessageHud from "./components/MessageHud";
- import FilterBar from "./components/FilterBar";
- import LikeHud from "./LikeHud";
-+import { safeFetch } from "./safeFetch";
- // import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
- import { getMobileOptimizer } from "@/lib/mobile";
- import { toast } from "@/lib/ui/toast";
+
+&nbsp;import MessageHud from "./components/MessageHud";
+
+&nbsp;import FilterBar from "./components/FilterBar";
+
+&nbsp;import LikeHud from "./LikeHud";
+
+\+import { safeFetch } from "./safeFetch";
+
+&nbsp;// import QueueBadge from "@/components/chat/QueueBadge"; // Hidden per requirements
+
+&nbsp;import { getMobileOptimizer } from "@/lib/mobile";
+
+&nbsp;import { toast } from "@/lib/ui/toast";
+
 @@ -102,7 +102,7 @@ export default function ChatClient(){
-   const [paused, setPaused] = useState(false);
-   const [showMessaging, setShowMessaging] = useState(false);
-   const [showUpsell, setShowUpsell] = useState(false);
--  const { profile } = useProfile();
-+  const { profile, setProfile } = useProfile();
-   const [rtcPhase, setRtcPhase] = useState<'idle' | 'searching' | 'matched' | 'connected' | 'stopped'>('idle');
-   const [phase, setPhase] = useState<'idle'|'searching'|'matched'|'connected'>('idle');
-   const [pair, setPair] = useState<{id?:string, role?:'caller'|'callee'}>({});
+
+&nbsp;  const \[paused, setPaused] = useState(false);
+
+&nbsp;  const \[showMessaging, setShowMessaging] = useState(false);
+
+&nbsp;  const \[showUpsell, setShowUpsell] = useState(false);
+
+\-  const { profile } = useProfile();
+
+\+  const { profile, setProfile } = useProfile();
+
+&nbsp;  const \[rtcPhase, setRtcPhase] = useState<'idle' | 'searching' | 'matched' | 'connected' | 'stopped'>('idle');
+
+&nbsp;  const \[phase, setPhase] = useState<'idle'|'searching'|'matched'|'connected'>('idle');
+
+&nbsp;  const \[pair, setPair] = useState<{id?:string, role?:'caller'|'callee'}>({});
+
 @@ -114,12 +114,42 @@ export default function ChatClient(){
-     likes: 0,
-     isOnline: true,
-     country: "",
--    city: "",
-+    city: "",
-     gender: "",
-     age: 0
-   });
-   const isMobile = useMemo(()=>getMobileOptimizer(navigator.userAgent).isMobile,[navigator.userAgent]);
- 
-+  useEffect(() => {
-+    try {
-+      const storedGender = localStorage.getItem("gender");
-+      if (storedGender) {
-+        setProfile((prev) => ({
-+          ...prev,
-+          gender: storedGender as any
-+        }));
-+      }
-+    } catch {}
-+  }, [setProfile]);
-+
-+  useEffect(() => {
-+    if (typeof document === "undefined") return;
-+    const handleRtcPhase = (event: any) => {
-+      if (event?.detail?.phase === "dc-open") {
-+        console.log("[RTC_PHASE] dc-open");
-+      }
-+    };
-+    document.addEventListener("rtc:phase", handleRtcPhase as any);
-+    return () => document.removeEventListener("rtc:phase", handleRtcPhase as any);
-+  }, []);
-+
-+  useEffect(() => {
-+    const onPair = (evt: CustomEvent<{ pairId: string; pairGender?: string; meGender?: string }>) => {
-+      const gender = evt.detail?.meGender;
-+      if (gender) setProfile((prev) => ({ ...prev, gender }));
-+    };
-+    window.addEventListener("rtc:pair", onPair as any);
-+    return () => window.removeEventListener("rtc:pair", onPair as any);
-+  }, [setProfile]);
-+
-   const filters = useFilters();
-   const peerGenderOpt = useMemo(()=>filters.genderOpt,[filters.genderOpt]);
- 
+
+&nbsp;    likes: 0,
+
+&nbsp;    isOnline: true,
+
+&nbsp;    country: "",
+
+\-    city: "",
+
+\+    city: "",
+
+&nbsp;    gender: "",
+
+&nbsp;    age: 0
+
+&nbsp;  });
+
+&nbsp;  const isMobile = useMemo(()=>getMobileOptimizer(navigator.userAgent).isMobile,\[navigator.userAgent]);
+
+&nbsp;
+
+\+  useEffect(() => {
+
+\+    try {
+
+\+      const storedGender = localStorage.getItem("gender");
+
+\+      if (storedGender) {
+
+\+        setProfile((prev) => ({
+
+\+          ...prev,
+
+\+          gender: storedGender as any
+
+\+        }));
+
+\+      }
+
+\+    } catch {}
+
+\+  }, \[setProfile]);
+
+\+
+
+\+  useEffect(() => {
+
+\+    if (typeof document === "undefined") return;
+
+\+    const handleRtcPhase = (event: any) => {
+
+\+      if (event?.detail?.phase === "dc-open") {
+
+\+        console.log("\[RTC\_PHASE] dc-open");
+
+\+      }
+
+\+    };
+
+\+    document.addEventListener("rtc:phase", handleRtcPhase as any);
+
+\+    return () => document.removeEventListener("rtc:phase", handleRtcPhase as any);
+
+\+  }, \[]);
+
+\+
+
+\+  useEffect(() => {
+
+\+    const onPair = (evt: CustomEvent<{ pairId: string; pairGender?: string; meGender?: string }>) => {
+
+\+      const gender = evt.detail?.meGender;
+
+\+      if (gender) setProfile((prev) => ({ ...prev, gender }));
+
+\+    };
+
+\+    window.addEventListener("rtc:pair", onPair as any);
+
+\+    return () => window.removeEventListener("rtc:pair", onPair as any);
+
+\+  }, \[setProfile]);
+
+\+
+
+&nbsp;  const filters = useFilters();
+
+&nbsp;  const peerGenderOpt = useMemo(()=>filters.genderOpt,\[filters.genderOpt]);
+
+&nbsp;
+
 @@ -154,6 +184,8 @@ export default function ChatClient(){
-     const handleMatched = (e: CustomEvent<{pairId?:string,role?:'caller'|'callee'}>) => {
-       setPhase("matched");
-       setPair({ id: e.detail?.pairId, role: e.detail?.role });
-+      console.log("[RTC_MATCH] matched", e.detail);
-+      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: e.detail }));
-     };
- 
-     const handleConnected = () => {
+
+&nbsp;    const handleMatched = (e: CustomEvent<{pairId?:string,role?:'caller'|'callee'}>) => {
+
+&nbsp;      setPhase("matched");
+
+&nbsp;      setPair({ id: e.detail?.pairId, role: e.detail?.role });
+
+\+      console.log("\[RTC\_MATCH] matched", e.detail);
+
+\+      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: e.detail }));
+
+&nbsp;    };
+
+&nbsp;
+
+&nbsp;    const handleConnected = () => {
+
 @@ -175,6 +207,9 @@ export default function ChatClient(){
-       setPhase("idle");
-       setPair({});
-       setRemoteStream(null);
-+      try {
-+        window.dispatchEvent(new Event("ui:next"));
-+      } catch {}
-     };
- 
-     const handleRtcPhase = (event: CustomEvent<{phase: typeof phases[number] | 'stopped'}>) => {
+
+&nbsp;      setPhase("idle");
+
+&nbsp;      setPair({});
+
+&nbsp;      setRemoteStream(null);
+
+\+      try {
+
+\+        window.dispatchEvent(new Event("ui:next"));
+
+\+      } catch {}
+
+&nbsp;    };
+
+&nbsp;
+
+&nbsp;    const handleRtcPhase = (event: CustomEvent<{phase: typeof phases\[number] | 'stopped'}>) => {
+
 @@ -203,7 +238,7 @@ export default function ChatClient(){
-   const doMatch = useCallback(async (direction: "next" | "prev") => {
-     if(rtcPhase === "searching") return;
-     setRtcPhase("searching");
--    const response = await fetch(`/api/rtc/${direction}`, {
-+    const response = await safeFetch(`/api/rtc/${direction}`, {
-       method: "POST",
-       headers: { "Content-Type": "application/json" },
-       body: JSON.stringify({ pairId: pair.id })
+
+&nbsp;  const doMatch = useCallback(async (direction: "next" | "prev") => {
+
+&nbsp;    if(rtcPhase === "searching") return;
+
+&nbsp;    setRtcPhase("searching");
+
+\-    const response = await fetch(`/api/rtc/${direction}`, {
+
+\+    const response = await safeFetch(`/api/rtc/${direction}`, {
+
+&nbsp;      method: "POST",
+
+&nbsp;      headers: { "Content-Type": "application/json" },
+
+&nbsp;      body: JSON.stringify({ pairId: pair.id })
+
 @@ -216,11 +251,13 @@ export default function ChatClient(){
-     const shouldAutoStart = (isFFA() || vip) && !paused;
-     if (shouldAutoStart) {
-       startRTC();
-+    } else {
-+      console.log("[AUTO_START] skipped", { shouldAutoStart, isFFA: isFFA(), vip, paused });
-     }
-   }, [pair.id, paused, startRTC, rtcPhase, vip]);
- 
-   const startRTC = useCallback(async () => {
--    const next = await fetch("/api/rtc/start", {
-+    const next = await safeFetch("/api/rtc/start", {
-       method: "POST",
-       headers: {
-         "Content-Type": "application/json"
+
+&nbsp;    const shouldAutoStart = (isFFA() || vip) \&\& !paused;
+
+&nbsp;    if (shouldAutoStart) {
+
+&nbsp;      startRTC();
+
+\+    } else {
+
+\+      console.log("\[AUTO\_START] skipped", { shouldAutoStart, isFFA: isFFA(), vip, paused });
+
+&nbsp;    }
+
+&nbsp;  }, \[pair.id, paused, startRTC, rtcPhase, vip]);
+
+&nbsp;
+
+&nbsp;  const startRTC = useCallback(async () => {
+
+\-    const next = await fetch("/api/rtc/start", {
+
+\+    const next = await safeFetch("/api/rtc/start", {
+
+&nbsp;      method: "POST",
+
+&nbsp;      headers: {
+
+&nbsp;        "Content-Type": "application/json"
+
 @@ -229,6 +266,7 @@ export default function ChatClient(){
-     if (!next.ok) {
-       toast.error("Something went wrong");
-       setRtcPhase("idle");
-+      console.error("[RTC_START_ERROR]", next.status);
-       return;
-     }
-     const nextBody = await next.json();
+
+&nbsp;    if (!next.ok) {
+
+&nbsp;      toast.error("Something went wrong");
+
+&nbsp;      setRtcPhase("idle");
+
+\+      console.error("\[RTC\_START\_ERROR]", next.status);
+
+&nbsp;      return;
+
+&nbsp;    }
+
+&nbsp;    const nextBody = await next.json();
+
+@@ -246,17 +284,29 @@ export default function ChatClient(){
+
+&nbsp;      setRtcPhase("idle");
+
+&nbsp;      return;
+
+&nbsp;    }
+
+\-    if (profile?.gender) options.gender = profile.gender;
+
+\-    if (filters.genderOpt?.length) options.peer\_gender = filters.genderOpt.join(",");
+
+\+    try {
+
+\+      const storedGender = localStorage.getItem("gender");
+
+\+      if (storedGender \&\& !options.gender) options.gender = storedGender;
+
+\+    } catch {}
+
+\+    if (profile?.gender) options.gender = profile.gender;
+
+\+    if (filters.genderOpt?.length) options.peer\_gender = filters.genderOpt.join(",");
+
+&nbsp;    if (filters.countryCode) options.country = filters.countryCode;
+
+\-    await start(localStream, (phase) => {
+
+\+    await start(localStream, (phase) => {
+
+\+      console.log("\[RTC\_PHASE]", phase);
+
+&nbsp;      setRtcPhase(phase);
+
+&nbsp;      setPhase(phase === "connected" ? "connected" : phase === "matched" ? "matched" : "searching");
+
+&nbsp;    });
+
+&nbsp;  }, \[filters, localStream, profile, setRtcPhase]);
+
+&nbsp;
+
+&nbsp;  useEffect(() => {
+
+\-    safeAbortRef.current = false;
+
+\+    safeAbortRef.current = false;
+
+\+    const onPair = (evt: CustomEvent<{ meGender?: string }>) => {
+
+\+      if (evt.detail?.meGender) {
+
+\+        setProfile((prev) => ({ ...prev, gender: evt.detail?.meGender as any }));
+
+\+      }
+
+\+    };
+
+\+    window.addEventListener("rtc:pair", onPair as any);
+
+&nbsp;    const startIfNeeded = async () => {
+
+&nbsp;      if (isFFA() || vip) {
+
+&nbsp;        setRtcPhase("searching");
+
+@@ -264,11 +314,22 @@ export default function ChatClient(){
+
+&nbsp;      }
+
+&nbsp;    };
+
+&nbsp;    startIfNeeded();
+
+\+    return () => window.removeEventListener("rtc:pair", onPair as any);
+
+&nbsp;  }, \[vip]);
+
+&nbsp;
+
+&nbsp;  const startFlow = useCallback(async () => {
+
+&nbsp;    safeAbortRef.current = false;
+
+\-    const response = await fetch("/api/rtc/start", {
+
+\+    let gender = profile?.gender;
+
+\+    if (!gender) {
+
+\+      try {
+
+\+        gender = localStorage.getItem("gender") as any;
+
+\+      } catch {
+
+\+        gender = undefined;
+
+\+      }
+
+\+    }
+
+\+    const response = await safeFetch("/api/rtc/start", {
+
+&nbsp;      method: "POST",
+
+&nbsp;      headers: {
+
+&nbsp;        "Content-Type": "application/json"
+
+@@ -278,13 +339,18 @@ export default function ChatClient(){
+
+&nbsp;    if (!response.ok) {
+
+&nbsp;      toast.error("Unable to start RTC session");
+
+&nbsp;      setRtcPhase("idle");
+
+\+      console.error("\[RTC\_START\_FLOW\_ERROR]", response.status);
+
+&nbsp;      return;
+
+&nbsp;    }
+
+&nbsp;    const body = await response.json();
+
+\-    const options = body?.options ?? {};
+
+\+    const options = { ...(body?.options ?? {}) };
+
+\+    if (gender) options.gender = gender;
+
+&nbsp;    await start(localStream, setRtcPhase, options);
+
+&nbsp;  }, \[localStream, setRtcPhase]);
+
+&nbsp;
+
+\+  const handleRtcPair = useCallback((event: CustomEvent<{ pairGender?: string }>) => {
+
+\+    if (event.detail?.pairGender) setPeerProfile((prev) => ({ ...prev, gender: event.detail?.pairGender || "" }));
+
+\+  }, \[]);
+
+\+
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    const handleQueue = (event: CustomEvent<{ length: number }>) => {
+
+&nbsp;      setQueueLen(event.detail?.length ?? 0);
+
+@@ -298,6 +364,8 @@ export default function ChatClient(){
+
+&nbsp;      setRtcPhase("idle");
+
+&nbsp;      setPair({});
+
+&nbsp;      setRemoteStream(null);
+
+\+      safeAbortRef.current = false;
+
+\+      console.log("\[RTC\_FLOW] stopped");
+
+&nbsp;    };
+
+&nbsp;
+
+&nbsp;    const handlePeer = (event: CustomEvent<{peer?:PeerProfile}>) => {
+
+@@ -308,6 +376,7 @@ export default function ChatClient(){
+
+&nbsp;
+
+&nbsp;    window.addEventListener("queue:length", handleQueue as EventListener);
+
+&nbsp;    window.addEventListener("rtc:stopped", handleStopped as EventListener);
+
+\+    window.addEventListener("rtc:pair", handleRtcPair as EventListener);
+
+&nbsp;    window.addEventListener("rtc:peer", handlePeer as EventListener);
+
+&nbsp;    return () => {
+
+&nbsp;      window.removeEventListener("queue:length", handleQueue as EventListener);
+
 @@ -317,7 +386,8 @@ export default function ChatClient(){
-       if (remoteStream) {
-         remoteStream.getTracks().forEach(track => track.stop());
-         setRemoteStream(null);
--        emit("ui:next");
-+        console.log("AUTO_NEXT: fired");
-+        emit("ui:next");
-       }
-       if (localStream) {
-         localStream.getTracks().forEach(track => track.stop());
+
+&nbsp;      if (remoteStream) {
+
+&nbsp;        remoteStream.getTracks().forEach(track => track.stop());
+
+&nbsp;        setRemoteStream(null);
+
+\-        emit("ui:next");
+
+\+        console.log("AUTO\_NEXT: fired");
+
+\+        emit("ui:next");
+
+&nbsp;      }
+
+&nbsp;      if (localStream) {
+
+&nbsp;        localStream.getTracks().forEach(track => track.stop());
+
 @@ -329,12 +399,15 @@ export default function ChatClient(){
-       setRtcPhase("idle");
-       setPhase("idle");
-       setPair({});
-+      window.dispatchEvent(new Event("ui:next"));
-     };
-   }, [localStream, remoteStream, safeAbortRef]);
- 
-   useEffect(() => {
-     const handleNext = () => {
-       safeAbortRef.current = true;
-+      console.log("AUTO_NEXT: fired");
-+      window.dispatchEvent(new Event("ui:next"));
-       setRtcPhase("searching");
-       setPair({});
-       if (remoteStream) {
+
+&nbsp;      setRtcPhase("idle");
+
+&nbsp;      setPhase("idle");
+
+&nbsp;      setPair({});
+
+\+      window.dispatchEvent(new Event("ui:next"));
+
+&nbsp;    };
+
+&nbsp;  }, \[localStream, remoteStream, safeAbortRef]);
+
+&nbsp;
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    const handleNext = () => {
+
+&nbsp;      safeAbortRef.current = true;
+
+\+      console.log("AUTO\_NEXT: fired");
+
+\+      window.dispatchEvent(new Event("ui:next"));
+
+&nbsp;      setRtcPhase("searching");
+
+&nbsp;      setPair({});
+
+&nbsp;      if (remoteStream) {
+
+@@ -350,6 +423,7 @@ export default function ChatClient(){
+
+&nbsp;      emit("ui:prev");
+
+&nbsp;    };
+
+&nbsp;
+
+\+    window.addEventListener("rtc:pair", handleRtcPair as EventListener);
+
+&nbsp;    window.addEventListener("ui:next", handleNext);
+
+&nbsp;    window.addEventListener("ui:prev", handlePrev);
+
+&nbsp;    window.addEventListener("ui:toggleMic", toggleMic);
+
+@@ -358,6 +432,7 @@ export default function ChatClient(){
+
+&nbsp;      window.removeEventListener("ui:next", handleNext);
+
+&nbsp;      window.removeEventListener("ui:prev", handlePrev);
+
+&nbsp;      window.removeEventListener("ui:toggleMic", toggleMic);
+
+\+      window.removeEventListener("rtc:pair", handleRtcPair as EventListener);
+
+&nbsp;    };
+
+&nbsp;  }, \[emit, remoteStream, safeAbortRef, toggleCam, toggleMic]);
+
+&nbsp;
+
+@@ -389,12 +464,18 @@ export default function ChatClient(){
+
+&nbsp;  }, \[localStream, peerProfile]);
+
+&nbsp;
+
+&nbsp;  const handlePair = useCallback(async () => {
+
+\-    const response = await fetch("/api/rtc/pair", { method: "POST" });
+
+\+    const response = await safeFetch("/api/rtc/pair", { method: "POST" });
+
+&nbsp;    if (!response.ok) {
+
+&nbsp;      toast.error("Unable to pair");
+
+&nbsp;      setRtcPhase("idle");
+
+\+      console.error("\[PAIR\_ERROR]", response.status);
+
+&nbsp;      return;
+
+&nbsp;    }
+
+\+    let meGender: string | undefined;
+
+\+    try {
+
+\+      meGender = localStorage.getItem("gender") ?? undefined;
+
+\+    } catch {}
+
+\+
+
+&nbsp;    const body = await response.json();
+
+&nbsp;    setPair({
+
+&nbsp;      id: body?.pairId,
+
+@@ -405,12 +486,25 @@ export default function ChatClient(){
+
+&nbsp;    setPeerProfile({
+
+&nbsp;      ...peerProfile,
+
+&nbsp;      gender: body?.peer?.gender || "",
+
+\-      country: body?.peer?.country || "",
+
+\-      likes: body?.peer?.likes || 0,
+
+\-      isOnline: body?.peer?.isOnline ?? true
+
+\+      country: body?.peer?.country || "",
+
+\+      likes: body?.peer?.likes || 0,
+
+\+      isOnline: body?.peer?.isOnline ?? true
+
+&nbsp;    });
+
+\+    window.dispatchEvent(new CustomEvent("rtc:pair", {
+
+\+      detail: {
+
+\+        pairId: body?.pairId,
+
+\+        pairGender: body?.peer?.gender || "",
+
+\+        meGender
+
+\+      }
+
+\+    }));
+
+\+    if (meGender) {
+
+\+      setProfile((prev) => ({ ...prev, gender: meGender as any }));
+
+\+    }
+
+&nbsp;    return body;
+
+\-  }, \[peerProfile]);
+
+\+  }, \[peerProfile, setProfile]);
+
+\+
+
+\+  useEffect(() => {
+
+\+    if (pair.id) console.log("\[PAIR\_STATE]", pair);
+
+\+  }, \[pair]);
+
+&nbsp;
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    const handleRTCMatch = async () => {
+
+@@ -418,7 +512,7 @@ export default function ChatClient(){
+
+&nbsp;
+
+&nbsp;      setRtcPhase("connected");
+
+&nbsp;      setPhase("connected");
+
+\-      const rtcResponse = await fetch("/api/rtc/accept", {
+
+\+      const rtcResponse = await safeFetch("/api/rtc/accept", {
+
+&nbsp;        method: "POST",
+
+&nbsp;        headers: {
+
+&nbsp;          "Content-Type": "application/json"
+
+@@ -426,12 +520,14 @@ export default function ChatClient(){
+
+&nbsp;          offer
+
+&nbsp;        })
+
+&nbsp;      });
+
+\-      if (!rtcResponse.ok) return;
+
+\+      if (!rtcResponse.ok) {
+
+\+        console.error("\[RTC\_ACCEPT\_ERROR]", rtcResponse.status);
+
+\+        return;
+
+\+      }
+
+&nbsp;      const { answer, iceServers } = await rtcResponse.json();
+
+&nbsp;
+
+&nbsp;      if (!peerConnectionRef.current) return;
+
+&nbsp;
+
+\-      await peerConnectionRef.current.setRemoteDescription(answer);
+
+\+      await peerConnectionRef.current.setRemoteDescription(answer);
+
+&nbsp;
+
+&nbsp;      if (iceServers?.length) {
+
+&nbsp;        setIceServers(iceServers);
+
+@@ -443,6 +539,7 @@ export default function ChatClient(){
+
+&nbsp;        await peerConnectionRef.current.addIceCandidate(candidate);
+
+&nbsp;      }
+
+&nbsp;    };
+
+\+
+
+&nbsp;    window.addEventListener("rtc:match", handleRTCMatch as EventListener);
+
+&nbsp;    return () => window.removeEventListener("rtc:match", handleRTCMatch as EventListener);
+
+&nbsp;  }, \[peerConnectionRef, setRtcPhase, setPhase, pair]);
+
+@@ -468,11 +565,21 @@ export default function ChatClient(){
+
+&nbsp;
+
+&nbsp;  return (
+
+&nbsp;    <div className="relative min-h-svh">
+
+\-      <PeerInfoCard
+
+\-        profile={peerProfile}
+
+\-        className="absolute top-2 left-2 max-w-\[45vw]"
+
+\-        showExtra
+
+\-      />
+
+\+      <div className="absolute top-2 left-2 flex flex-col gap-2">
+
+\+        <PeerBadge
+
+\+          position="top-left"
+
+\+          profile={peerProfile}
+
+\+        />
+
+\+      </div>
+
+\+      <div className="absolute top-2 right-2 flex flex-col gap-2">
+
+\+        <PeerBadge
+
+\+          position="top-right"
+
+\+          profile={peerProfile}
+
+\+        />
+
+\+      </div>
+
+\+      <div className="absolute bottom-2 left-2 flex flex-col gap-2">
+
+\+        <PeerBadge position="bottom-left" profile={peerProfile} />
+
+\+      </div>
+
+\+      <div className="absolute bottom-2 right-2 flex flex-col gap-2">
+
+\+        <PeerBadge position="bottom-right" profile={peerProfile} />
+
+\+      </div>
+
+&nbsp;
+
+&nbsp;      <div className="flex flex-col min-h-svh pb-\[calc(env(safe-area-inset-bottom)+140px)]">
+
+&nbsp;        <FilterBar />
+
+@@ -490,6 +597,7 @@ export default function ChatClient(){
+
+&nbsp;        showMessaging={showMessaging}
+
+&nbsp;        peer={peerProfile}
+
+&nbsp;        onStop={stopFlow}
+
+\+        pairId={pair?.id ?? ""}
+
+&nbsp;      />
+
+&nbsp;
+
+&nbsp;      <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
+
 diff --git a/src/app/chat/components/ChatMessagingBar.tsx b/src/app/chat/components/ChatMessagingBar.tsx
+
 index c7b8be9..3c54230 100644
+
 --- a/src/app/chat/components/ChatMessagingBar.tsx
+
 +++ b/src/app/chat/components/ChatMessagingBar.tsx
+
 @@ -1,20 +1,48 @@
- "use client";
--import { useEffect, useState, useRef } from "react";
--import { emit } from "@/utils/events";
--import type { PeerProfile } from "@/types";
--import safeAbort from "@/utils/safeAbort";
--import { cn } from "@/lib/utils";
--import { safeFetch } from "../safeFetch";
-+import { useEffect, useState, useRef, useCallback } from "react";
-+import { emit } from "@/utils/events";
-+import type { PeerProfile } from "@/types";
-+import safeAbort from "@/utils/safeAbort";
-+import { cn } from "@/lib/utils";
-+import { safeFetch } from "../safeFetch";
-+import { useAutoScroll } from "@/hooks/useAutoScroll";
- 
- type Message = {
-   id: string;
-   text: string;
-   sender: "me" | "peer";
- };
- 
- export default function ChatMessagingBar({
-   showMessaging,
-   peer,
--  onStop
-+  onStop,
-+  pairId
- }: {
-   showMessaging: boolean;
-   peer: PeerProfile;
--  onStop: () => void;
-+  onStop: () => void;
-+  pairId: string;
- }) {
--  const [messages, setMessages] = useState<Message[]>([]);
--  const [typing, setTyping] = useState(false);
-+  const [messages, setMessages] = useState<Message[]>([]);
-+  const [typing, setTyping] = useState(false);
-+  const containerRef = useAutoScroll<HTMLDivElement>();
-+
-+  const resetMessages = useCallback(() => {
-+    setMessages([]);
-+    setTyping(false);
-+  }, []);
-+
-+  useEffect(() => {
-+    const handlePair = () => {
-+      resetMessages();
-+    };
-+    window.addEventListener("rtc:pair", handlePair as EventListener);
-+    return () => window.removeEventListener("rtc:pair", handlePair as EventListener);
-+  }, [resetMessages]);
-+
-+  useEffect(() => {
-+    if (!pairId) return;
-+    resetMessages();
-+  }, [pairId, resetMessages]);
-+
-   const inputRef = useRef<HTMLInputElement | null>(null);
-   const listRef = useRef<HTMLDivElement | null>(null);
- 
+
+&nbsp;"use client";
+
+\-import { useEffect, useState, useRef } from "react";
+
+\-import { emit } from "@/utils/events";
+
+\-import type { PeerProfile } from "@/types";
+
+\-import safeAbort from "@/utils/safeAbort";
+
+\-import { cn } from "@/lib/utils";
+
+\-import { safeFetch } from "../safeFetch";
+
+\+import { useEffect, useState, useRef, useCallback } from "react";
+
+\+import { emit } from "@/utils/events";
+
+\+import type { PeerProfile } from "@/types";
+
+\+import safeAbort from "@/utils/safeAbort";
+
+\+import { cn } from "@/lib/utils";
+
+\+import { safeFetch } from "../safeFetch";
+
+\+import { useAutoScroll } from "@/hooks/useAutoScroll";
+
+&nbsp;
+
+&nbsp;type Message = {
+
+&nbsp;  id: string;
+
+&nbsp;  text: string;
+
+&nbsp;  sender: "me" | "peer";
+
+&nbsp;};
+
+&nbsp;
+
+&nbsp;export default function ChatMessagingBar({
+
+&nbsp;  showMessaging,
+
+&nbsp;  peer,
+
+\-  onStop
+
+\+  onStop,
+
+\+  pairId
+
+&nbsp;}: {
+
+&nbsp;  showMessaging: boolean;
+
+&nbsp;  peer: PeerProfile;
+
+\-  onStop: () => void;
+
+\+  onStop: () => void;
+
+\+  pairId: string;
+
+&nbsp;}) {
+
+\-  const \[messages, setMessages] = useState<Message\[]>(\[]);
+
+\-  const \[typing, setTyping] = useState(false);
+
+\+  const \[messages, setMessages] = useState<Message\[]>(\[]);
+
+\+  const \[typing, setTyping] = useState(false);
+
+\+  const containerRef = useAutoScroll<HTMLDivElement>();
+
+\+
+
+\+  const resetMessages = useCallback(() => {
+
+\+    setMessages(\[]);
+
+\+    setTyping(false);
+
+\+  }, \[]);
+
+\+
+
+\+  useEffect(() => {
+
+\+    const handlePair = () => {
+
+\+      resetMessages();
+
+\+    };
+
+\+    window.addEventListener("rtc:pair", handlePair as EventListener);
+
+\+    return () => window.removeEventListener("rtc:pair", handlePair as EventListener);
+
+\+  }, \[resetMessages]);
+
+\+
+
+\+  useEffect(() => {
+
+\+    if (!pairId) return;
+
+\+    resetMessages();
+
+\+  }, \[pairId, resetMessages]);
+
+\+
+
+&nbsp;  const inputRef = useRef<HTMLInputElement | null>(null);
+
+&nbsp;  const listRef = useRef<HTMLDivElement | null>(null);
+
+&nbsp;
+
 @@ -24,6 +52,7 @@ export default function ChatMessagingBar({
-     return () => {
-       window.removeEventListener("message:new", handler as EventListener);
-     };
-+
-   }, []);
- 
-   useEffect(() => {
+
+&nbsp;    return () => {
+
+&nbsp;      window.removeEventListener("message:new", handler as EventListener);
+
+&nbsp;    };
+
+\+
+
+&nbsp;  }, \[]);
+
+&nbsp;
+
+&nbsp;  useEffect(() => {
+
+@@ -60,6 +89,7 @@ export default function ChatMessagingBar({
+
+&nbsp;          localTypingRef.current = false;
+
+&nbsp;        }
+
+&nbsp;      }, 3000);
+
+\+
+
+&nbsp;      return () => clearTimeout(timeout);
+
+&nbsp;    };
+
+&nbsp;
+
+@@ -82,6 +112,7 @@ export default function ChatMessagingBar({
+
+&nbsp;  const sendMessage = async (text: string) => {
+
+&nbsp;    const trimmed = text.trim();
+
+&nbsp;    if (!trimmed) return;
+
+\+
+
+&nbsp;    const newMessage = { id: crypto.randomUUID(), text: trimmed, sender: "me" as const };
+
+&nbsp;    setMessages(prev => \[...prev, newMessage]);
+
+&nbsp;
+
+@@ -111,7 +142,7 @@ export default function ChatMessagingBar({
+
+&nbsp;  }, \[]);
+
+&nbsp;
+
+&nbsp;  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+
+\-    e.preventDefault();
+
+\+    e.preventDefault();
+
+&nbsp;    const form = e.currentTarget;
+
+&nbsp;    const input = form.elements.namedItem("message") as HTMLInputElement;
+
+&nbsp;    const message = input.value;
+
+@@ -123,7 +154,7 @@ export default function ChatMessagingBar({
+
+&nbsp;
+
+&nbsp;  return (
+
+&nbsp;    <div
+
+\-      className={cn(
+
+\+      ref={containerRef}
+
+\+      className={cn(
+
+&nbsp;        "fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 sm:px-6 pb-\[calc(env(safe-area-inset-bottom)+12px)] pt-4 transition-all duration-300",
+
+&nbsp;        showMessaging ? "translate-y-0" : "translate-y-full"
+
+&nbsp;      )}
+
+@@ -135,6 +166,7 @@ export default function ChatMessagingBar({
+
+&nbsp;        <div className="flex flex-col space-y-2 overflow-y-auto max-h-64 pr-2" ref={listRef}>
+
+&nbsp;          {messages.map((message) => (
+
+&nbsp;            <div
+
+\+              key={message.id}
+
+&nbsp;              className={cn(
+
+&nbsp;                "px-3 py-2 rounded-lg text-sm",
+
+&nbsp;                message.sender === "me" ? "bg-blue-500 text-white ml-auto" : "bg-neutral-700 text-white mr-auto"
+
+diff --git a/src/app/chat/components/ChatToolbar.tsx b/src/app/chat/components/ChatToolbar.tsx
+
+index 9bc0f25..44ca85e 100644
+
+--- a/src/app/chat/components/ChatToolbar.tsx
+
++++ b/src/app/chat/components/ChatToolbar.tsx
+
+@@ -1,21 +1,49 @@
+
+&nbsp;"use client";
+
+&nbsp;import { useEffect, useMemo, useState } from "react";
+
+&nbsp;import { useVip } from "@/hooks/useVip";
+
+&nbsp;import { emit } from "@/utils/events";
+
+&nbsp;import { useQueueLen } from "@/hooks/useQueueLen";
+
+&nbsp;import { useFFA } from "@/hooks/useFFA";
+
+&nbsp;import { usePairId } from "@/state/pair";
+
+&nbsp;import BeautyControls from "@/components/chat/BeautyControls";
+
+&nbsp;import { safeFetch } from "../safeFetch";
+
+\+import { useFilters } from "@/state/filters";
+
+&nbsp;
+
+&nbsp;export default function ChatToolbar() {
+
+\-  const { vip } = useVip();
+
+\-  const \[showBeauty, setShowBeauty] = useState(false);
+
+\-  const queueLen = useQueueLen();
+
+\-  const ffa = useFFA();
+
+\-  const { pairId } = usePairId();
+
+\-  const \[dc, setDc] = useState<RTCDataChannel | null>(null);
+
+\-  const \[gender, setGender] = useState<string>("");
+
+\-  const \[showGenderModal, setShowGenderModal] = useState(false);
+
+\+  const { vip } = useVip();
+
+\+  const \[showBeauty, setShowBeauty] = useState(false);
+
+\+  const queueLen = useQueueLen();
+
+\+  const ffaHook = useFFA();
+
+\+  const { pairId } = usePairId();
+
+\+  const \[dc, setDc] = useState<RTCDataChannel | null>(null);
+
+\+  const \[gender, setGender] = useState<string>("");
+
+\+  const \[showGenderModal, setShowGenderModal] = useState(false);
+
+\+  const filters = useFilters();
+
+\+  const \[dcReady, setDcReady] = useState(false);
+
+\+  const \[isFFAFlag, setIsFFAFlag] = useState(false);
+
+\+
+
+\+  useEffect(() => {
+
+\+    setIsFFAFlag(ffaHook || ((globalThis as any)?.window?.\_\_vip?.FREE\_FOR\_ALL == 1));
+
+\+  }, \[ffaHook]);
+
+\+
+
+\+  useEffect(() => {
+
+\+    try {
+
+\+      const storedGender = localStorage.getItem("gender");
+
+\+      if (storedGender) {
+
+\+        setGender(storedGender);
+
+\+        filters.setGender(storedGender as any);
+
+\+      }
+
+\+    } catch {}
+
+\+  }, \[filters]);
+
+\+
+
+\+  useEffect(() => {
+
+\+    const update = () => {
+
+\+      try {
+
+\+        const channel = (globalThis as any).\_\_ditonaDataChannel as RTCDataChannel | undefined;
+
+\+        setDc(channel ?? null);
+
+\+        setDcReady(!!channel \&\& channel.readyState === "open");
+
+\+      } catch {
+
+\+        setDc(null);
+
+\+        setDcReady(false);
+
+\+      }
+
+\+    };
+
+\+    update();
+
+\+    window.addEventListener("rtc:phase", update);
+
+\+    window.addEventListener("ditona:datachannel-closed", update);
+
+\+    return () => {
+
+\+      window.removeEventListener("rtc:phase", update);
+
+\+      window.removeEventListener("ditona:datachannel-closed", update);
+
+\+    };
+
+\+  }, \[]);
+
+&nbsp;
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    const handlePhase = (event: CustomEvent<{ phase: string }>) => {
+
+@@ -24,6 +52,10 @@ export default function ChatToolbar() {
+
+&nbsp;        setDc(event.detail.phase === "dc-open" ? (globalThis as any).\_\_ditonaDataChannel ?? null : null);
+
+&nbsp;      }
+
+&nbsp;    };
+
+\+    const handlePair = () => {
+
+\+      setDc((globalThis as any).\_\_ditonaDataChannel ?? null);
+
+\+      setDcReady(((globalThis as any).\_\_ditonaDataChannel)?.readyState === "open");
+
+\+    };
+
+&nbsp;    window.addEventListener("rtc:phase", handlePhase as EventListener);
+
+&nbsp;    window.addEventListener("rtc:pair", handlePair as EventListener);
+
+&nbsp;    return () => {
+
+@@ -34,17 +66,30 @@ export default function ChatToolbar() {
+
+&nbsp;  }, \[]);
+
+&nbsp;
+
+&nbsp;  const \[showUpsell, setShowUpsell] = useState(false);
+
+\+
+
+\+  const ffa = useMemo(() => {
+
+\+    if (ffaHook) return true;
+
+\+    try {
+
+\+      return !!((globalThis as any).\_\_vip?.FREE\_FOR\_ALL == 1);
+
+\+    } catch {
+
+\+      return false;
+
+\+    }
+
+\+  }, \[ffaHook]);
+
+\+
+
+\+  const canUseBeauty = ffa || vip;
+
+\+
+
+\+  useEffect(() => {
+
+\+    if (canUseBeauty) setShowUpsell(false);
+
+\+  }, \[canUseBeauty]);
+
+\+
+
+&nbsp;  const \[queueOpen, setQueueOpen] = useState(false);
+
+&nbsp;
+
+&nbsp;  const toggleQueue = () => setQueueOpen(!queueOpen);
+
+&nbsp;
+
+\-  const handlePrev = () => {
+
+\-    if (!ffa \&\& !(dc?.readyState === "open" \&\& pairId)) return;
+
+\-    emit("ui:prev");
+
+\-  };
+
+\+  const handlePrev = () => {
+
+\+    if (!ffa \&\& !(dcReady \&\& pairId)) return;
+
+\+    emit("ui:prev");
+
+\+  };
+
+&nbsp;
+
+\-  const handleNext = () => emit("ui:next");
+
+\+  const handleNext = () => { console.log("AUTO\_NEXT: fired"); emit("ui:next"); };
+
+&nbsp;
+
+&nbsp;  const handleBeauty = () => {
+
+&nbsp;    if (!ffa \&\& !vip) {
+
+@@ -53,10 +98,39 @@ export default function ChatToolbar() {
+
+&nbsp;      return;
+
+&nbsp;    }
+
+&nbsp;    setShowBeauty(!showBeauty);
+
+&nbsp;  };
+
+&nbsp;
+
+\+  const handleGenderSelect = (selectedGender: string) => {
+
+\+    setGender(selectedGender);
+
+\+    try {
+
+\+      localStorage.setItem("gender", selectedGender);
+
+\+      document.cookie = `gender=${selectedGender}; path=/; max-age=31536000`;
+
+\+    } catch {}
+
+\+    filters.setGender(selectedGender as any);
+
+\+  };
+
+\+
+
+\+  useEffect(() => {
+
+\+    const onPair = (event: CustomEvent<{ pairGender?: string; meGender?: string }>) => {
+
+\+      if (event.detail?.pairGender) {
+
+\+        filters.setPeerGender(event.detail.pairGender as any);
+
+\+      }
+
+\+      if (event.detail?.meGender) {
+
+\+        setGender(event.detail.meGender);
+
+\+      }
+
+\+    };
+
+\+    window.addEventListener("rtc:pair", onPair as EventListener);
+
+\+    return () => window.removeEventListener("rtc:pair", onPair as EventListener);
+
+\+  }, \[filters]);
+
+\+
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    if (!showMessaging) return;
+
+&nbsp;    const fetchMessages = async () => {
+
+\-      const response = await fetch("/api/message/history", { cache: "no-store" });
+
+\+      const response = await safeFetch("/api/message/history", { cache: "no-store" });
+
+&nbsp;      if (!response.ok) return;
+
+&nbsp;      const data = await response.json();
+
+&nbsp;      console.log("\[MESSAGES]", data);
+
+@@ -68,7 +142,7 @@ export default function ChatToolbar() {
+
+&nbsp;  }, \[showMessaging]);
+
+&nbsp;
+
+&nbsp;  const handleStop = async () => {
+
+\-    const response = await safeFetch("/api/rtc/stop", { method: "POST" });
+
+\+    const response = await safeFetch("/api/rtc/stop", { method: "POST" });
+
+&nbsp;    if (!response.ok) return;
+
+&nbsp;    emit("ui:stop");
+
+&nbsp;  };
+
+@@ -80,34 +154,36 @@ export default function ChatToolbar() {
+
+&nbsp;        <span className="text-sm text-neutral-300">Users in queue: {queueLen}</span>
+
+&nbsp;        <button className="text-sm text-neutral-400 hover:text-white" onClick={toggleQueue}>
+
+&nbsp;          {queueOpen ? "Hide queue details" : "Show queue details"}
+
+&nbsp;        </button>
+
+&nbsp;      </div>
+
+&nbsp;      {queueOpen \&\& (
+
+&nbsp;        <div className="text-sm text-neutral-400">
+
+&nbsp;          <p>Queue details and stats go here...</p>
+
+&nbsp;        </div>
+
+&nbsp;      )}
+
+&nbsp;      <div className="flex items-center gap-2">
+
+\-        <button
+
+\+        <button
+
+&nbsp;          onClick={handlePrev}
+
+&nbsp;          className="btn btn-secondary"
+
+\-          disabled={!(ffa || (dc?.readyState === "open" \&\& pairId))}
+
+\+          aria-label="Previous match"
+
+\+          disabled={!(ffa || (dcReady \&\& pairId))}
+
+&nbsp;          title={!(ffa || (dc?.readyState === "open" \&\& pairId)) ? "Available during active connection or FFA" : "Previous match"}
+
+&nbsp;        >
+
+&nbsp;          Prev
+
+&nbsp;        </button>
+
+&nbsp;        <button
+
+\-          onClick={handleNext}
+
+\+          onClick={handleNext}
+
+&nbsp;          className="btn btn-primary"
+
+&nbsp;          disabled={queueLen === 0}
+
+&nbsp;        >
+
+&nbsp;          Next
+
+&nbsp;        </button>
+
+&nbsp;        <button
+
+&nbsp;          onClick={handleStop}
+
+&nbsp;          className="btn btn-danger"
+
+&nbsp;        >
+
+&nbsp;          Stop
+
+&nbsp;        </button>
+
+diff --git a/src/app/chat/components/CountryModal.tsx b/src/app/chat/components/CountryModal.tsx
+
+index 687fd3e..c170fcc 100644
+
+--- a/src/app/chat/components/CountryModal.tsx
+
++++ b/src/app/chat/components/CountryModal.tsx
+
+@@ -2,6 +2,7 @@ import { isFFA } from "@/utils/ffa";
+
+&nbsp;import { useEffect, useMemo, useState } from "react";
+
+&nbsp;import { getAllRegions, Region } from "@/lib/regions";
+
+\+import { safeFetch } from "../safeFetch";
+
+&nbsp;
+
+&nbsp;type Props = {
+
+&nbsp;  open: boolean;
+
+@@ -24,7 +25,7 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
+
+&nbsp;      if (code \&\& /^\[A-Z]{2}$/.test(code)) setUserCode(code);
+
+&nbsp;    }).catch(()=>{});
+
+&nbsp;    // vip status
+
+\-    fetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
+
+\+    safeFetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
+
+&nbsp;      setIsVip(!!(j?.isVip || j?.vip));
+
+&nbsp;    }).catch(()=>{});
+
+&nbsp;  }, \[]);
+
+@@ -58,7 +59,11 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
+
+&nbsp;    if (!open) return;
+
+&nbsp;    const getCountry = async () => {
+
+&nbsp;      try {
+
+\-        const response = await fetch("/api/rtc/country", { cache: "no-store" });
+
+\+        const response = await safeFetch("/api/rtc/country", { cache: "no-store" });
+
+&nbsp;        if (!response.ok) return;
+
+&nbsp;        const data = await response.json();
+
+&nbsp;        setUserCode(data?.country || "");
+
+&nbsp;      } catch (error) {
+
+diff --git a/src/app/chat/components/FilterBar.tsx b/src/app/chat/components/FilterBar.tsx
+
+index fd4683b..fd3bd36 100644
+
+--- a/src/app/chat/components/FilterBar.tsx
+
++++ b/src/app/chat/components/FilterBar.tsx
+
+@@ -1,6 +1,6 @@
+
+&nbsp;"use client";
+
+&nbsp;import dynamic from "next/dynamic";
+
+\-import { useState } from "react";
+
+\+import { useEffect, useMemo, useState } from "react";
+
+&nbsp;import { useFFA } from "@/hooks/useFFA";
+
+&nbsp;import type { GenderKey } from "./GenderModal";
+
+&nbsp;
+
+@@ -10,14 +10,46 @@ const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
+
+&nbsp;
+
+&nbsp;export default function FilterBar() {
+
+&nbsp;  const freeForAll = useFFA();
+
+\-
+
+&nbsp;  // FFA runtime detection
+
+\-  const ffa = (typeof window !== "undefined" \&\& (window as any).\_\_vip?.FREE\_FOR\_ALL == 1);
+
+\+  const ffa = useMemo(() => {
+
+\+    if (freeForAll) return true;
+
+\+    if (typeof window !== "undefined" \&\& (window as any).\_\_vip?.FREE\_FOR\_ALL == 1) return true;
+
+\+    return false;
+
+\+  }, \[freeForAll]);
+
+&nbsp;  if (ffa) console.log("FFA\_FORCE: enabled");
+
+&nbsp;
+
+&nbsp;  // DataChannel state for button guards
+
+\-  const dc = (globalThis as any).\_\_ditonaDataChannel;
+
+\-  const filtersEnabled = ffa || dc?.readyState === "open";
+
+\+  const \[dcReady, setDcReady] = useState<boolean>(() => {
+
+\+    try {
+
+\+      const dc = (globalThis as any).\_\_ditonaDataChannel;
+
+\+      return !!dc \&\& dc.readyState === "open";
+
+\+    } catch {
+
+\+      return false;
+
+\+    }
+
+\+  });
+
+\+  useEffect(() => {
+
+\+    if (typeof window === "undefined") return;
+
+\+    const update = () => {
+
+\+      try {
+
+\+        const dc = (globalThis as any).\_\_ditonaDataChannel;
+
+\+        setDcReady(!!dc \&\& dc.readyState === "open");
+
+\+      } catch {
+
+\+        setDcReady(false);
+
+\+      }
+
+\+    };
+
+\+    const onPhase = (event: any) => {
+
+\+      if (event?.detail?.phase === "dc-open") update();
+
+\+    };
+
+\+    window.addEventListener('rtc:phase', onPhase as any);
+
+\+    window.addEventListener('ditona:datachannel-closed', update as any);
+
+\+    update();
+
+\+    return () => {
+
+\+      window.removeEventListener('rtc:phase', onPhase as any);
+
+\+      window.removeEventListener('ditona:datachannel-closed', update as any);
+
+\+    };
+
+\+  }, \[]);
+
+\+
+
+\+  const filtersEnabled = ffa || dcReady;
+
+&nbsp;
+
+&nbsp;  const \[openGender, setOpenGender] = useState(false);
+
+&nbsp;  const \[openCountry, setOpenCountry] = useState(false);
+
+diff --git a/src/app/chat/components/GenderModal.tsx b/src/app/chat/components/GenderModal.tsx
+
+index c73fe95..280eede 100644
+
+--- a/src/app/chat/components/GenderModal.tsx
+
++++ b/src/app/chat/components/GenderModal.tsx
+
+@@ -1,6 +1,7 @@
+
+&nbsp;"use client";
+
+&nbsp;import { isFFA } from "@/utils/ffa";
+
+&nbsp;import { useEffect, useState } from "react";
+
+\+import { safeFetch } from "../safeFetch";
+
+&nbsp;
+
+&nbsp;export type GenderKey = "any" | "female" | "male" | "couples" | "lgbt";
+
+&nbsp;
+
+@@ -23,7 +24,7 @@ export default function GenderModal({ open, onClose, selected, onChange }: Props
+
+&nbsp;  const \[isVip, setIsVip] = useState(false);
+
+&nbsp;
+
+&nbsp;  useEffect(()=>{
+
+\-    fetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
+
+\+    safeFetch("/api/user/vip-status").then(r=>r.json()).then(j=>{
+
+&nbsp;      setIsVip(!!(j?.isVip || j?.vip));
+
+&nbsp;    }).catch(()=>{});
+
+&nbsp;  },\[]);
+
+diff --git a/src/app/chat/components/MessageHud.tsx b/src/app/chat/components/MessageHud.tsx
+
+index d3f94bd..7a0a2d8 100644
+
+--- a/src/app/chat/components/MessageHud.tsx
+
++++ b/src/app/chat/components/MessageHud.tsx
+
+@@ -1,6 +1,7 @@
+
+&nbsp;"use client";
+
+&nbsp;import { useEffect, useState } from "react";
+
+&nbsp;import { cn } from "@/lib/utils";
+
+\+import { useAutoScroll } from "@/hooks/useAutoScroll";
+
+&nbsp;
+
+&nbsp;type Message = {
+
+&nbsp;  id: string;
+
+@@ -13,12 +14,15 @@ export default function MessageHud({ open }: { open: boolean }) {
+
+&nbsp;  const \[messages, setMessages] = useState<Message\[]>(\[]);
+
+&nbsp;  const \[typing, setTyping] = useState(false);
+
+&nbsp;  const \[peerGender, setPeerGender] = useState<string>("");
+
+\+  const containerRef = useAutoScroll<HTMLDivElement>();
+
+&nbsp;
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    const handler = (event: CustomEvent<Message>) => {
+
+&nbsp;      setMessages((prev) => \[...prev, event.detail]);
+
+&nbsp;    };
+
+&nbsp;    window.addEventListener("message:new", handler as EventListener);
+
+\+    return () => {
+
+\+      window.removeEventListener("message:new", handler as EventListener);
+
+\+    };
+
+&nbsp;  }, \[]);
+
+&nbsp;
+
+&nbsp;  useEffect(() => {
+
+@@ -29,6 +33,12 @@ export default function MessageHud({ open }: { open: boolean }) {
+
+&nbsp;        setTyping(true);
+
+&nbsp;      }, 1500);
+
+&nbsp;    };
+
+\+    const onPair = (event: CustomEvent<{ pairGender?: string }>) => {
+
+\+      if (event.detail?.pairGender) {
+
+\+        setPeerGender(event.detail.pairGender);
+
+\+      }
+
+\+    };
+
+\+    window.addEventListener("rtc:pair", onPair as EventListener);
+
+&nbsp;    window.addEventListener("message:typing", handleTyping as EventListener);
+
+&nbsp;    return () => {
+
+&nbsp;      window.removeEventListener("message:typing", handleTyping as EventListener);
+
+@@ -37,13 +47,16 @@ export default function MessageHud({ open }: { open: boolean }) {
+
+&nbsp;
+
+&nbsp;  return (
+
+&nbsp;    <div
+
+\+      ref={containerRef}
+
+&nbsp;      className={cn(
+
+&nbsp;        "fixed bottom-24 right-4 w-80 max-w-\[90vw] rounded-lg bg-neutral-900/90 border border-neutral-700 shadow-lg transition-transform duration-300",
+
+&nbsp;        open ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0 pointer-events-none"
+
+&nbsp;      )}
+
+&nbsp;    >
+
+&nbsp;      <div className="p-3 border-b border-neutral-700">
+
+&nbsp;        <h3 className="text-sm font-semibold text-white">Messages</h3>
+
+\+        {peerGender \&\& <p className="text-xs text-neutral-400">Peer gender: {peerGender}</p>}
+
+\+        {typing \&\& <p className="text-xs text-neutral-400">Peer is typing...</p>}
+
+&nbsp;      </div>
+
+&nbsp;      <div className="max-h-56 overflow-y-auto p-3 space-y-2">
+
+&nbsp;        {messages.map((message) => (
+
+diff --git a/src/app/chat/components/MessageList.tsx b/src/app/chat/components/MessageList.tsx
+
+index 86c318e..0de66e3 100644
+
+--- a/src/app/chat/components/MessageList.tsx
+
++++ b/src/app/chat/components/MessageList.tsx
+
+@@ -1,5 +1,7 @@
+
+&nbsp;import { cn } from "@/lib/utils";
+
+\+import { useAutoScroll } from "@/hooks/useAutoScroll";
+
+&nbsp;
+
+&nbsp;export default function MessageList({ messages, typing }: { messages: { id: string; text: string; sender: "me" | "peer" }\[]; typing: boolean; }) {
+
+\+  const containerRef = useAutoScroll<HTMLDivElement>();
+
+&nbsp;  return (
+
+&nbsp;    <div className="p-3 space-y-2 max-h-64 overflow-y-auto" ref={containerRef}>
+
+&nbsp;      {messages.map((message) => (
+
+diff --git a/src/app/chat/msgSendClient.ts b/src/app/chat/msgSendClient.ts
+
+index 241787f..e6c5b52 100644
+
+--- a/src/app/chat/msgSendClient.ts
+
++++ b/src/app/chat/msgSendClient.ts
+
+@@ -1,5 +1,6 @@
+
+&nbsp;"use client";
+
+&nbsp;import { useCallback, useRef } from "react";
+
+\+import { safeFetch } from "./safeFetch";
+
+&nbsp;
+
+&nbsp;export function useMsgSend() {
+
+&nbsp;  const sending = useRef(false);
+
+@@ -9,7 +10,7 @@ export function useMsgSend() {
+
+&nbsp;      try {
+
+&nbsp;        sending.current = true;
+
+&nbsp;        window.dispatchEvent(new CustomEvent("message:typing", { detail: { typing: true } }));
+
+\-        const response = await fetch("/api/message/send", {
+
+\+        const response = await safeFetch("/api/message/send", {
+
+&nbsp;          method: "POST",
+
+&nbsp;          headers: { "Content-Type": "application/json" },
+
+&nbsp;          body: JSON.stringify({ message })
+
+diff --git a/src/app/chat/rtcFlow.ts b/src/app/chat/rtcFlow.ts
+
+index 1d85a28..80843a0 100644
+
+--- a/src/app/chat/rtcFlow.ts
+
++++ b/src/app/chat/rtcFlow.ts
+
+@@ -1,11 +1,16 @@
+
+&nbsp;import { emit } from "@/utils/events";
+
+\+import { safeFetch } from "./safeFetch";
+
+&nbsp;
+
+&nbsp;type Phases = "idle" | "searching" | "matched" | "connected" | "dc-open" | "stopped";
+
+&nbsp;
+
+&nbsp;type StartOptions = {
+
+&nbsp;  gender?: string;
+
+&nbsp;  peer\_gender?: string;
+
+&nbsp;  country?: string;
+
+\+  \[key: string]: unknown;
+
+&nbsp;};
+
+&nbsp;
+
+\+const logPhase = (phase: Phases) => {
+
+\+  console.log("\[RTC\_PHASE\_FLOW]", phase);
+
++};
+
+\+
+
+&nbsp;export async function start(
+
+&nbsp;  local: MediaStream | null,
+
+&nbsp;  onPhase?: (phase: Phases) => void,
+
+@@ -14,14 +19,30 @@ export async function start(
+
+&nbsp;) {
+
+&nbsp;  const pc = new RTCPeerConnection({
+
+&nbsp;    iceServers,
+
+&nbsp;  });
+
+\+  let mediaInitFailed = false;
+
+&nbsp;  const remoteStream = new MediaStream();
+
+&nbsp;
+
+&nbsp;  pc.ontrack = (event) => {
+
+&nbsp;    event.streams\[0].getTracks().forEach(track => {
+
+&nbsp;      remoteStream.addTrack(track);
+
+&nbsp;    });
+
+&nbsp;  };
+
+&nbsp;
+
+\+  pc.onconnectionstatechange = () => {
+
+\+    if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
+
+\+      console.log("\[RTC\_CONNECTION] state", pc.connectionState);
+
+\+      window.dispatchEvent(new Event("ui:next"));
+
+\+    }
+
+\+  };
+
+\+  pc.oniceconnectionstatechange = () => {
+
+\+    if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+
+\+      console.log("\[RTC\_ICE] state", pc.iceConnectionState);
+
+\+      window.dispatchEvent(new Event("ui:next"));
+
+\+    }
+
+\+  };
+
+\+
+
+&nbsp;  // Add local tracks if available
+
+&nbsp;  local?.getTracks().forEach(track => {
+
+&nbsp;    pc.addTrack(track, local);
+
+&nbsp;  });
+
+@@ -29,6 +50,11 @@ export async function start(
+
+&nbsp;  // Data channel setup
+
+&nbsp;  const dc = pc.createDataChannel("ditona");
+
+&nbsp;  dc.onopen = () => {
+
+\+    dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'dc-open'}}));
+
+\+    (globalThis as any).\_\_ditonaDataChannel = dc;
+
+\+    logPhase("dc-open");
+
+\+    console.log("\[DATA\_CHANNEL] open");
+
+\+    window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "dc-open" } }));
+
+&nbsp;    onPhase?.("dc-open");
+
+&nbsp;  };
+
+&nbsp;  dc.onclose = () => {
+
+@@ -47,16 +73,23 @@ export async function start(
+
+&nbsp;
+
+&nbsp;  const offer = await pc.createOffer();
+
+&nbsp;  await pc.setLocalDescription(offer);
+
+&nbsp;
+
+\+  let answer;
+
+&nbsp;  try {
+
+\-    const response = await fetch("/api/rtc/offer", {
+
+\+    const response = await safeFetch("/api/rtc/offer", {
+
+&nbsp;      method: "POST",
+
+&nbsp;      headers: {
+
+&nbsp;        "Content-Type": "application/json"
+
+&nbsp;      },
+
+&nbsp;      body: JSON.stringify({ offer, options })
+
+&nbsp;    });
+
+\-    if (!response.ok) throw new Error("Failed to create offer");
+
+\-    const { answer, iceServers: newIceServers } = await response.json();
+
+\+    if (!response.ok) throw new Error("Failed to create offer");
+
+\+    const payload = await response.json();
+
+\+    answer = payload.answer;
+
+\+    const newIceServers = payload.iceServers;
+
+\+    if (payload?.options?.gender) {
+
+\+      localStorage.setItem("gender", payload.options.gender);
+
+\+    }
+
+\+
+
+&nbsp;    if (newIceServers?.length) {
+
+&nbsp;      newIceServers.forEach((server: RTCIceServer) => pc.getConfiguration().iceServers?.push(server));
+
+&nbsp;    }
+
+@@ -72,20 +105,46 @@ export async function start(
+
+&nbsp;  } catch (error) {
+
+&nbsp;    console.error("\[RTC\_ERROR]", error);
+
+&nbsp;  }
+
+\-  await pc.setRemoteDescription(answer);
+
+\+  if (answer) await pc.setRemoteDescription(answer);
+
+\+
+
+\+  try {
+
+\+    if (!local) {
+
+\+      console.warn("MEDIA\_INIT\_FAILED");
+
+\+    }
+
+\+    const stream = local ?? await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+
+\+    if (!local) {
+
+\+      console.log("\[MEDIA] using fallback stream");
+
+\+      stream.getTracks().forEach(track => {
+
+\+        pc.addTrack(track, stream);
+
+\+      });
+
+\+    }
+
+\+  } catch (mediaError) {
+
+\+    console.error("\[MEDIA\_ERROR]", mediaError);
+
+\+    mediaInitFailed = true;
+
+\+  }
+
+&nbsp;
+
+&nbsp;  pc.addEventListener("connectionstatechange", () => {
+
+&nbsp;    console.log("\[RTC] connection state:", pc.connectionState);
+
+&nbsp;    if (pc.connectionState === "connected") {
+
+&nbsp;      onPhase?.("connected");
+
+&nbsp;      emit("rtc:match");
+
+\-      emit("ui:next");
+
+\+      console.log("AUTO\_NEXT: fired");
+
+\+      emit("ui:next");
+
+\+      if (mediaInitFailed) console.warn("MEDIA\_INIT\_FAILED");
+
+&nbsp;    }
+
+&nbsp;    if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
+
+&nbsp;      emit("rtc:disconnect");
+
+\-      emit("ui:next");
+
+\+      console.log("AUTO\_NEXT: fired");
+
+\+      emit("ui:next");
+
+&nbsp;    }
+
+&nbsp;  });
+
+&nbsp;
+
+\+  if (mediaInitFailed) {
+
+\+    console.warn("MEDIA\_INIT\_FAILED");
+
+\+  }
+
+\+
+
+\+  if (!local) {
+
+\+    console.warn("MEDIA\_INIT\_FAILED");
+
+\+  }
+
+\+
+
+&nbsp;  return pc;
+
+diff --git a/src/app/chat/safeFetch.ts b/src/app/chat/safeFetch.ts
+
+new file mode 100644
+
+index 0000000..f796048
+
+--- /dev/null
+
++++ b/src/app/chat/safeFetch.ts
+
+@@ -0,0 +1,9 @@
+
+\+export async function safeFetch(input: RequestInfo, init: RequestInit = {}) {
+
+\+  return fetch(input, {
+
+\+    credentials: "include",
+
+\+    cache: "no-store",
+
+\+    ...init,
+
+\+    headers: {
+
+\+      ...(init.headers || {}),
+
+\+    },
+
+\+  });
+
+diff --git a/src/components/chat/BeautyControls.tsx b/src/components/chat/BeautyControls.tsx
+
+index 78381d3..850248f 100644
+
+--- a/src/components/chat/BeautyControls.tsx
+
++++ b/src/components/chat/BeautyControls.tsx
+
+@@ -4,11 +4,16 @@ import { cn } from "@/lib/utils";
+
+&nbsp;import { useVip } from "@/hooks/useVip";
+
+&nbsp;import { useState } from "react";
+
+&nbsp;import Modal from "../Modal";
+
+\+import { useFFA } from "@/hooks/useFFA";
+
+\+import { safeFetch } from "@/app/chat/safeFetch";
+
+&nbsp;
+
+&nbsp;export default function BeautyControls() {
+
+&nbsp;  const \[beautyEnabled, setBeautyEnabled] = useState(false);
+
+&nbsp;  const { vip } = useVip();
+
+\+  const ffa = useFFA();
+
+&nbsp;  const \[showModal, setShowModal] = useState(false);
+
+\+
+
+\+  const isAllowed = vip || ffa;
+
+&nbsp;
+
+&nbsp;  const toggleBeauty = () => {
+
+&nbsp;    if (!vip) {
+
+@@ -23,7 +28,7 @@ export default function BeautyControls() {
+
+&nbsp;    setBeautyEnabled(!beautyEnabled);
+
+&nbsp;  };
+
+&nbsp;
+
+diff --git a/src/components/chat/PeerBadge.tsx b/src/components/chat/PeerBadge.tsx
+
+new file mode 100644
+
+index 0000000..e8107f4
+
+--- /dev/null
+
++++ b/src/components/chat/PeerBadge.tsx
+
+@@ -0,0 +1,113 @@
+
++"use client";
+
+\+import type { PeerProfile } from "@/types";
+
+\+import Image from "next/image";
+
+\+import { cn } from "@/lib/utils";
+
+\+
+
+\+type Position = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+\+
+
+\+const positionClasses: Record<Position, string> = {
+
+\+  "top-left": "items-start text-left",
+
+\+  "top-right": "items-end text-right",
+
+\+  "bottom-left": "items-start text-left",
+
+\+  "bottom-right": "items-end text-right",
+
++};
+
+\+
+
+\+export default function PeerBadge({
+
+\+  profile,
+
+\+  position
+
++}: {
+
+\+  profile: PeerProfile;
+
+\+  position: Position;
+
++}) {
+
+\+  return (
+
+\+    <div
+
+\+      className={cn(
+
+\+        "flex flex-col gap-1 p-3 rounded-xl backdrop-blur-md border border-white/10 bg-white/5 text-white shadow-lg min-w-\[160px] max-w-\[220px]",
+
+\+        positionClasses\[position]
+
+\+      )}
+
+\+    >
+
+\+      <div className="flex items-center gap-2">
+
+\+        <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-lg font-semibold">
+
+\+          {profile?.name?.\[0]?.toUpperCase() || "?"}
+
+\+        </div>
+
+\+        <div>
+
+\+          <h3 className="text-sm font-semibold leading-tight">{profile?.name || "Guest"}</h3>
+
+\+          {profile?.country \&\& (
+
+\+            <p className="text-xs text-white/80">{profile.country}</p>
+
+\+          )}
+
+\+        </div>
+
+\+      </div>
+
+\+      <div className="grid grid-cols-2 gap-2 text-xs">
+
+\+        <div className="px-2 py-1 rounded-lg bg-black/40 border border-white/5">
+
+\+          <p className="text-white/70">Gender</p>
+
+\+          <p className="font-semibold text-white">{profile.gender || "Unknown"}</p>
+
+\+        </div>
+
+\+        <div className="px-2 py-1 rounded-lg bg-black/40 border border-white/5">
+
+\+          <p className="text-white/70">Status</p>
+
+\+          <p className="font-semibold text-green-300">{profile.isOnline ? "Online" : "Offline"}</p>
+
+\+        </div>
+
+\+        <div className="px-2 py-1 rounded-lg bg-black/40 border border-white/5">
+
+\+          <p className="text-white/70">Likes</p>
+
+\+          <p className="font-semibold text-white">{profile.likes ?? 0}</p>
+
+\+        </div>
+
+\+        <div className="px-2 py-1 rounded-lg bg-black/40 border border-white/5">
+
+\+          <p className="text-white/70">Age</p>
+
+\+          <p className="font-semibold text-white">{profile.age || "?"}</p>
+
+\+        </div>
+
+\+      </div>
+
+\+    </div>
+
+\+  );
+
++}
+
+diff --git a/src/components/chat/PeerInfoCard.tsx b/src/components/chat/PeerInfoCard.tsx
+
+deleted file mode 100644
+
+index 7b241c5..0000000
+
+--- a/src/components/chat/PeerInfoCard.tsx
+
++++ /dev/null
+
+@@ -1,78 +0,0 @@
+
+-"use client";
+
+\-import type { PeerProfile } from "@/types";
+
+\-import Image from "next/image";
+
+\-import { cn } from "@/lib/utils";
+
+\-
+
+\-export default function PeerInfoCard({
+
+\-  profile,
+
+\-  className,
+
+\-  showExtra
+
+-}: {
+
+\-  profile: PeerProfile;
+
+\-  className?: string;
+
+\-  showExtra?: boolean;
+
+-}) {
+
+\-  return (
+
+\-    <div
+
+\-      className={cn(
+
+\-        "flex items-center gap-3 p-3 rounded-lg backdrop-blur-md border border-white/10 bg-white/5 text-white shadow-lg min-w-\[180px]",
+
+\-        className
+
+\-      )}
+
+\-    >
+
+\-      <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-lg font-semibold">
+
+\-        {profile?.name?.\[0]?.toUpperCase() || "?"}
+
+\-      </div>
+
+\-      <div className="flex-1">
+
+\-        <h3 className="text-sm font-semibold leading-tight">{profile?.name || "Guest"}</h3>
+
+\-        {profile?.country \&\& (
+
+\-          <p className="text-xs text-white/80">{profile.country}</p>
+
+\-        )}
+
+\-        {showExtra \&\& (
+
+\-          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-white/70">
+
+\-            <div className="px-2 py-1 rounded-md bg-black/20 border border-white/10">
+
+\-              <p>Gender</p>
+
+\-              <p className="font-semibold text-white">{profile.gender || "Unknown"}</p>
+
+\-            </div>
+
+\-            <div className="px-2 py-1 rounded-md bg-black/20 border border-white/10">
+
+\-              <p>Status</p>
+
+\-              <p className="font-semibold text-white">{profile.isOnline ? "Online" : "Offline"}</p>
+
+\-            </div>
+
+\-            <div className="px-2 py-1 rounded-md bg-black/20 border border-white/10">
+
+\-              <p>Likes</p>
+
+\-              <p className="font-semibold text-white">{profile.likes ?? 0}</p>
+
+\-            </div>
+
+\-            <div className="px-2 py-1 rounded-md bg-black/20 border border-white/10">
+
+\-              <p>Age</p>
+
+\-              <p className="font-semibold text-white">{profile.age || "?"}</p>
+
+\-            </div>
+
+\-          </div>
+
+\-        )}
+
+\-      </div>
+
+\-    </div>
+
+\-  );
+
+-}
+
+diff --git a/src/components/chat/PeerMetadata.tsx b/src/components/chat/PeerMetadata.tsx
+
+deleted file mode 100644
+
+index 68ab869..0000000
+
+--- a/src/components/chat/PeerMetadata.tsx
+
++++ /dev/null
+
+@@ -1,37 +0,0 @@
+
+\-import type { PeerProfile } from "@/types";
+
+\-import { cn } from "@/lib/utils";
+
+\-
+
+\-type Props = {
+
+\-  profile: PeerProfile;
+
+\-  className?: string;
+
+-};
+
+\-
+
+\-export default function PeerMetadata({ profile, className }: Props) {
+
+\-  if (!profile) return null;
+
+\-
+
+\-  return (
+
+\-    <div className={cn("bg-white/10 rounded-xl p-3 text-sm text-white/90", className)}>
+
+\-      <div className="grid grid-cols-2 gap-2">
+
+\-        <div className="bg-black/30 rounded-lg px-3 py-2">
+
+\-          <p className="text-xs text-white/60">Gender</p>
+
+\-          <p className="font-semibold">{profile.gender || "Unknown"}</p>
+
+\-        </div>
+
+\-
+
+\-        <div className="bg-black/30 rounded-lg px-3 py-2">
+
+\-          <p className="text-xs text-white/60">Age</p>
+
+\-          <p className="font-semibold">{profile.age || "?"}</p>
+
+\-        </div>
+
+\-
+
+\-        <div className="bg-black/30 rounded-lg px-3 py-2">
+
+\-          <p className="text-xs text-white/60">Country</p>
+
+\-          <p className="font-semibold">{profile.country || "Unknown"}</p>
+
+\-        </div>
+
+\-
+
+\-        <div className="bg-black/30 rounded-lg px-3 py-2">
+
+\-          <p className="text-xs text-white/60">Likes</p>
+
+\-          <p className="font-semibold">{profile.likes ?? 0}</p>
+
+\-        </div>
+
+\-      </div>
+
+\-    </div>
+
+\-  );
+
+-}
+
+diff --git a/src/components/chat/UserTopRightControls.tsx b/src/components/chat/UserTopRightControls.tsx
+
+index 7b2c286..5f3d626 100644
+
+--- a/src/components/chat/UserTopRightControls.tsx
+
++++ b/src/components/chat/UserTopRightControls.tsx
+
+@@ -9,6 +9,7 @@ import { safeFetch } from "@/app/chat/safeFetch";
+
+&nbsp;import BeautyControls from "./BeautyControls";
+
+&nbsp;import { useVip } from "@/hooks/useVip";
+
+&nbsp;import UpsellModal from "./UpsellModal";
+
+\+import { useFFA } from "@/hooks/useFFA";
+
+&nbsp;
+
+&nbsp;export default function UserTopRightControls() {
+
+&nbsp;  const { profile } = useProfile();
+
+@@ -16,6 +17,8 @@ export default function UserTopRightControls() {
+
+&nbsp;  const \[open, setOpen] = useState(false);
+
+&nbsp;  const \[showUpsell, setShowUpsell] = useState(false);
+
+&nbsp;  const { vip } = useVip();
+
+\+  const ffa = useFFA();
+
+\+  const canUseBeauty = vip || ffa;
+
+&nbsp;
+
+&nbsp;  const toggleSettings = () => {
+
+&nbsp;    setOpen(!open);
+
+@@ -24,7 +27,7 @@ export default function UserTopRightControls() {
+
+&nbsp;  };
+
+&nbsp;
+
+&nbsp;  const handleStop = async () => {
+
+\-    const response = await fetch("/api/rtc/stop", { method: "POST" });
+
+\+    const response = await safeFetch("/api/rtc/stop", { method: "POST" });
+
+&nbsp;    if (!response.ok) return;
+
+&nbsp;    emit("ui:stop");
+
+&nbsp;  };
+
+@@ -36,7 +39,11 @@ export default function UserTopRightControls() {
+
+&nbsp;        className="p-2 rounded-full hover:bg-white/10 transition-colors"
+
+&nbsp;        aria-label="Toggle settings"
+
+&nbsp;      >
+
+\-        <GearIcon className="w-5 h-5 text-white" />
+
+\+        <GearIcon className="w-5 h-5 text-white" />
+
+&nbsp;      </button>
+
+\+      <button
+
+\+        onClick={() => (canUseBeauty ? setOpen(true) : setShowUpsell(true))}
+
+\+        className="p-2 rounded-full hover:bg-white/10 transition-colors"
+
+\+        aria-label="Open beauty controls"
+
+\+      >
+
+\+        <SparklesIcon className="w-5 h-5 text-white" />
+
+\+      </button>
+
+&nbsp;
+
+diff --git a/src/components/home/HomeClient.tsx b/src/components/home/HomeClient.tsx
+
+index 8e63aa4..776534b 100644
+
+--- a/src/components/home/HomeClient.tsx
+
++++ b/src/components/home/HomeClient.tsx
+
+@@ -1,10 +1,17 @@
+
+&nbsp;"use client";
+
+&nbsp;import { useEffect, useState } from "react";
+
+&nbsp;import { emit } from "@/utils/events";
+
+&nbsp;import GenderModal, { GenderKey } from "@/app/chat/components/GenderModal";
+
+&nbsp;import CountryModal from "@/app/chat/components/CountryModal";
+
+&nbsp;import { useFilters } from "@/state/filters";
+
+&nbsp;import { cn } from "@/lib/utils";
+
+\+import { safeFetch } from "@/app/chat/safeFetch";
+
+&nbsp;
+
+&nbsp;export default function HomeClient() {
+
+&nbsp;  const filters = useFilters();
+
+@@ -12,9 +19,19 @@ export default function HomeClient() {
+
+&nbsp;  const \[countryModalOpen, setCountryModalOpen] = useState(false);
+
+&nbsp;  const \[country, setCountry] = useState<string | null>(null);
+
+&nbsp;  const \[isQueueing, setIsQueueing] = useState(false);
+
+&nbsp;  const \[queueStatus, setQueueStatus] = useState<string>("Idle");
+
+\+  const \[gender, setGender] = useState<GenderKey>("any");
+
+&nbsp;
+
+\+  useEffect(() => {
+
+\+    try {
+
+\+      const storedGender = localStorage.getItem("gender");
+
+\+      if (storedGender) {
+
+\+        setGender(storedGender as GenderKey);
+
+\+        filters.setGender(storedGender as GenderKey);
+
+\+      }
+
+\+    } catch {}
+
+\+  }, \[filters]);
+
+\+
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    const handleQueueStatus = (event: CustomEvent<{ status: string }>) => {
+
+&nbsp;      setQueueStatus(event.detail?.status || "Idle");
+
+@@ -34,7 +51,13 @@ export default function HomeClient() {
+
+&nbsp;    }
+
+&nbsp;  }, \[filters]);
+
+&nbsp;
+
+&nbsp;  const handleGenderSelect = (selectedGender: GenderKey) => {
+
+\+    try {
+
+\+      localStorage.setItem("gender", selectedGender);
+
+\+      document.cookie = `gender=${selectedGender}; path=/; max-age=31536000`;
+
+\+    } catch {}
+
+&nbsp;    filters.setGender(selectedGender);
+
+\+    setGender(selectedGender);
+
+\+    emit("ui:genderChange", selectedGender);
+
+&nbsp;  };
+
+&nbsp;
+
+@@ -49,7 +72,7 @@ export default function HomeClient() {
+
+&nbsp;    try {
+
+&nbsp;      setIsQueueing(true);
+
+&nbsp;      setQueueStatus("Requesting...");
+
+\-      const response = await fetch("/api/rtc/enqueue", {
+
+\+      const response = await safeFetch("/api/rtc/enqueue", {
+
+&nbsp;        method: "POST",
+
+&nbsp;        headers: { "Content-Type": "application/json" },
+
+&nbsp;        body: JSON.stringify({
+
+@@ -64,7 +87,7 @@ export default function HomeClient() {
+
+&nbsp;      if (!response.ok) {
+
+&nbsp;        setQueueStatus("Failed to enqueue");
+
+&nbsp;        return;
+
+&nbsp;      }
+
+diff --git a/src/hooks/useAutoScroll.ts b/src/hooks/useAutoScroll.ts
+
+new file mode 100644
+
+index 0000000..b019cd0
+
+--- /dev/null
+
++++ b/src/hooks/useAutoScroll.ts
+
+@@ -0,0 +1,21 @@
+
++"use client";
+
+\+import { useEffect, useRef } from "react";
+
+\+
+
+\+export function useAutoScroll<T extends HTMLElement>() {
+
+\+  const ref = useRef<T | null>(null);
+
+\+
+
+\+  useEffect(() => {
+
+\+    const el = ref.current;
+
+\+    if (!el) return;
+
+\+    const observer = new MutationObserver(() => {
+
+\+      requestAnimationFrame(() => {
+
+\+        if (el) el.scrollTop = el.scrollHeight;
+
+\+      });
+
+\+    });
+
+\+    observer.observe(el, { childList: true, subtree: true });
+
+\+    return () => observer.disconnect();
+
+\+  }, \[]);
+
+\+
+
+\+  return ref;
+
++}
+
+diff --git a/src/hooks/useKeyboardShortcuts.ts b/src/hooks/useKeyboardShortcuts.ts
+
+index 4082cc8..620d0fd 100644
+
+--- a/src/hooks/useKeyboardShortcuts.ts
+
++++ b/src/hooks/useKeyboardShortcuts.ts
+
+@@ -1,5 +1,6 @@
+
+&nbsp;"use client"; import { useEffect } from "react"; import { emit } from "@/utils/events";
+
+&nbsp;export function useKeyboardShortcuts(){ useEffect(()=>{ const h=(e:KeyboardEvent)=>{const k=e.key.toLowerCase();
+
+\-  if(k==="arrowright"||k==="n")emit("ui:next"); else if(k==="arrowleft"||k==="p")emit("ui:prev");
+
+\+  if(k==="arrowright"||k==="n"){ console.log('AUTO\_NEXT: fired'); emit("ui:next"); }
+
+\+  else if(k==="arrowleft"||k==="p")emit("ui:prev");
+
+&nbsp;  else if(k==="m")emit("ui:toggleMic"); else if(k==="c")emit("ui:toggleCam"); else if(k==="s")emit("ui:openSettings");};
+
+&nbsp;  window.addEventListener("keydown",h); return()=>window.removeEventListener("keydown",h); },\[]); }
+
+diff --git a/src/hooks/useNextPrev.ts b/src/hooks/useNextPrev.ts
+
+index 7d05bec..83d8eb9 100644
+
+--- a/src/hooks/useNextPrev.ts
+
++++ b/src/hooks/useNextPrev.ts
+
+@@ -33,8 +33,9 @@ export function useNextPrev() {
+
+&nbsp;    isNetworkPending.current = true;
+
+&nbsp;    try {
+
+&nbsp;      // Emit UI event immediately
+
+\+      console.log('AUTO\_NEXT: fired');
+
+&nbsp;      emit("ui:next");
+
+\-
+
+\+      window.dispatchEvent(new Event("ui:next"));
+
+&nbsp;      // DEDUPE: delegated to ChatClient.doMatch via bus
+
+&nbsp;    } catch (error) {
+
+&nbsp;      console.debug('\[NEXT\_ERROR]', error);
+
+diff --git a/src/hooks/useQueueLen.ts b/src/hooks/useQueueLen.ts
+
+index 405481a..fda1ebf 100644
+
+--- a/src/hooks/useQueueLen.ts
+
++++ b/src/hooks/useQueueLen.ts
+
+@@ -1,5 +1,6 @@
+
+&nbsp;"use client";
+
+&nbsp;import { useEffect, useState } from "react";
+
+\+import { safeFetch } from "@/app/chat/safeFetch";
+
+&nbsp;type Mode = "memory" | "redis" | null;
+
+&nbsp;export function useQueueLen(intervalMs: number = 5000) {
+
+&nbsp;  const \[len, setLen] = useState(0);
+
+@@ -7,7 +8,7 @@ export function useQueueLen(intervalMs: number = 5000) {
+
+&nbsp;  useEffect(() => {
+
+&nbsp;    let stop = false;
+
+&nbsp;    const tick = () =>
+
+\-      fetch("/api/rtc/qlen", { cache: "no-store" })
+
+\+      safeFetch("/api/rtc/qlen", { cache: "no-store" })
+
+&nbsp;        .then((r) => r.json())
+
+&nbsp;        .then((j) => {
+
+&nbsp;          if (stop) return;
+
+diff --git a/src/hooks/useVip.ts b/src/hooks/useVip.ts
+
+index 71fd9c3..e44f47f 100644
+
+--- a/src/hooks/useVip.ts
+
++++ b/src/hooks/useVip.ts
+
+@@ -2,6 +2,7 @@
+
+&nbsp;
+
+&nbsp;import { useState, useEffect } from 'react';
+
+&nbsp;import { isFFA } from '@/utils/ffa';
+
+\+import { safeFetch } from '@/app/chat/safeFetch';
+
+&nbsp;
+
+&nbsp;export function useVip() {
+
+&nbsp;  const session = { user: { name: "Guest" } };
+
+@@ -32,7 +33,7 @@ export function useVip() {
+
+&nbsp;    // Simple anonymous check - no need for session dependency
+
+&nbsp;    const checkVipStatus = async () => {
+
+&nbsp;      try {
+
+\-        const response = await fetch('/api/user/vip-status', {
+
+\+        const response = await safeFetch('/api/user/vip-status', {
+
+&nbsp;          cache: 'no-cache',
+
+&nbsp;          headers: {
+
+&nbsp;            'Cache-Control': 'no-cache'
+
+diff --git a/src/types/index.ts b/src/types/index.ts
+
+index df84670..2e2bffb 100644
+
+--- a/src/types/index.ts
+
++++ b/src/types/index.ts
+
+@@ -3,6 +3,7 @@ export type PeerProfile = {
+
+&nbsp;  name?: string;
+
+&nbsp;  country?: string;
+
+&nbsp;  gender?: string;
+
+\+  likes?: number;
+
+&nbsp;  city?: string;
+
+&nbsp;  age?: number;
+
+&nbsp;  isOnline?: boolean;
+
+diff --git a/src/utils/ffa.ts b/src/utils/ffa.ts
+
+index c2d0852..16b4609 100644
+
+--- a/src/utils/ffa.ts
+
++++ b/src/utils/ffa.ts
+
+@@ -1,10 +1,14 @@
+
+&nbsp;"use client";
+
+&nbsp;
+
+\-const truthy = (value: unknown) => value === 1 || value === "1" || value === true || value === "true";
+
+\+const truthy = (value: unknown) => value === 1 || value === "1" || value === true || value === "true";
+
+&nbsp;
+
+&nbsp;export function isFFA(): boolean {
+
+&nbsp;  try {
+
+\-    const v = (globalThis as any)?.window?.\_\_DITONA\_FFA;
+
+\-    return v === 1 || v === "1" || v === true || v === "true";
+
+\+    const win = (globalThis as any)?.window;
+
+\+    const runtimeFlag = win?.\_\_vip?.FREE\_FOR\_ALL;
+
+\+    if (truthy(runtimeFlag)) return true;
+
+\+    return truthy(win?.\_\_DITONA\_FFA);
+
+&nbsp;  } catch {
+
+&nbsp;    return false;
+
+&nbsp;  }
+
+diff --git a/tests/smoke.spec.ts b/tests/smoke.spec.ts
+
+index 9d520b6..04d6993 100644
+
+--- a/tests/smoke.spec.ts
+
++++ b/tests/smoke.spec.ts
+
+@@ -31,10 +31,23 @@ test.describe('Smoke Tests', () => {
+
+&nbsp;    await page.evaluate(async () => {
+
+&nbsp;      await fetch('/api/age/allow', { method: 'POST' });
+
+&nbsp;    });
+
+\-
+
+&nbsp;    // Now chat should be accessible
+
+&nbsp;    await page.goto('/chat');
+
+&nbsp;    await expect(page).toHaveURL('/chat');
+
+&nbsp;    expect(await page.locator('body').isVisible()).toBe(true);
+
+&nbsp;  });
+
+\+
+
+\+  test('chat prev button gated until connection', async ({ page }) => {
+
+\+    await page.goto('/');
+
+\+    await page.evaluate(async () => {
+
+\+      await fetch('/api/age/allow', { method: 'POST' });
+
+\+    });
+
+\+
+
+\+    await page.goto('/chat');
+
+\+    const prevButton = page.getByRole('button', { name: 'Previous match' });
+
+\+    await expect(prevButton).toBeDisabled();
+
+\+    const nextButton = page.getByRole('button', { name: 'Next match' });
+
+\+    await expect(nextButton).toBeEnabled();
+
+\+  });
+
+&nbsp;});
+
+
+
