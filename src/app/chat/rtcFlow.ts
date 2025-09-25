@@ -485,8 +485,8 @@ async function iceExchange(sessionId: number) {
   pollIce().catch(() => {});
 }
 
-// Main start function
-export async function start(media: MediaStream, onPhase: (phase: Phase) => void) {
+// Main start function - accepts null media for camera error cases
+export async function start(media: MediaStream | null, onPhase: (phase: Phase) => void) {
   try {
     // Always stop first to prevent leaks
     stop();
