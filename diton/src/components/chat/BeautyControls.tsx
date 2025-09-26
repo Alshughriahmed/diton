@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useFilters } from "@/state/filters";
 import { emit } from "@/utils/events";
-import { isFFA } from "@/utils/ffa";
 
 interface BeautySettings {
   smoothing: number;
@@ -16,6 +15,13 @@ export default function BeautyControls() {
   const { isVip } = useFilters();
   const [isOpen, setIsOpen] = useState(false);
   const [isEnabled, setIsEnabled] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  
+  // Local VIP/FFA detection per requirements
+  const vip = !!(globalThis as any).__vip?.active;
+  const ffa = (globalThis as any).__vip?.FREE_FOR_ALL === 1;
+  const canUseBeauty = ffa || vip;
+  
   const [settings, setSettings] = useState<BeautySettings>({
     smoothing: 30,
     brightening: 20,
@@ -24,8 +30,8 @@ export default function BeautyControls() {
   });
 
   const handleToggleBeauty = () => {
-    if (!isVip && !isFFA()) {
-      alert("Beauty effects are a VIP feature! Upgrade to access professional beauty filters.");
+    if (!canUseBeauty) {
+      setShowModal(true);
       return;
     }
     
@@ -64,7 +70,7 @@ export default function BeautyControls() {
       <button
         onClick={handleToggleBeauty}
         className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-colors ${
-          isEnabled && (isVip || isFFA())
+          isEnabled && canUseBeauty
             ? "bg-pink-600 border-pink-500 text-white"
             : "bg-neutral-800 border-neutral-700 text-white hover:bg-neutral-700"
         }`}
@@ -72,8 +78,8 @@ export default function BeautyControls() {
       >
         <span className="text-lg">✨</span>
         <span className="hidden sm:inline">Beauty</span>
-        {!isVip && !isFFA() && <span className="text-xs">🔒</span>}
-        {(isVip || isFFA()) && (
+        {!canUseBeauty && <span className="text-xs">🔒</span>}
+        {canUseBeauty && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -87,7 +93,7 @@ export default function BeautyControls() {
       </button>
 
       {/* Beauty Settings Panel */}
-      {isOpen && (isVip || isFFA()) && (
+      {isOpen && canUseBeauty && (
         <div className="absolute top-full left-0 mt-2 w-72 bg-gray-800 border border-gray-600 rounded-lg shadow-lg z-50 p-4">
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -194,18 +200,30 @@ export default function BeautyControls() {
         </div>
       )}
 
-      {/* VIP Upgrade Notice */}
-      {!isVip && !isFFA() && (
-        <div className="absolute top-full left-0 mt-2 w-64 bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/30 rounded-lg p-3 z-50">
-          <p className="text-xs text-gray-200 text-center">
-            ✨ Upgrade to VIP for professional beauty effects:
-          </p>
-          <ul className="text-xs text-gray-300 mt-2 space-y-1">
-            <li>• Skin smoothing & brightening</li>
-            <li>• Eye enlargement</li>
-            <li>• Face slimming</li>
-            <li>• Real-time processing</li>
-          </ul>
+      {/* Beauty Upgrade Modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div data-testid="beauty-modal" className="bg-gray-800 border border-purple-500/30 rounded-lg p-6 max-w-sm mx-4">
+            <div className="text-center">
+              <div className="text-4xl mb-4">✨</div>
+              <h3 className="text-lg font-semibold text-white mb-2">Beauty Effects</h3>
+              <p className="text-sm text-gray-300 mb-4">
+                Upgrade to VIP for professional beauty filters:
+              </p>
+              <ul className="text-sm text-gray-300 mb-6 space-y-1 text-left">
+                <li>• Skin smoothing & brightening</li>
+                <li>• Eye enlargement effects</li>
+                <li>• Face slimming filters</li>
+                <li>• Real-time processing</li>
+              </ul>
+              <button
+                onClick={() => setShowModal(false)}
+                className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
