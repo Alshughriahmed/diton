@@ -1,0 +1,332 @@
+bash -lc '
+set -Eeuo pipefail
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo $PWD)"; cd "$ROOT"
+STAMP="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/ui_final_${STAMP}"; mkdir -p "$BK"
+
+backup(){ [ -f "$1" ] && install -D "$1" "$BK/$1" || true; }
+for f in src/app/chat/ChatClient.tsx src/utils/events.ts src/hooks/useNextPrev.ts \
+         src/hooks/useKeyboardShortcuts.ts src/utils/filters.ts src/lib/media.ts \
+         src/app/api/ice/route.ts next.config.mjs middleware.ts src/app/layout.tsx \
+         src/app/globals.css src/app/api/age/allow/route.ts src/app/api/health/route.ts \
+         src/app/api/user/vip-status/route.ts src/app/api/match/next/route.ts
+do backup "$f"; done
+
+# 1) تأكيد الهيدر من مكان واحد
+cat > next.config.mjs << "JS"
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  eslint: { ignoreDuringBuilds: true },
+  async headers() {
+    return [{
+      source: "/:path*",
+      headers: [
+        { key: "Permissions-Policy", value: "camera=(self), microphone=(self)" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+        { key: "Referrer-Policy", value: "no-referrer" }
+      ]
+    }];
+  },
+};
+export default nextConfig;
+JS
+
+# 2) ميدلوير للعمر فقط
+cat > middleware.ts << "TS"
+import { NextResponse, type NextRequest } from "next/server";
+export const config = { matcher: ["/chat"] };
+export function middleware(req: NextRequest) {
+  const ageok = req.cookies.get("ageok")?.value === "1";
+  if (!ageok) { const url = new URL("/", req.url); url.searchParams.set("age","required"); return NextResponse.redirect(url,307); }
+  return NextResponse.next();
+}
+TS
+
+# 3) وحدات مساعدة (bus/filters/shortcuts/cooldown/media/ice)
+mkdir -p src/utils src/hooks src/lib src/app/api/ice
+cat > src/utils/events.ts << "TS"
+export type UIEvent = "ui:next"|"ui:prev"|"ui:toggleMic"|"ui:toggleCam"|"ui:openSettings"|"ui:like"|"ui:report";
+type H=(p?:any)=>void; const ls=new Map<UIEvent,Set<H>>();
+export const on=(e:UIEvent,f:H)=>{if(!ls.has(e))ls.set(e,new Set()); ls.get(e)!.add(f); return()=>ls.get(e)!.delete(f);};
+export const emit=(e:UIEvent,p?:any)=>{ls.get(e)?.forEach(fn=>fn(p));};
+TS
+
+cat > src/hooks/useNextPrev.ts << "TS"
+"use client"; import { emit } from "@/utils/events";
+let last=0; const CD=700;
+export function useNextPrev(){ function can(){const n=Date.now(); if(n-last<CD) return false; last=n; return true;}
+  return { next(){ if(can()) emit("ui:next"); }, prev(){ if(can()) emit("ui:prev"); } };
+}
+TS
+
+cat > src/hooks/useKeyboardShortcuts.ts << "TS"
+"use client"; import { useEffect } from "react"; import { emit } from "@/utils/events";
+export function useKeyboardShortcuts(){ useEffect(()=>{ const h=(e:KeyboardEvent)=>{const k=e.key.toLowerCase();
+  if(k==="arrowright"||k==="n")emit("ui:next"); else if(k==="arrowleft"||k==="p")emit("ui:prev");
+  else if(k==="m")emit("ui:toggleMic"); else if(k==="c")emit("ui:toggleCam"); else if(k==="s")emit("ui:openSettings");};
+  window.addEventListener("keydown",h); return()=>window.removeEventListener("keydown",h); },[]); }
+TS
+
+cat > src/utils/filters.ts << "TS"
+"use client";
+export type GenderOpt="all"|"male"|"female"|"couple"|"lgbt";
+export type Filters={gender:GenderOpt; countries:string[]};
+const KEY="ditona.filters";
+export function getFilters():Filters{ if(typeof window==="undefined") return {gender:"all",countries:[]};
+  try{const v=JSON.parse(localStorage.getItem(KEY)||"{}"); return {gender:v.gender||"all", countries:Array.isArray(v.countries)?v.countries:[]};}
+  catch{ return {gender:"all",countries:[]}; } }
+export function setFilters(f:Filters){ if(typeof window!=="undefined") localStorage.setItem(KEY,JSON.stringify(f)); }
+TS
+
+cat > src/lib/media.ts << "TS"
+"use client";
+type S={stream:MediaStream|null; micOn:boolean; camOn:boolean; facing:"user"|"environment"};
+const st:S={stream:null,micOn:true,camOn:true,facing:"user"};
+export async function initLocalMedia(){ if(st.stream) return st.stream;
+  const s=await navigator.mediaDevices.getUserMedia({audio:true,video:{facingMode:st.facing}});
+  st.stream=s; return s; }
+export function getLocalStream(){ return st.stream; }
+export function toggleMic(){ const s=st.stream; if(!s) return false; st.micOn=!st.micOn; s.getAudioTracks().forEach(t=>t.enabled=st.micOn); return st.micOn; }
+export function toggleCam(){ const s=st.stream; if(!s) return false; st.camOn=!st.camOn; s.getVideoTracks().forEach(t=>t.enabled=st.camOn); return st.camOn; }
+export async function switchCamera(){ st.facing=st.facing==="user"?"environment":"user";
+  const ns=await navigator.mediaDevices.getUserMedia({audio:true,video:{facingMode:st.facing}}); st.stream?.getTracks().forEach(t=>t.stop()); st.stream=ns; return ns; }
+TS
+
+cat > src/app/api/ice/route.ts << "TS"
+import { NextResponse } from "next/server";
+export const dynamic="force-dynamic";
+export async function GET(){
+  const turnUrl=process.env.TURN_URL||""; const turnUsername=process.env.TURN_USERNAME||""; const turnPassword=process.env.TURN_PASSWORD||"";
+  const stun={urls:["stun:stun.l.google.com:19302"]};
+  const iceServers=turnUrl&&turnUsername&&turnPassword ? [stun,{urls:[turnUrl],username:turnUsername,credential:turnPassword}] : [stun];
+  return NextResponse.json({ iceServers });
+}
+TS
+
+# 4) صفحة الدردشة — تركيب بصري كامل 50/50 + تموضع العناصر + سلوك
+mkdir -p src/app/chat
+cat > src/app/chat/ChatClient.tsx << "TS"
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { on, emit } from "@/utils/events";
+import { useNextPrev } from "@/hooks/useNextPrev";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
+import { getFilters, setFilters, type GenderOpt } from "@/utils/filters";
+
+type MatchEcho={ ts:number; gender:string; countries:string[] };
+
+export default function ChatClient(){
+  const { next, prev } = useNextPrev();
+  const localRef = useRef<HTMLVideoElement>(null);
+  const [ready,setReady]=useState(false);
+  const [like,setLike]=useState(false);
+  const [myLikes,setMyLikes]=useState(0);
+  const [peerLikes,setPeerLikes]=useState(123);
+  const [vip,setVip]=useState(false);
+  const [match,setMatch]=useState<MatchEcho|null>(null);
+  const [gender,setGender]=useState<GenderOpt>(getFilters().gender);
+  const [countries,setCountries]=useState<string[]>(getFilters().countries);
+  const [beauty,setBeauty]=useState(false);
+
+  useKeyboardShortcuts();
+
+  useEffect(()=>{
+    let off1=on("ui:toggleMic",()=>{ toggleMic(); });
+    let off2=on("ui:toggleCam",()=>{ toggleCam(); });
+    let off3=on("ui:openSettings",()=>{ /* open settings modal placeholder */ });
+    let off4=on("ui:like",()=>{ setLike(v=>!v); setMyLikes(v=> v?Math.max(0,v-1):v+1 ); });
+    let off5=on("ui:report",()=>{ /* open report modal placeholder */ });
+    let off6=on("ui:next",()=>{ next(); doMatch(); });
+    let off7=on("ui:prev",()=>{ prev(); doMatch(true); });
+    initLocalMedia().then(()=>{
+      const s=getLocalStream(); if(localRef.current&&s){ localRef.current.srcObject=s; localRef.current.muted=true; localRef.current.play().catch(()=>{}); }
+      setReady(true);
+    }).catch(()=>{});
+    fetch("/api/user/vip-status").then(r=>r.json()).then(j=> setVip(!!j.isVip)).catch(()=>{});
+    return ()=>{ off1();off2();off3();off4();off5();off6();off7(); };
+  },[]);
+
+  useEffect(()=>{ setFilters({gender,countries}); },[gender,countries]);
+
+  async function doMatch(backward=false){
+    const qp=new URLSearchParams(); qp.set("gender",gender); if(countries.length) qp.set("countries", countries.join(","));
+    const j:MatchEcho=await fetch("/api/match/next?"+qp.toString(),{cache:"no-store"}).then(r=>r.json()).catch(()=>null as any);
+    if(j) setMatch(j);
+  }
+
+  // Gesture swipe: يسار/يمين = Prev/Next
+  useEffect(()=>{
+    let sx=0, sy=0, dx=0, dy=0;
+    const start=(e:TouchEvent)=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY; };
+    const move=(e:TouchEvent)=>{ const t=e.touches[0]; dx=t.clientX-sx; dy=t.clientY-sy; };
+    const end=()=>{ if(Math.abs(dx)>80 && Math.abs(dy)<60){ if(dx<0) emit("ui:next"); else emit("ui:prev"); } sx=sy=dx=dy=0; };
+    const el=document.getElementById("gesture-layer"); if(!el) return;
+    el.addEventListener("touchstart",start,{passive:true}); el.addEventListener("touchmove",move,{passive:true}); el.addEventListener("touchend",end);
+    return ()=>{ el.removeEventListener("touchstart",start); el.removeEventListener("touchmove",move); el.removeEventListener("touchend",end); };
+  },[]);
+
+  function toggleCountry(code:string){ setCountries(prev => prev.includes(code)? prev.filter(c=>c!==code) : [...prev,code]); }
+  const allCountries=[ "US","DE","FR","GB","TR","AE","SA","EG","JO","IQ","SY","LB","MA","ZA","BR","AR","ES","IT","SE","NO","RU","CN","JP","KR","IN","PK","BD","ID","PH","TH","VN","IR","CA","AU","NZ" ];
+
+  return (
+    <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
+      <div className="h-full grid grid-rows-2 gap-2 p-2">
+        {/* ===== Top (peer) ===== */}
+        <section className="relative rounded-2xl bg-black/30 overflow-hidden">
+          {/* Top-left: avatar + likes + VIP */}
+          <div className="absolute top-2 left-2 flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-500" aria-label="Peer avatar" />
+            <span className="px-2 py-0.5 rounded-full bg-rose-600/20 border border-rose-500 text-xs">♥ {peerLikes}</span>
+            {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
+          </div>
+          {/* Top-right: FilterBar (countries + gender) */}
+          <div className="absolute top-2 right-2 flex items-center gap-2">
+            <div className="relative">
+              <details className="group">
+                <summary className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs cursor-pointer">🌐 Countries ({countries.length||"0"})</summary>
+                <div className="absolute right-0 mt-2 w-64 max-h-64 overflow-auto rounded-xl bg-slate-900/95 border border-slate-700 p-2 space-y-1">
+                  <input placeholder="Search…" className="w-full mb-2 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-xs outline-none" onChange={(e)=>{
+                    const q=e.target.value.toLowerCase(); document.querySelectorAll<HTMLButtonElement>("[data-cc]").forEach(b=>{ b.style.display=b.dataset.cc!.includes(q)?"":"none"; });
+                  }}/>
+                  <div className="grid grid-cols-3 gap-1">
+                    {allCountries.map(c=>(
+                      <button key={c} data-cc={c.toLowerCase()} onClick={(e)=>{e.preventDefault(); toggleCountry(c);}}
+                        className={"text-xs px-2 py-1 rounded border "+(countries.includes(c)?"bg-emerald-700/40 border-emerald-500":"bg-slate-800 border-slate-700")}>{c}</button>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            </div>
+            <div className="relative">
+              <details className="group">
+                <summary className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs cursor-pointer">Gender: {gender[0].toUpperCase()+gender.slice(1)}</summary>
+                <div className="absolute right-0 mt-2 w-40 rounded-xl bg-slate-900/95 border border-slate-700 p-1">
+                  {(["all","male","female","couple","lgbt"] as GenderOpt[]).map(g=>(
+                    <button key={g} className={"w-full text-left text-xs px-2 py-1 rounded "+(gender===g?"bg-emerald-700/40":"hover:bg-slate-800")}
+                      onClick={(e)=>{e.preventDefault(); setGender(g);}}>{g[0].toUpperCase()+g.slice(1)}</button>
+                  ))}
+                </div>
+              </details>
+            </div>
+          </div>
+          {/* Bottom-left: peer meta */}
+          <div className="absolute bottom-2 left-2 flex flex-wrap items-center gap-2 text-xs">
+            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{match?.countries?.[0]||"—"}</span>
+            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{/* city placeholder */}City</span>
+            <span className="px-2 py-1 rounded-full bg-slate-800/70 border border-slate-600">{(match?.gender||"all").toUpperCase()}</span>
+          </div>
+          {/* Bottom-right intentionally empty */}
+          {/* Center remote area */}
+          <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm select-none">
+            Remote peer area (states: connecting/matched/…)
+          </div>
+        </section>
+
+        {/* ===== Bottom (me) ===== */}
+        <section className="relative rounded-2xl bg-black/20 overflow-hidden">
+          {/* Local preview fills bottom half */}
+          <video data-local-video ref={localRef} className="w-full h-full object-cover" playsInline />
+          {!ready && <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Requesting camera/mic…</div>}
+
+          {/* Top-right user controls */}
+          <div className="absolute top-2 right-2 flex items-center gap-2">
+            <button aria-label="Switch Camera" className="px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-600 text-xs"
+              onClick={async (e)=>{e.preventDefault(); const s=await switchCamera(); if(localRef.current&&s){localRef.current.srcObject=s; localRef.current.play().catch(()=>{});} }}>↺</button>
+            <button aria-label="Beauty" className={"px-3 py-1.5 rounded-full border text-xs "+(beauty?"bg-fuchsia-700/30 border-fuchsia-500":"bg-slate-800/80 border-slate-600")}
+              onClick={(e)=>{e.preventDefault(); setBeauty(v=>!v);}}>✨</button>
+            {vip && <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-xs">VIP</span>}
+          </div>
+
+          {/* Bottom message bar */}
+          <div className="absolute inset-x-2 bottom-16">
+            <div className="flex items-center gap-2 rounded-xl bg-slate-900/80 border border-slate-700 px-2 py-2">
+              <button aria-label="Emoji" className="px-2 py-1 rounded bg-slate-800 border border-slate-700">😀</button>
+              <input className="flex-1 bg-transparent outline-none text-sm placeholder-slate-400" placeholder="اكتب رسالة…" />
+              <button aria-label="Send" className="px-3 py-1.5 rounded-full bg-sky-600 hover:bg-sky-500 text-sm">Send</button>
+            </div>
+          </div>
+
+          {/* Bottom toolbar: Prev | middle controls | Next */}
+          <div className="absolute inset-x-2 bottom-2">
+            <div className="flex items-center justify-between gap-2">
+              <button aria-label="Prev" className="px-5 py-2 rounded-full bg-neutral-800 text-white text-sm border border-neutral-700"
+                onClick={(e)=>{e.preventDefault(); emit("ui:prev");}}>⏮️ Prev</button>
+              <div className="flex items-center gap-2">
+                <button aria-label="Mic" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:toggleMic");}}>🎙️</button>
+                <button aria-label="Camera" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:toggleCam");}}>📷</button>
+                <button aria-label="Speaker" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700">🔊</button>
+                <button aria-label="Settings" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:openSettings");}}>⚙️</button>
+                <button aria-label="Report" className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700" onClick={(e)=>{e.preventDefault(); emit("ui:report");}}>🛡️</button>
+                <button aria-label="Like" className={"px-3 py-2 rounded-lg border "+(like?"bg-rose-600/40 border-rose-400":"bg-neutral-800 border-neutral-700")}
+                  onClick={(e)=>{e.preventDefault(); emit("ui:like");}}>♥ {myLikes}</button>
+              </div>
+              <button aria-label="Next" className="px-5 py-2 rounded-full bg-emerald-600 text-white text-sm border border-emerald-500"
+                onClick={(e)=>{e.preventDefault(); emit("ui:next");}}>Next ⏭️</button>
+            </div>
+          </div>
+
+          {/* Gesture layer */}
+          <div id="gesture-layer" className="absolute inset-0" />
+        </section>
+      </div>
+    </div>
+  );
+}
+TS
+
+# 5) تأكيد مسارات أساسية (بدون لمس منطقك إن كانت موجودة)
+mkdir -p src/app/api/health src/app/api/age/allow src/app/api/user/vip-status src/app/api/match/next
+[ -f src/app/api/health/route.ts ] || cat > src/app/api/health/route.ts << "TS"
+import { NextResponse } from "next/server"; export const dynamic="force-dynamic"; export async function GET(){ return NextResponse.json({ok:true,ts:Date.now()}); }
+TS
+[ -f src/app/api/age/allow/route.ts ] || cat > src/app/api/age/allow/route.ts << "TS"
+import { NextResponse } from "next/server"; export async function POST(){ const res=NextResponse.json({ok:true,ts:Date.now()}); res.cookies.set({name:"ageok",value:"1",httpOnly:false,sameSite:"lax",path:"/",maxAge:60*60*24*365}); return res; }
+TS
+[ -f src/app/api/user/vip-status/route.ts ] || cat > src/app/api/user/vip-status/route.ts << "TS"
+import { NextResponse } from "next/server"; import type { NextRequest } from "next/server";
+export async function GET(req:NextRequest){ const vip=req.cookies.get("vip")?.value==="1"; return NextResponse.json(vip?{isVip:true,via:"cookie"}:{isVip:false,via:"anon"}); }
+TS
+[ -f src/app/api/match/next/route.ts ] || cat > src/app/api/match/next/route.ts << "TS"
+import { NextResponse } from "next/server"; export const dynamic="force-dynamic";
+function parse(i:any){ const g=typeof i?.gender==="string"?i.gender.toLowerCase():"all"; const r=i?.countries; let c:string[]=[]; if(Array.isArray(r)) c=r.map(String); else if(typeof r==="string") c=r.split(",").map(s=>s.trim()).filter(Boolean); return {gender:g||"all",countries:c}; }
+export async function GET(req:Request){ const u=new URL(req.url); const p=parse({gender:u.searchParams.get("gender"),countries:u.searchParams.get("countries")}); return NextResponse.json({ts:Date.now(),...p}); }
+export async function POST(req:Request){ const p=parse(await req.json().catch(()=>({}))); return NextResponse.json({ts:Date.now(),...p}); }
+TS
+
+# 6) تشغيل وفحص
+LOG="/tmp/app.log"; :> "$LOG"
+( command -v fuser >/dev/null && fuser -k 3000/tcp ) || true; pkill -f "next.*dev" 2>/dev/null || true
+nohup pnpm run dev -p 3000 -H 0.0.0.0 >>"$LOG" 2>&1 &
+
+ORIGIN="http://127.0.0.1:3000"
+for i in $(seq 1 60); do H=$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/api/health" || true); [ "$H" = "200" ] && break; sleep 1; done
+
+COOKIE=/tmp/c.txt; :> "$COOKIE"
+CHAT1=$(curl -s -D - -o /dev/null "$ORIGIN/chat" -c "$COOKIE" | awk "NR==1{print \$2}")
+curl -s -X POST "$ORIGIN/api/age/allow" -b "$COOKIE" -c "$COOKIE" >/dev/null 2>&1 || true
+CHAT2=$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/chat" -b "$COOKIE" || true)
+PP=$(curl -s -I "$ORIGIN/chat" -b "$COOKIE" | tr -d "\r" | awk -F': ' "/^Permissions-Policy:/ {print \$2}" || true)
+
+HTML=/tmp/chat.html; curl -s "$ORIGIN/chat" -b "$COOKIE" -o "$HTML" || true
+HAS_LOCAL=$(grep -c "data-local-video" "$HTML" || true)
+HAS_PREV=$(grep -c "aria-label=\"Prev\"" "$HTML" || true)
+HAS_NEXT=$(grep -c "aria-label=\"Next\"" "$HTML" || true)
+HAS_MSG=$(grep -c "aria-label=\"Send\"" "$HTML" || true)
+HAS_TOPLEFT=$(grep -c "Peer avatar" "$HTML" || true)
+HAS_FILTER=$(grep -c "Countries (" "$HTML" || true)
+HAS_USER_TOPRIGHT=$(grep -c "Switch Camera" "$HTML" || true)
+
+HOME_HTML=/tmp/home.html; curl -s "$ORIGIN/" -o "$HOME_HTML" || true
+CSS_PATH=$(grep -oE "/_next/static/css/[^\"]+\\.css" "$HOME_HTML" | head -n1 || true)
+UTIL="missing"; grep -qE "min-h-screen|bg-gradient-to-b" "$HOME_HTML" && UTIL="found"
+
+echo "-- Acceptance --"
+echo "HTTP=/:$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/" || true) /plans:$(curl -s -o /dev/null -w "%{http_code}" "$ORIGIN/plans" || true) /api/health:$H /chat:307->$CHAT2"
+echo "PERMISSIONS_POLICY=${PP:-na}"
+echo "CSS_LINK=$( [ -n "$CSS_PATH" ] && echo 1 || echo 0 ) utilities:$UTIL"
+echo "AGE_FLOW=$( [ "$CHAT1" = "307" ] && [ "$CHAT2" = "200" ] && echo ok || echo fail )"
+echo "UI_CHECKS topLeft:$HAS_TOPLEFT filters:$HAS_FILTER userTopRight:$HAS_USER_TOPRIGHT localVideo:$HAS_LOCAL toolbarPrev:$HAS_PREV toolbarNext:$HAS_NEXT msgBar:$HAS_MSG"
+echo "LOG=$LOG BACKUP_DIR=$BK"
+echo "-- End Acceptance --"
+'

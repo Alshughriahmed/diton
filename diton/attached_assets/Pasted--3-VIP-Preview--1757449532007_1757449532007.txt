@@ -1,0 +1,128 @@
+تمام! ننطلق مباشرةً إلى الدفعة 3 — حواجز VIP الخادمية + اختبار Preview صارم.
+(نفس أسلوبنا: باتش جاهز + سكربت قبول + خطوات تنفيذ مختصرة.)
+
+1) الباتش (3001) — قواعد /api/match/next
+
+احفظ الملف باسم 3001-match-next-gates.patch ثم طبّقه بـgit apply.
+
+*** a/src/app/api/match/next/route.ts
+--- b/src/app/api/match/next/route.ts
+@@
+-import { NextRequest, NextResponse } from "next/server";
+-import { requireVip } from "@/utils/vip";
++import { NextRequest, NextResponse } from "next/server";
++import { cookies } from "next/headers";
++import { requireVip } from "@/utils/vip";
+ 
++export const runtime = "nodejs"; // نحتاج الوصول للكوكيز بثبات
++
+ export async function GET(req: NextRequest) {
+-  const url = new URL(req.url);
+-  const gender = url.searchParams.getAll("gender");
+-  const countries = url.searchParams.getAll("countries");
+-  return handleMatch(req, { gender, countries });
++  const url = new URL(req.url);
++  const gender = url.searchParams.getAll("gender").filter(Boolean);
++  const countries = url.searchParams.getAll("countries").filter(Boolean);
++  return handleMatch(req, { gender, countries });
+ }
+ 
+ export async function POST(req: NextRequest) {
+-  const { gender = [], countries = [] } = (await req.json().catch(() => ({}))) as any;
+-  return handleMatch(req, { gender, countries });
++  const { gender = [], countries = [] } = (await req.json().catch(() => ({}))) as any;
++  return handleMatch(req, {
++    gender: Array.isArray(gender) ? gender.filter(Boolean) : [],
++    countries: Array.isArray(countries) ? countries.filter(Boolean) : [],
++  });
+ }
+ 
+ async function handleMatch(
+   req: NextRequest,
+   p: { gender: string[]; countries: string[] }
+ ) {
+-  const isVip = await requireVip();
+-  // ... existing matching logic remains unchanged ...
+-  return NextResponse.json({ ok: true });
++  const isVip = await requireVip();
++  const c = cookies();
++  const myCountry =
++    c.get("geo")?.value ||
++    req.headers.get("x-geo-country") ||
++    ""; // إن لم توجد نسمح افتراضيًا
++
++  const g = p.gender;
++  const cs = p.countries;
++
++  // غير-VIP: gender ≤ 1 ، countries ≤ 1 ، والدولة = ALL أو بلدي فقط
++  if (!isVip) {
++    if (g.length > 1) {
++      return NextResponse.json({ error: "VIP gender filter" }, { status: 403 });
++    }
++    if (cs.length > 1) {
++      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
++    }
++    if (cs.length === 1 && cs[0] !== "ALL" && myCountry && cs[0] !== myCountry) {
++      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
++    }
++  }
++
++  // VIP: حدود أمان فقط
++  if (isVip) {
++    if (g.length > 2) {
++      return NextResponse.json({ error: "gender too many" }, { status: 400 });
++    }
++    if (cs.length > 15) {
++      return NextResponse.json({ error: "countries too many" }, { status: 400 });
++    }
++  }
++
++  // ⚠️ أبقِ منطق المطابقة الحقيقي كما هو لديك
++  return NextResponse.json({ ok: true });
+ }
+
+2) سكربت القبول (Preview مع FREE_FOR_ALL=0)
+
+احفظ باسم acc_vip_gates.sh:
+
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:?Usage: $0 <preview-url>}"
+JAR="$(mktemp)"
+
+post(){ curl -s -o /dev/null -w "%{http_code}" -H 'content-type: application/json' -X POST -d "$1" "$BASE/api/match/next"; }
+
+echo "[Non-VIP] gender[2] => $(post '{"gender":["male","female"]}')"     # expect 403
+echo "[Non-VIP] countries[2] => $(post '{"countries":["FR","DE"]}')"     # expect 403
+echo "[Non-VIP] countries[1]=FR => $(post '{"countries":["FR"]}')"       # expect 200 (أو 200 مع السماح الافتراضي)
+
+# grant كوكي VIP (dev) ثم أعد الفحص
+curl -s -H 'content-type: application/json' -X POST -c "$JAR" "$BASE/api/vip/dev/grant" >/dev/null
+echo "[VIP] gender[2]   => $(curl -s -o /dev/null -w "%{http_code}" -H 'content-type: application/json' -X POST -b "$JAR" -d '{"gender":["male","female"]}' "$BASE/api/match/next")"    # 200
+echo "[VIP] countries[15] => $(curl -s -o /dev/null -w "%{http_code}" -H 'content-type: application/json' -X POST -b "$JAR" -d '{"countries":["US","DE","FR","GB","TR","AE","SA","EG","ES","IT","NL","SE","JP","KR","IN"]}' "$BASE/api/match/next")" # 200
+
+
+تشغيل القبول على معاينة:
+
+# اضبط FREE_FOR_ALL=0 للـ Preview فقط
+npx -y vercel env add FREE_FOR_ALL    # اختر Preview وأدخل 0
+npx -y vercel --prebuilt              # انشر معاينة
+PREVIEW_URL=$(npx -y vercel --confirm | tail -n1)
+
+bash acc_vip_gates.sh "$PREVIEW_URL"
+
+
+المخرجات المتوقعة:
+
+سطور Non-VIP الأولى: 403, 403, ثم 200.
+
+بعد grant (كوكي dev): سطور VIP: 200 و200.
+
+3) خطوات التسليم
+git checkout -b feature/batch-3
+git apply 3001-match-next-gates.patch
+pnpm i --frozen-lockfile
+pnpm build || pnpm dev
+# نشر معاينة وضبط FREE_FOR_ALL=0 ثم:
+bash acc_vip_gates.sh "$PREVIEW_URL"
+git add -A && git commit -m "Batch 3: server VIP gates on /api/match/next + preview acc

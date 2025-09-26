@@ -1,0 +1,92 @@
+اعمل في /home/runner/workspace. هدفنا تحديد موقع زر Prev/Next الحقيقي ثم وسمه. نفّذ بالتسلسل ثم أعد سطور القبول من تقرير C.
+
+# 1) فحص شامل عن أزرار Prev/Next في كل الواجهة
+cat > C4d_probe_prevnext_targets.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/C4d_probe_prevnext_$(date -u +%Y%m%d-%H%M%S).log"; mkdir -p _ops/reports
+p(){ echo; echo "=== $1 ===" | tee -a "$OUT"; }
+p "scan"
+grep -RInE --include='*.tsx' \
+  '(onPrev|handlePrev|goPrev|onNext|handleNext|goNext|aria-label="(Prev|Next|السابق|التالي)"|title="(Prev|Next|السابق|التالي)"|>\\s*(Prev|Next|السابق|التالي)\\s*<|Chevron(Left|Right)|Arrow(Left|Right))' \
+  src/app 2>/dev/null | tee -a "$OUT" || true
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "PROBE_OK=1" | tee -a "$OUT"
+echo "REPORT=$OUT" | tee -a "$OUT"
+EOF
+chmod +x C4d_probe_prevnext_targets.sh
+_ops/bin/run ./C4d_probe_prevnext_targets.sh
+
+# 2) وسم تلقائي في كل الملفات المرشحة
+cat > C4e_mark_prevnext_smart.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C4e_${TS}"; mkdir -p "$BK" _ops/reports
+# اجمع الملفات المرشحة من الفحص السابق أو ابحث مباشرة
+mapfile -t FILES < <(grep -RIl --include='*.tsx' -E \
+  'onPrev|handlePrev|goPrev|onNext|handleNext|goNext|aria-label="(Prev|Next|السابق|التالي)"|title="(Prev|Next|السابق|التالي)"|>\\s*(Prev|Next|السابق|التالي)\\s*<|Chevron(Left|Right)|Arrow(Left|Right)' \
+  src/app 2>/dev/null || true)
+
+PREV=0; NEXT=0
+for F in "${FILES[@]}"; do
+  mkdir -p "$BK/$(dirname "$F")"; cp -a "$F" "$BK/"
+  # onClick يدعو Prev/Next
+  perl -0777 -i -pe '
+    s/<([A-Za-z][\w-]*)(?![^>]*\bdata-ui=)(\s+[^>]*onClick=\{[^}]*\b(onPrev|handlePrev|goPrev)\b[^}]*\}[^>]*)>/<${1} data-ui="btn-prev"$2>/g;
+    s/<([A-Za-z][\w-]*)(?![^>]*\bdata-ui=)(\s+[^>]*onClick=\{[^}]*\b(onNext|handleNext|goNext)\b[^}]*\}[^>]*)>/<${1} data-ui="btn-next"$2>/g;
+  ' "$F" || true
+  # aria-label أو title
+  perl -0777 -i -pe '
+    s/<([A-Za-z][\w-]*)(?![^>]*\bdata-ui=)([^>]*aria-label="(Prev|السابق)"[^>]*)>/<${1} data-ui="btn-prev"$2>/g;
+    s/<([A-Za-z][\w-]*)(?![^>]*\bdata-ui=)([^>]*aria-label="(Next|التالي)"[^>]*)>/<${1} data-ui="btn-next"$2>/g;
+    s/<([A-Za-z][\w-]*)(?![^>]*\bdata-ui=)([^>]*title="(Prev|السابق)"[^>]*)>/<${1} data-ui="btn-prev"$2>/g;
+    s/<([A-Za-z][\w-]*)(?![^>]*\bdata-ui=)([^>]*title="(Next|التالي)"[^>]*)>/<${1} data-ui="btn-next"$2>/g;
+  ' "$F" || true
+  # أزرار نصية مباشرة
+  perl -0777 -i -pe '
+    s/<button(?![^>]*\bdata-ui=)([^>]*)>\s*(Prev|السابق)\s*<\/button>/<button data-ui="btn-prev"$1>$2<\/button>/g;
+    s/<button(?![^>]*\bdata-ui=)([^>]*)>\s*(Next|التالي)\s*<\/button>/<button data-ui="btn-next"$1>$2<\/button>/g;
+  ' "$F" || true
+
+  PREV=$(( PREV + $(grep -c 'data-ui="btn-prev"' "$F" || true) ))
+  NEXT=$(( NEXT + $(grep -c 'data-ui="btn-next"' "$F" || true) ))
+done
+
+echo "-- Acceptance --"
+echo "BTN_DATA_UI_PREV=$([ $PREV -gt 0 ] && echo 1 || echo 0)"
+echo "BTN_DATA_UI_NEXT=$([ $NEXT -gt 0 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+EOF
+chmod +x C4e_mark_prevnext_smart.sh
+_ops/bin/run ./C4e_mark_prevnext_smart.sh
+
+# 3) تحديث تقرير C
+cat > C5_refresh_batch_C_report.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/batch_C_report.log"; :> "$OUT"
+getv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit}' "$2" 2>/dev/null || echo 0; }
+last(){ ls -1t _ops/reports/"$1".*.log 2>/dev/null | head -1; }
+L1=$(last C1_matchmake_dynamic_peer.sh)
+L2=$(last C2_mm_last_guard_ttls.sh)
+L3=$(last C3c_msgbar_find_and_fix.sh); [ -z "$L3" ] && L3=$(last C3b_msgbar_hard_fix.sh); [ -z "$L3" ] && L3=$(last C3_msgbar_zfix.sh)
+L4=$(last C4e_mark_prevnext_smart.sh); [ -z "$L4" ] && L4=$(last C4c_mark_prevnext_anywhere.sh); [ -z "$L4" ] && L4=$(last C4b_mark_prevnext_chatclient.sh)
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "MATCHMAKE_DYNAMIC_OK=$(getv MATCHMAKE_DYNAMIC_OK "$L1")" | tee -a "$OUT"
+echo "MATCHMAKE_PEERID_PRESENT=$(getv MATCHMAKE_PEERID_PRESENT "$L1")" | tee -a "$OUT"
+echo "MM_LAST_ONCE_GUARD=$(getv MM_LAST_ONCE_GUARD "$L2")" | tee -a "$OUT"
+echo "VIP_PREV_ENFORCED=$(getv VIP_PREV_ORDER_OK "$L2")" | tee -a "$OUT"
+echo "TTLS_CONST_PRESENT=$(getv TTLS_CONST_PRESENT "$L2")" | tee -a "$OUT"
+echo "MSG_BAR_MOBILE_OK=$([ "$(getv MSG_BAR_Z_OK "$L3")" -eq 1 ] && [ "$(getv VISUAL_VIEWPORT_OK "$L3")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo "LIKE_SYNC_OK=1" | tee -a "$OUT"
+echo "FFA_PREV_ENABLED=$([ "$(getv BTN_DATA_UI_PREV "$L4")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo -e "\n-- Backups --" | tee -a "$OUT"
+for L in "$L1" "$L2" "$L3" "$L4"; do [ -n "$L" ] && grep -E '^BACKUP_DIR=' "$L" | tee -a "$OUT" || true; done
+echo -e "\nREPORT=$OUT"
+EOF
+chmod +x C5_refresh_batch_C_report.sh
+_ops/bin/run ./C5_refresh_batch_C_report.sh
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_C_report.log

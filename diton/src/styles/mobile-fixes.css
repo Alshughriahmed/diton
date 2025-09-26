@@ -1,0 +1,42 @@
+/* ====== Toolbar: شفاف + تمرير عند الضيق ====== */
+[data-chat-container] [data-toolbar]{
+  position:absolute; left:.5rem; right:.5rem; bottom:.75rem;
+  display:flex; gap:.5rem; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  align-items:center; justify-content:flex-start; padding:.25rem .25rem;
+}
+[data-chat-container] [data-toolbar] button,
+[data-chat-container] [data-toolbar] .btn{
+  background:transparent !important; border:0 !important; box-shadow:none !important;
+  outline:none !important;
+}
+/* حالة تفاعلية بسيطة عند الكتم/الإيقاف (لو زر يضيف data-state) */
+[data-chat-container] [data-toolbar] [data-state~="off"]{ opacity:.55; filter:saturate(.6) }
+
+/* ====== قوائم Gender/Countries أعلى اليمين: لا تحجب المحتوى ====== */
+[data-remote-top-right]{
+  position:absolute; top:.5rem; right:.5rem; z-index:50; pointer-events:auto;
+}
+[data-remote-top-right] .menu,[data-remote-top-right] [role="menu"]{
+  margin-top:.5rem; right:0; inset-inline-start:auto;
+}
+
+/* ====== شريط الرسائل دائماً بالأسفل + جاهز للموبايل ====== */
+[data-messaging-bar]{
+  position:fixed; left:.5rem; right:.5rem; bottom:calc(env(safe-area-inset-bottom) + .5rem);
+  display:flex; gap:.5rem; align-items:center; z-index:50;
+}
+[data-messaging-bar] input,[data-messaging-bar] textarea{
+  flex:1; min-height:2.5rem;
+}
+
+/* ====== Video z-index أقل من الأدوات ====== */
+video[data-local-video], video[data-role="remote"]{
+  z-index:10;
+}
+
+/* ====== تحسين إمكانية النقر على الفلاتر ====== */
+[data-remote-top-right] select, [data-remote-top-right] button {
+  pointer-events: auto !important;
+  min-height: 44px; /* iOS touch target */
+  min-width: 44px;
+}

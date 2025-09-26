@@ -1,0 +1,306 @@
+السكربت الوحيد للوكيل
+
+شغّل من جذر المشروع. لا يلمس الميزات غير اللازمة. يكتب تقريرًا ويوقف عند أول خطأ.
+
+#!/usr/bin/env bash
+# agent_batch_matchmaker_v3.sh
+set -euo pipefail
+TS="$(date +%Y%m%d-%H%M%S)"
+BR="feature/batch-rtc-matchmaker-v3"
+REP="_ops/reports/batch_rtc_matchmaker_${TS}.txt"
+mkdir -p "_ops/reports" "src/lib" \
+         "src/app/api/rtc/matchmake" \
+         "src/app/api/rtc/offer" \
+         "src/app/api/rtc/answer"
+
+echo "-- Start $TS --" | tee "$REP"
+git checkout -B "$BR" || git checkout "$BR"
+
+############################################
+# 0) توافق Redis/Queue إن لم تكن موجودة
+############################################
+# redis compat aliases (rSet/rGet already added سابقًا؛ نضمن re-exports)
+if grep -q "export const setex" src/lib/redis.ts 2>/dev/null; then
+  echo "redis compat OK" | tee -a "$REP"
+else
+  cat >> src/lib/redis.ts <<'TS'
+
+// compatibility re-exports (for older imports)
+export const setex = rSet;
+export const get = rGet;
+TS
+fi
+
+# queue helpers: qLen/qPush/qPop2 + queueMode
+if grep -q "export async function qPop2" src/lib/queue.ts 2>/dev/null; then
+  echo "queue helpers OK" | tee -a "$REP"
+else
+  cat > src/lib/queue.ts <<'TS'
+import { rLPush, rLPop, rLLen } from "./redis";
+const qKey = process.env.RTC_QUEUE_KEY || "rtc:queue:default";
+const mem: string[] = [];
+const useMem = !process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN;
+export function queueMode(){ return useMem ? "memory" : "redis"; }
+export async function qLen(){ if(useMem) return {mode:"memory",len:mem.length}; const {len}=await rLLen(qKey); return {mode:"redis",len};}
+export async function qPush(id:string){ if(!id) return await qLen(); if(useMem){mem.push(id); return {mode:"memory",len:mem.length}} await rLPush(qKey,id); return await qLen(); }
+export async function qPop2(){ if(useMem){ const a=mem.shift()||null,b=mem.shift()||null; return {mode:"memory",pair:a&&b?[a,b]:null}} const a=(await rLPop(qKey)).value,b=(await rLPop(qKey)).value; return {mode:"redis",pair:a&&b?[a,b]:null}}
+TS
+fi
+
+############################################
+# 1) Matchmaker API
+############################################
+cat > src/app/api/rtc/matchmake/route.ts <<'TS'
+import { NextResponse } from "next/server";
+import { rSet, rGet } from "@/lib/redis";
+import { qPop2 } from "@/lib/queue";
+
+export const runtime = "nodejs";
+const TTL = 60 * 60; // 1h
+
+function pid(){ return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}` }
+function whoKey(anon:string){ return `rtc:who:${anon}` }
+function pairKey(p:string){ return `rtc:pair:${p}` }
+
+// GET /api/rtc/matchmake?anonId=...
+export async function GET(req: Request){
+  const u=new URL(req.url); const anon=u.searchParams.get("anonId")||"";
+  if(!anon) return NextResponse.json({ok:false,error:"anonId"},{status:400});
+  const who = await rGet(whoKey(anon));
+  if(who.value){
+    try{ const obj=JSON.parse(who.value); return NextResponse.json({ok:true, found:true, pairId:obj.pairId, role:obj.role}); }catch{}
+  }
+  return NextResponse.json({ok:true, found:false});
+}
+
+// POST /api/rtc/matchmake -> try pair two
+export async function POST(){
+  const pair = await qPop2();
+  if(!pair.pair){ return NextResponse.json({ok:true, paired:false}); }
+  const [a,b]=pair.pair as [string,string];
+  const p = pid();
+  await rSet(pairKey(p), JSON.stringify({a,b,ts:Date.now()}), TTL);
+  await rSet(whoKey(a), JSON.stringify({pairId:p, role:"caller"}), TTL);
+  await rSet(whoKey(b), JSON.stringify({pairId:p, role:"callee"}), TTL);
+  return NextResponse.json({ok:true, paired:true, pairId:p, a, b});
+}
+TS
+
+############################################
+# 2) Offer/Answer APIs (idempotent, small)
+############################################
+cat > src/app/api/rtc/offer/route.ts <<'TS'
+import { NextResponse } from "next/server";
+import { rSet, rGet } from "@/lib/redis";
+export const runtime = "nodejs";
+function key(pairId:string, role:string){ return `rtc:sdp:${pairId}:${role}`; }
+function other(role:string){ return role==="caller"?"callee":"caller"; }
+export async function OPTIONS(){ return NextResponse.json({ok:true}); }
+export async function POST(req:Request){
+  const b:any = await req.json().catch(()=>({}));
+  const { pairId, role, sdp } = b||{};
+  if(!pairId||!role||!sdp) return NextResponse.json({ok:false,error:"bad"},{status:400});
+  await rSet(key(pairId,role), JSON.stringify({sdp,ts:Date.now()}), 3600);
+  return NextResponse.json({ok:true});
+}
+export async function GET(req:Request){
+  const u=new URL(req.url); const pairId=u.searchParams.get("pairId"); const role=u.searchParams.get("role");
+  if(!pairId||!role) return NextResponse.json({ok:false,error:"bad"},{status:400});
+  const r = await rGet(key(pairId, other(role)));
+  if(!r.value) return NextResponse.json({ok:true,ready:false});
+  return NextResponse.json({ok:true,ready:true, ...JSON.parse(r.value)});
+}
+TS
+
+cat > src/app/api/rtc/answer/route.ts <<'TS'
+import { NextResponse } from "next/server";
+import { rSet, rGet } from "@/lib/redis";
+export const runtime = "nodejs";
+function key(pairId:string, role:string){ return `rtc:sdp:${pairId}:${role}`; }
+function other(role:string){ return role==="caller"?"callee":"caller"; }
+export async function OPTIONS(){ return NextResponse.json({ok:true}); }
+export async function POST(req:Request){
+  const b:any = await req.json().catch(()=>({}));
+  const { pairId, role, sdp } = b||{};
+  if(!pairId||!role||!sdp) return NextResponse.json({ok:false,error:"bad"},{status:400});
+  await rSet(key(pairId,role), JSON.stringify({sdp,ts:Date.now()}), 3600);
+  return NextResponse.json({ok:true});
+}
+export async function GET(req:Request){
+  const u=new URL(req.url); const pairId=u.searchParams.get("pairId"); const role=u.searchParams.get("role");
+  if(!pairId||!role) return NextResponse.json({ok:false,error:"bad"},{status:400});
+  const r = await rGet(key(pairId, other(role)));
+  if(!r.value) return NextResponse.json({ok:true,ready:false});
+  return NextResponse.json({ok:true,ready:true, ...JSON.parse(r.value)});
+}
+TS
+
+############################################
+# 3) واجهة: FREE_FOR_ALL gating + enqueue+poll
+############################################
+# 3.a إزالة الأقفال عندما NEXT_PUBLIC_FREE_FOR_ALL=1
+sed -i 's/disabled={!isVip}/disabled={process.env.NEXT_PUBLIC_FREE_FOR_ALL==="1"?false:!isVip}/g' src/components/chat/ChatToolbar.tsx 2>/dev/null || true
+find src/components -maxdepth 2 -name "*Filter*.tsx" -print0 2>/dev/null | xargs -0 -I{} perl -0777 -pe 's/disabled={!isVip}/disabled={process.env.NEXT_PUBLIC_FREE_FOR_ALL==="1"?false:!isVip}/g' -i {} 2>/dev/null || true
+
+# 3.b ربط الـenqueue + polling + SDP في ChatClient.tsx (حقن لطيف)
+CHAT="src/app/chat/ChatClient.tsx"
+if [ -f "$CHAT" ]; then
+  cp -f "$CHAT" "${CHAT}.bak"
+  # enqueue على Next موجود; نضيف poll+rtc helpers إن لم تكن موجودة
+  if ! grep -q "function pollPair" "$CHAT"; then
+    cat >> "$CHAT" <<'TS'
+
+// === Ditona RTC helpers (injected) ===
+async function getAnonId(){
+  let id = typeof window!=="undefined" ? localStorage.getItem("ditona_anon") : null;
+  if(!id && typeof window!=="undefined"){ id = `anon-${Date.now().toString(36)}-${Math.floor(Math.random()*1e6).toString(36)}`; localStorage.setItem("ditona_anon", id); }
+  return id||"";
+}
+async function enqueueOnce(){
+  const anonId = await getAnonId();
+  try{ await fetch("/api/rtc/enqueue",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({anonId})}); }catch{}
+}
+async function pollPair(ms=1000){
+  const anonId = await getAnonId();
+  for(let i=0;i<60;i++){
+    try{
+      const r = await fetch(`/api/rtc/matchmake?anonId=${encodeURIComponent(anonId)}`);
+      const j = await r.json();
+      if(j?.found && j?.pairId){
+        localStorage.setItem("ditona_pair", j.pairId);
+        localStorage.setItem("ditona_role", j.role);
+        return j;
+      }
+    }catch{}
+    await new Promise(res=>setTimeout(res, ms));
+    // try to progress pairing from server
+    try{ await fetch("/api/rtc/matchmake",{method:"POST"}); }catch{}
+  }
+  return null;
+}
+async function startRTCWithEndpoints(stream: MediaStream){
+  const pairId = localStorage.getItem("ditona_pair")||"";
+  const role = localStorage.getItem("ditona_role")||"caller";
+  const iceServers = (typeof process!=="undefined" && process.env.NEXT_PUBLIC_TURN_URL)
+    ? [{urls: process.env.NEXT_PUBLIC_TURN_URL as string, username: process.env.NEXT_PUBLIC_TURN_USER as string|undefined, credential: process.env.NEXT_PUBLIC_TURN_PASS as string|undefined}]
+    : [{urls:"stun:stun.l.google.com:19302"}];
+
+  const pc = new RTCPeerConnection({iceServers});
+  stream.getTracks().forEach(t=>pc.addTrack(t, stream));
+  pc.onicecandidate = async (e)=>{ if(e.candidate){ try{ await fetch("/api/rtc/ice",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,candidate:e.candidate})}); }catch{} } };
+
+  async function pollICE(){
+    for(let i=0;i<200;i++){
+      try{
+        const r = await fetch(`/api/rtc/ice?pairId=${encodeURIComponent(pairId)}`);
+        const j = await r.json(); if(j?.candidate){ try{ await pc.addIceCandidate(j.candidate); }catch{} }
+      }catch{}
+      await new Promise(r=>setTimeout(r,500));
+    }
+  }
+
+  if(role==="caller"){
+    const offer = await pc.createOffer({offerToReceiveAudio:true, offerToReceiveVideo:true});
+    await pc.setLocalDescription(offer);
+    await fetch("/api/rtc/offer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"caller",sdp:offer})});
+    // poll answer
+    for(let i=0;i<60;i++){
+      const r = await fetch(`/api/rtc/answer?pairId=${encodeURIComponent(pairId)}&role=caller`);
+      const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
+      await new Promise(res=>setTimeout(res,1000));
+    }
+  }else{
+    // callee path: wait for offer first
+    for(let i=0;i<60;i++){
+      const r = await fetch(`/api/rtc/offer?pairId=${encodeURIComponent(pairId)}&role=callee`);
+      const j = await r.json(); if(j?.ready && j?.sdp){ await pc.setRemoteDescription(j.sdp); break; }
+      await new Promise(res=>setTimeout(res,1000));
+    }
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await fetch("/api/rtc/answer",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pairId,role:"callee",sdp:answer})});
+  }
+  pollICE().catch(()=>{});
+  (window as any).ditonaPC = pc; // debug
+  return pc;
+}
+// kick on mount (non-blocking)
+try{ enqueueOnce(); }catch{}
+TS
+  fi
+fi
+
+############################################
+# 4) ChatMessaging: إظهار الرسالة محليًا فورًا
+############################################
+MSG="src/components/chat/ChatMessaging.tsx"
+if [ -f "$MSG" ]; then
+  cp -f "$MSG" "${MSG}.bak"
+  # placeholder + append locally after 200
+  perl -0777 -pe 's/placeholder="[^"]*"/placeholder="Type a message…"/' -i "$MSG"
+  if ! grep -q "appendLocalAfterSend" "$MSG"; then
+    cat >> "$MSG" <<'TS'
+
+/* ensure local echo after successful POST */
+function appendLocalAfterSend(listSetter:any, text:string){
+  listSetter((prev:any[])=>[...prev.slice(-2), {id:Date.now(), me:true, text}]);
+}
+TS
+    perl -0777 -pe 's/await fetch\(([^;]+)\);\s*}/const __r = await fetch(\1);\n    if(__r.ok){ appendLocalAfterSend(setMessages, text); }\n  }/s' -i "$MSG" || true
+  fi
+fi
+
+############################################
+# 5) Build + Acceptance
+############################################
+echo "-- Build --" | tee -a "$REP"
+pnpm i --frozen-lockfile | tee -a "$REP" || true
+pnpm -s build | tee -a "$REP"
+
+BASE="${1:-https://www.ditonachat.com}"
+{
+  echo "-- Env --"
+  echo "BASE=$BASE"
+  echo "-- Acceptance --"
+  echo -n "QLEN_MODE="; curl -s "$BASE/api/rtc/qlen" | jq -r '.mode' 2>/dev/null || curl -s "$BASE/api/rtc/qlen"
+  echo -n "ENQUEUE_POST_CODE="; curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/rtc/enqueue" -H 'content-type: application/json' -d '{"anonId":"acc-'"$TS"'"}'
+  echo
+  echo -n "MATCH_POLLER_GET="; curl -s "$BASE/api/rtc/matchmake?anonId=acc-$TS"
+  echo
+  echo -n "OFFER_GET_405_EXPECT="; curl -s -o /dev/null -w "%{http_code}" "$BASE/api/rtc/offer"
+  echo
+  echo -n "ANSWER_GET_405_EXPECT="; curl -s -o /dev/null -w "%{http_code}" "$BASE/api/rtc/answer"
+  echo
+  echo "-- End Acceptance --"
+} | tee -a "$REP"
+
+git add -A
+git commit -m "rtc: matchmaker + sdp endpoints + ui enqueue/poll + free-for-all gating + local message echo" || true
+git push -u origin "$BR" || true
+
+echo "REPORT=$REP" | tee -a "$REP"
+echo "-- Done --" | tee -a "$REP"
+
+ما نحتاجه من الوكيل قبل الإنهاء
+
+تشغيل السكربت أعلاه.
+
+تأكيد النجاح بالـAcceptance في التقرير.
+
+فحص بصري على الموبايل والكمبيوتر:
+
+افتح /chat على جهازين. اسمح بالأذونات.
+
+راقب أن الاتصال يبدأ خلال ثوانٍ.
+
+جرّب “Next” ثم إرسال رسالة، تظهر فورًا.
+
+تأكد غياب الأقفال عند NEXT_PUBLIC_FREE_FOR_ALL=1.
+
+تسليم:
+
+رابط الفرع/PR.
+
+ملف التقرير REPORT= المطبوع.
+
+ملاحظات قصيرة إن واجه حالات حدّية أو عدّل جزئيًا.

@@ -1,0 +1,106 @@
+المهمة: Fix 401 + Bridge dedupe + dc-open (Minimal-Diff)
+
+الهدف:
+
+إصلاح 401 anon-required في /api/rtc/{enqueue,matchmake} عبر تعديل وحيد في التحقق من كوكي anon.
+
+إزالة ازدواج جسر FFA في ChatClient.tsx.
+
+بث حدث dc-open عند فتح الـDataChannel لضمان تحديث بطاقات الطرف.
+
+القيود:
+
+ممنوع حذف ميزات أو تغيير منطق VIP/الاشتراك.
+
+ممنوع تعديل مدير الحزم أو القفل.
+
+تعديل Minimal-Diff فقط، كومِت واحد واضح.
+
+لا أدوات تفاعلية ولا شاشة بديلة. مهلات ثابتة للـcurl.
+
+تقرير واحد إلى _ops/reports/agent_front_rtc_<UTC>.log.
+
+التعديلات المطلوبة بدقة:
+
+src/lib/rtc/auth.ts
+استبدل دالة verifySigned كما يلي:
+
+// BEFORE
+function verifySigned(raw: string, secret: string) {
+  const [b64, sig] = raw.split(".");
+  if (!b64 || !sig) return null;
+  const calc = createHmac("sha256", secret).update(b64).digest("hex");
+  if (calc !== sig) return null;
+  return Buffer.from(b64, "base64url").toString("utf8");
+}
+
+// AFTER (Minimal-Diff)
+function verifySigned(raw: string, secret: string) {
+  const [body, sig] = (raw || "").split(".");
+  if (!body || !sig) return null;
+  const calc = createHmac("sha256", secret).update(body).digest("hex");
+  if (calc !== sig) return null;
+  try { return Buffer.from(body, "base64url").toString("utf8"); }
+  catch { return body; } // UUID خام صالح
+}
+
+
+إزالة الازدواج في src/app/chat/ChatClient.tsx
+
+احذف سطر import "./freeForAllBridge";
+
+أبقِ import FreeForAllBridge from "./components/FreeForAllBridge";
+
+في الـJSX أبقِ مثيلًا واحدًا فقط لـ<FreeForAllBridge /> في الجذر. احذف التكرار الثاني.
+
+بث dc-open في الـRTC
+في src/app/chat/rtcFlow.ts بعد إنشاء القناة على الـcaller وأيضًا عند استقبالها على الـcallee، أضِف:
+
+dc.addEventListener("open", () => {
+  try {
+    window.dispatchEvent(new CustomEvent("rtc:phase", {
+      detail: { phase: "dc-open", role: state?.role ?? null }
+    }));
+  } catch {}
+});
+
+
+لا تستبدل onopen إن كانت موجودة. فقط أضف المستمع.
+
+التحقق بعد البناء:
+
+فحوص API (جلستان A/B):
+
+GET /api/rtc/env ⇒ يظهر FREE_FOR_ALL=1.
+
+POST /api/age/allow ⇒ 200.
+
+POST /api/rtc/init ⇒ 200 وكوكي anon.
+
+POST /api/rtc/enqueue (A وB) ⇒ 204.
+
+POST /api/rtc/matchmake (A وB) ⇒ 200 مع found=true، وقيم:
+
+pairId متطابق بين A وB
+
+role مختلف (caller/callee)
+
+/api/message/allow مع {pairId} تحت FFA ⇒ 200.
+
+من المتصفح صفحتين /chat:
+
+خلال ≤2s يبدأ “searching”.
+
+يسجَّل rtc:phase {phase:'dc-open'} عند فتح القناة.
+
+يصل ditona:peer-meta وتُحدَّث البطاقة ≤300ms.
+
+لا وجود لـprocess.env.NEXT_PUBLIC_FREE_FOR_ALL في ملفات العميل:
+grep -RIl 'process.env.NEXT_PUBLIC_FREE_FOR_ALL' src || true ⇒ صفر نتائج.
+
+المخرجات المطلوبة:
+
+تقرير قبول _ops/reports/agent_front_rtc_<UTC>.log يحتوي مفاتيح:
+ENV_OK, AGE_OK, ANON_OK, ENQUEUE_OK, MATCH_OK, MSG_ALLOW_OK, DC_OPEN_OK, CLIENT_ENV_REMOVED
+
+مقتطفات JSON للـmatchmake تُظهر pairId/role للطرفين.

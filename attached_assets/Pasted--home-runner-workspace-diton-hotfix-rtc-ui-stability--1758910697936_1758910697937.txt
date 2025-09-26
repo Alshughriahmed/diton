@@ -1,0 +1,151 @@
+السياق الثابت
+
+الجذر: /home/runner/workspace/diton
+
+الفرع: يبدأ بـ hotfix/rtc-ui-stability
+
+الريبو: https://github.com/Alshughriahmed/diton.git
+
+البناء: pnpm -s build
+
+أنت فشلت سابقًا بإعلان نجاح دون أدلة. هذه المرة مطلوب أدلة نصية صارمة قبل القبول.
+
+قيود صارمة
+
+اعمل فقط داخل الجذر أعلاه. لا تلمس أي مسار خارجه.
+
+غيّر ملفين فقط:
+
+src/app/chat/dcMetaResponder.client.ts
+
+src/app/chat/components/MessageHud.tsx
+
+Minimal-Diff. LF وUTF-8. لا تغييرات على السيرفر أو API.
+
+ممنوع NEXT_PUBLIC_* في ملفات العميل.
+
+ما ستنفذه
+
+اطبع الإثبات المسبق:
+
+pwd && git rev-parse --show-toplevel && git branch --show-current && git remote -v
+
+أكد أن الجذر يساوي المسار أعلاه وأن الفرع يبدأ بـ hotfix/rtc-ui-stability.
+
+نسخ احتياطية:
+
+أنشئ: _ops/backups/p8_meta_<UTC>/ و_ops/backups/p3_msgs_<UTC>/
+
+انسخ الملفين المستهدفين قبل التعديل.
+
+طبّق الرقع أدناه بصيغة unified diff:
+
+Patch 1 — P8 (+1200ms meta:init)
+
+المسار: src/app/chat/dcMetaResponder.client.ts
+
+*** Begin Patch
+*** Update File: src/app/chat/dcMetaResponder.client.ts
+@@
+   if (dc.readyState === "open") {
+     try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+     setTimeout(() => { try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
++    /* P8_META_1200 */
++    setTimeout(() => { try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 1200);
+   }
+ }
+*** End Patch
+
+Patch 2 — P3 (reset + feed سفلي)
+
+المسار: src/app/chat/components/MessageHud.tsx
+
+*** Begin Patch
+*** Update File: src/app/chat/components/MessageHud.tsx
+@@
+-"use client";
+-import { useEffect, useState } from "react";
++"use client";
++import { useEffect, useState, useRef } from "react";
+@@
+ export default function MessageHud(){
+   const [lines,setLines]=useState<Line[]>([]);
++  const endRef = useRef<HTMLDivElement>(null);
++  /* P3_MSG_RESET */
++  useEffect(()=>{
++    const onPair=()=>setLines([]);
++    window.addEventListener('rtc:pair', onPair as any);
++    return ()=> window.removeEventListener('rtc:pair', onPair as any);
++  },[]);
++  /* P3_AUTO_SCROLL */
++  useEffect(()=>{ endRef.current?.scrollIntoView({block:'end'}); }, [lines]);
+@@
+       ))}
++      <div ref={endRef} />
+     </div>
+   );
+ }
+*** End Patch
+
+
+تطبيق فعلي:
+
+نفّذ git apply --check للرقعتين ثم git apply.
+
+اطبع git diff -U3 -- src/app/chat/dcMetaResponder.client.ts src/app/chat/components/MessageHud.tsx لإظهار التغييرات.
+
+اطبع مقاطع الأسطر المعدّلة:
+
+sed -n '1,140p' src/app/chat/dcMetaResponder.client.ts | nl | sed -n '1,140p' | sed -n '/P8_META_1200/+-6p'
+
+grep -n "P3_MSG_RESET\|P3_AUTO_SCROLL" src/app/chat/components/MessageHud.tsx && sed -n '1,200p' src/app/chat/components/MessageHud.tsx | nl | sed -n '/P3_MSG_RESET/,+20p'
+
+اطبع SHA لكل ملف بعد التعديل: sha256sum <file>.
+
+بناء:
+
+شغّل pnpm -s build. إذا فشل اطبع آخر 200 سطر من اللوج ثم توقّف.
+
+فحص P6/P7 بلا تعديل:
+
+Prev/Filters: اطبع تحققًا فقط:
+
+grep -n "Prev" src/components/chat/ChatToolbar.tsx || true
+
+grep -n "dc?.readyState==='open' && pairId" src/components/chat/ChatToolbar.tsx || true
+
+grep -n "filtersEnabled = .*ffa || .*dc?.readyState==='open'" src/components/chat/FilterBar.tsx || true
+
+نظافة البيئة على العميل:
+
+اطبع قائمة ملفات العميل التي تحتوي NEXT_PUBLIC_ إن وُجدت:
+git ls-files "src/**/*.{ts,tsx,js,jsx}" | xargs -I{} sh -c "head -n1 {} | grep -q \"use client\" && grep -q \"NEXT_PUBLIC_\" {} && echo {}" || true
+لا تعدّل هنا، تقرير فقط لتخفيض الكلفة.
+
+اطبع بلوكي قبول نهائيين بدقة:
+
+-- Acceptance P8 --
+BUILD_OK=1
+META_1200_OK=1   # grep -q "P8_META_1200" على الملف
+FILE=src/app/chat/dcMetaResponder.client.ts
+BACKUP_DIR=_ops/backups/p8_meta_<UTC>
+SHA=<sha256>
+-- /Acceptance P8 --
+
+-- Acceptance P3 --
+BUILD_OK=1
+MSG_RESET_OK=1    # وجود P3_MSG_RESET
+AUTO_SCROLL_OK=1  # وجود P3_AUTO_SCROLL
+FILE=src/app/chat/components/MessageHud.tsx
+BACKUP_DIR=_ops/backups/p3_msgs_<UTC>
+SHA=<sha256>
+-- /Acceptance P3 --
+
+
+أكد أنك عملت في الجذر المحدد فقط بطباعة:
+
+git rev-parse --show-toplevel
+
+find . -maxdepth 3 -path "./_ops/backups/*" -type f | wc -l
+
+إن تعذّر تطبيق أي رقعة لعدم تطابق السياق، لا تختلق نجاحًا. اطبع السبب الدقيق والأسطر المحيطة، ثم اقترح أصغر تعديل مكافئ بنفس الروح.

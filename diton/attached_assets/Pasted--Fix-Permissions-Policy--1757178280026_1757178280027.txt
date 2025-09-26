@@ -1,0 +1,83 @@
+مهمة: Fix Permissions-Policy نهائيًا + فحوص ما قبل الدفع والنشر
+
+نطاق العمل: اعمل حصريًا داخل جذر المستودع الحالي. تحقّق أولًا بـ git rev-parse --show-toplevel ثم cd إليه. لا تعمل خارج الجذر. لا تغيّر التبعيات. لا تدفع إلى GitHub.
+
+1) توحيد مصدر الهيدر ومنع التعارض
+
+السبب المؤكد للمشكلة: وجود middleware مزدوج (/middleware.ts و/src/middleware.ts) وواحد منهما يكتب camera=(), microphone=(), geolocation=().
+
+المطلوب:
+
+احذف أو عطّل src/middleware.ts نهائيًا. يجب أن يبقى ملف middleware واحد فقط.
+
+اترك middleware.ts الجذري لبوابة العمر فقط، بدون أي res.headers.set(...).
+
+مصدر الحقيقة للهيدرز يكون في next.config.mjs فقط عبر export default { async headers(){ … } }.
+
+اضبط القيمة حرفيًا:
+Permissions-Policy: camera=(self), microphone=(self)
+
+لا تضف geolocation ولا أي توجيه آخر.
+
+أبقِ أيضًا: X-Content-Type-Options:nosniff وReferrer-Policy:no-referrer وHSTS.
+
+تشخيص مؤقت: أضف X-PP-Source: next.config أثناء الفحص. بعد نجاح الفحص، احذفه.
+
+2) تحقّق من إعدادات CSS لمنع مشكلة Vercel القديمة
+
+Tailwind/PostCSS ESM فقط: وجود postcss.config.js, tailwind.config.js ولا توجد .cjs/.mjs بديلة.
+
+محتوى tailwind.config.js يشمل ./src/app/**/* و./src/components/**/*.
+
+في src/app/layout.tsx يوجد سطر واحد فقط: import "./globals.css".
+
+src/app/globals.css يحوي @tailwind base; @tailwind components; @tailwind utilities;.
+
+3) بناء محلي تحقّقي
+
+نفّذ بناءً محليًا. إذا فشل، أصلِح الاستيرادات فقط ثم أعد البناء حتى يمر.
+
+4) تشغيل dev وفحص شامل
+
+/api/health = 200.
+
+/ و/plans = 200.
+
+تدفّق العمر: /chat 307 بدون كوكي → POST /api/age/allow → /chat = 200.
+
+CSS: استخراج رابط /_next/static/css/...، Content-Type=text/css، ووجود Utilities مثل min-h-screen أو bg-gradient-to-b.
+
+VIP: قبل/بعد كوكي vip=1 → 200 وتتبدّل via.
+
+Permissions-Policy على /chat بعد الكوكي = حرفيًا:
+camera=(self), microphone=(self)
+ويُظهر X-PP-Source: next.config أثناء الفحص فقط.
+
+5) قبول نهائي اطبعه نصيًا
+-- Acceptance --
+ROOT_MATCH=yes
+ONE_MIDDLEWARE_FILE=yes
+BUILD=ok
+HTTP=/:200 /plans:200 /api/health:200 /chat:307->200
+CSS_LINK=1 CONTENT_TYPE=text/css utilities:found
+AGE_FLOW=ok VIP=pre:200 post:200
+PERMISSIONS_POLICY=camera=(self), microphone=(self)
+-- End Acceptance --
+
+6) تقرير مختصر
+
+اكتب تقريرًا في _ops/reports/pp_fix_predeploy.md يوضّح:
+
+الملفات المعدّلة وأماكن الأسطر.
+
+نتيجة فحص الهيدر قبل/بعد.
+
+لقطات من pnpm build المقتضبة.
+
+تأكيد حذف src/middleware.ts.
+
+تأكيد ESM-only وglobals.css مستورد مرة واحدة.
+
+7) ملاحظات تحسينية إن وُجدت
+
+إن رأيت نقطة تحسين أمني/أداء سريعة لا تغيّر السلوك، أدرجها في آخر التقرير بعناوين قصيرة وتكلفة تنفيذ تقديرية.

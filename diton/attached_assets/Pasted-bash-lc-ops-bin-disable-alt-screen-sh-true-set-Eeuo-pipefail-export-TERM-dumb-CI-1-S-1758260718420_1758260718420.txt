@@ -1,0 +1,55 @@
+bash -lc '
+. _ops/bin/disable_alt_screen.sh || true
+set -Eeuo pipefail; export TERM=dumb CI=1
+
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+RPT="_ops/reports/phaseB_pair_bridge_${STAMP}.log"
+BK="_ops/backups/phaseB_pair_bridge_${STAMP}.tar"
+mkdir -p "${RPT%/*}" "${BK%/*}"
+
+# نسخ احتياطي
+tar -cf "$BK" --exclude=.git --exclude=node_modules --exclude="_ops/backups/*" --exclude="_ops/reports/*" .
+
+F="src/app/chat/rtcFlow.ts"
+test -f "$F" || { echo "-- Acceptance --" | tee "$RPT"; echo "RTC_FLOW_FOUND=0" | tee -a "$RPT"; exit 1; }
+
+# 1) إضافة دالة مساعدة لإعلان الـpairId عبر window (idempotent)
+if ! grep -q "__ditonaSetPair" "$F"; then
+  cat >> "$F" <<'"'"'TS'"'"'
+
+/** ditona: broadcast pairId to window for UI runtime */
+function __ditonaSetPair(pid?: string, role?: any){
+  try{
+    (window as any).__ditonaPairId = pid ?? null;
+    if (typeof window !== "undefined") {
+      try { window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: pid ?? null, role } })); } catch {}
+    }
+  }catch{}
+}
+TS
+fi
+
+# 2) عند تعيين state.pairId: أبقِ السطر وأعلن إلى window (استبدال متعدد)
+perl -0777 -i -pe '\''s/state\s*\.\s*pairId\s*=\s*([^;]+);/state.pairId=\1;\n try{ __ditonaSetPair((state as any).pairId, (state as any).role); }catch{};/g'\'' "$F" || true
+
+# 3) عند stop(): صفّر الإعلان
+perl -0777 -i -pe '\''s/(export\s+function\s+stop\s*\([^)]*\)\s*\{\s*)/\1try{ __ditonaSetPair(null as any, (state as any).role); }catch{};\n/;'\' "$F" || true
+
+# 4) قبول
+ok_fn=0;   grep -q "__ditonaSetPair" "$F" && ok_fn=1 || true
+ok_set=0;  grep -q "__ditonaSetPair((state as any).pairId" "$F" && ok_set=1 || true
+ok_stop=0; grep -q "__ditonaSetPair(null as any" "$F" && ok_stop=1 || true
+
+{
+  echo "-- Acceptance --"
+  echo "RTC_FLOW_FOUND=1"
+  echo "SET_PAIR_HELPER_OK=$ok_fn"
+  echo "ASSIGN_HOOK_OK=$ok_set"
+  echo "STOP_RESET_OK=$ok_stop"
+  echo "[refs] backup=$BK"
+} | tee "$RPT"
+echo "[i] Report: $RPT"
+
+# لو فشل أي بند، اطلب تدخل الوكيل لاحقًا
+test "$ok_fn" -eq 1 -a "$ok_set" -eq 1 || exit 2
+'

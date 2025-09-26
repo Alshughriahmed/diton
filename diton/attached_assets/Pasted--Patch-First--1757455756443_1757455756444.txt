@@ -1,0 +1,103 @@
+تسليم مهمة عاجلة عبر الوكيل (Patch-First، أقل فرق ممكن)
+ملخّص ما أُنجز (مرجعي فقط)
+
+شريط رسائل عربي ذكي مع حدّ الضيف 10 → 429 + Upsell.
+
+VIP “مصدر حقيقة”: كوكي HttpOnly vip=1 + JWT/Session (dev grant + claim).
+
+حواجز VIP خادمية على /api/match/next (403/400 حسب القواعد).
+
+Upsell EUR + Stripe (4 خطط) + /api/stripe/subscribe و /api/vip/claim.
+
+تنظيم الواجهة (الشريط، الفلاتر، Beauty).
+
+المشكلة الحالية
+
+عند دخول /chat يظهر مودال الاشتراك مباشرة ويمنع التصفّح. المطلوب: لا يظهر المودال إلا عند محاولة استخدام ميزة مدفوعة (Beauty / Masks / Prev / تجاوز الفلاتر / بلوغ حد الرسائل).
+
+المطلوب الآن (دفعة واحدة)
+A) إيقاف فتح Upsell تلقائيًا
+
+اجعل UpsellModal يبدأ بـ open=false.
+
+ممنوع أي emit('ui:upsell', ...) عند mount/initial render.
+
+افتح المودال فقط على الأحداث الآتية:
+
+الرسائل: عند 429 من /api/message.
+
+الأزرار المدفوعة لغير-VIP: Beauty/Masks/Prev عند الضغط.
+
+الفلاتر: عند 403 من /api/match/next.
+
+مع تفعيل الإطلاق المجاني (انظر B): لا يُفتح المودال إطلاقًا، وتبقى CTA “VIP Plans” اختيارية بزر منفصل فقط.
+
+B) وضع الإطلاق المجاني (FREE_FOR_ALL)
+
+على Vercel (Production): اضبط FREE_FOR_ALL=1.
+
+في /api/message: عندما FREE_FOR_ALL=1 ألْغِ حدّ الضيف (كل الطلبات 200).
+
+في الواجهة: أخفِ أقفال VIP بصريًا عندما FREE_FOR_ALL=1 (لا تغيّر السلوك سوى الإخفاء).
+
+C) إبقاء Stripe جاهزًا بلا إزعاج
+
+المودال يظهر فقط عند النقر على زر VIP Plans (اختياري الآن)، أو عندما نلغي FREE_FOR_ALL لاحقًا.
+
+لا تغييرات على /api/vip/claim أو الأسعار.
+
+معايير القبول (Acceptance)
+
+دخول /chat → لا مودال.
+
+مع FREE_FOR_ALL=0:
+
+الضغط على Beauty/Masks/Prev لغير-VIP → يظهر Upsell.
+
+تجاوز الفلاتر لغير-VIP → يظهر Upsell بعد 403.
+
+بعد 10 رسائل ضيف → 429 + Upsell.
+
+مع FREE_FOR_ALL=1 (Production):
+
+سكربت القبول يعيد:
+
+VIP_GUARDS=SKIPPED
+
+GUEST_MSG_CODES كلّها 200 (لا 429)
+
+تجربة يدوية: لا يظهر Upsell لأي فعل.
+
+لا حذف/تعطيل أي ميزة، ولا تغيير بصري خارج المطلوب.
+
+سكربت القبول (انسخه كما هو)
+# Acceptance (Production)
+BASE="https://www.ditonachat.com"
+echo "-- Acceptance --"
+echo -n "AUTH_PROVIDERS_NONEMPTY="; curl -s "$BASE/api/auth/providers" | grep -q "google" && echo 1 || echo 0
+echo "AUTH_SIGNIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/auth/signin")"
+echo -n "STRIPE_PLANS_COUNT="; curl -s "$BASE/api/stripe/prices" | grep -o '"id":"' | wc -l
+codes=""; for i in {1..5}; do c=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/match/next"); codes+="$c,"; done; echo "MATCH_BURST=$codes"
+echo -n "PERMISSIONS_POLICY_HEADER_PRESENT="; curl -sI "$BASE/chat" | grep -qi "permissions-policy:.*camera=(self), microphone=(self)" && echo 1 || echo 0
+# Guest messages (expect all 200 in FREE_FOR_ALL=1)
+codes=""; for i in {1..12}; do c=$(curl -s -o /dev/null -w "%{http_code}" -H 'content-type: application/json' \
+  -d '{"txt":"hi"}' "$BASE/api/message"); codes+="$c,"; done; echo "GUEST_MSG_CODES=$codes"
+echo "-- End Acceptance --"
+
+طريقة التنفيذ المطلوبة عبر الوكيل (لا تغيّرها)
+git checkout -b feature/upsell-on-explicit-actions
+# طبّق التعديلات بأقل فرق ممكن:
+# - UpsellModal: open=false افتراضيًا + إزالة أي فتح تلقائي على mount
+# - ربط الفتح بالأحداث المذكورة فقط
+# - /api/message: تجاوز حد الضيف عندما FREE_FOR_ALL=1
+# - إخفاء أقفال VIP بصريًا عندما FREE_FOR_ALL=1
+pnpm i --frozen-lockfile && pnpm build
+bash ./acc.sh https://www.ditonachat.com
+git add -A && git commit -m "upsell: open only on explicit actions; FREE_FOR_ALL=1 bypass guest limit"
+git push -u origin feature/upsell-on-explicit-actions
+# افتح PR وارفق لقطات (Desktop/Mobile) + مخرجات acc.sh
+
+
+قيود: ممنوع حذف/تعطيل ميزة، أو أي تغيير شكلي خارج ما ذُكر. عند أي تعارض Patch اطلب مني اسم الملف/السطر أو مخرجات أمر محددة بدل التجارب العشوائية.
+
+التسليم: رابط PR + لقطات (ديسكتوب/موبايل) + مخرجات السكربت + ملاحظات قصيرة عمّا تغيّر ولماذا.

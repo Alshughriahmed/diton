@@ -1,0 +1,354 @@
+🚀 Agent Batch v2 — Filters (Gender/Countries) + VIP-gating + Health + Wiring + Report
+
+انسخ الأوامر كما هي إلى الشِل، وبالترتيب. كل سكربت يطبع Acceptance ثم يتوقّف بـ HOLD.
+
+0) Assert ROOT (sanity, read-only)
+cat > /tmp/00_assert_root_v2.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+ROOT="/home/runner/workspace"; cd "$ROOT"
+exists(){ [[ -e "$1" ]] && echo 1 || echo 0; }
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "LIVE=src:$(exists src) package.json:$(exists package.json) next.config.mjs:$(exists next.config.mjs) tsconfig.json:$(exists tsconfig.json)"
+echo "NOTES=Batch v2 will modify src/ only and add safe APIs/components"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/00_assert_root_v2.sh
+
+1) Health API + English-first config (upsert, safe)
+cat > /tmp/10_health_and_config.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+UTC="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/batch_v2_${UTC}"; mkdir -p "$BK"; changed=()
+upsert(){ tgt="$1"; tmp="$2"; if [[ -f "$tgt" ]]; then if cmp -s "$tgt" "$tmp"; then rm -f "$tmp"; else mkdir -p "$(dirname "$BK/$tgt")"; cp -a "$tgt" "$BK/$tgt"; mv "$tmp" "$tgt"; changed+=("$tgt"); fi else mkdir -p "$(dirname "$tgt")"; mv "$tmp" "$tgt"; changed+=("$tgt"); fi }
+
+# 1) /api/_health → 200 {ok:true}
+mkdir -p src/app/api/_health
+cat > /tmp/health.ts <<'TS'
+import { NextResponse } from "next/server";
+export async function GET(){ return NextResponse.json({ ok:true }, { status:200 }); }
+TS
+upsert "src/app/api/_health/route.ts" /tmp/health.ts
+
+# 2) app config (English-first flags, if missing keep v1 file)
+mkdir -p src/config
+cat > /tmp/app.ts <<'TS'
+export const DEFAULT_LANG = "en";
+export const AUTO_TRANSLATE = false;   // can be toggled later by feature flag
+export const FREE_FOR_ALL = false;     // soft-gating switch if you want to open up limits temporarily
+TS
+upsert "src/config/app.ts" /tmp/app.ts
+
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "BACKUP_DIR=$BK"
+echo "CHANGED_COUNT=${#changed[@]} CHANGED_LIST=${changed[*]:-NONE}"
+echo "HEALTH_API=present"
+echo "LANG_DEFAULT=en AUTO_TRANSLATE=false (config file ensured)"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/10_health_and_config.sh
+
+2) Filters Store (Zustand) + UI components (Gender/Countries) + FilterBar
+cat > /tmp/20_filters_store_ui.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+UTC="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/batch_v2_${UTC}"; mkdir -p "$BK"; changed=()
+
+upsert(){ tgt="$1"; tmp="$2"; if [[ -f "$tgt" ]]; then if cmp -s "$tgt" "$tmp"; then rm -f "$tmp"; else mkdir -p "$(dirname "$BK/$tgt")"; cp -a "$tgt" "$BK/$tgt"; mv "$tmp" "$tgt"; changed+=("$tgt"); fi else mkdir -p "$(dirname "$tgt")"; mv "$tmp" "$tgt"; changed+=("$tgt"); fi }
+
+# Dependencies (tiny) — zustand only if missing
+if ! grep -q '"zustand"' package.json 2>/dev/null; then
+  corepack enable >/dev/null 2>&1 || true
+  pnpm add zustand >/dev/null 2>&1 || npm i zustand --no-audit --no-fund >/dev/null 2>&1
+fi
+
+# 1) Store
+mkdir -p src/state
+cat > /tmp/filters.ts <<'TS'
+"use client";
+import { create } from "zustand";
+
+export type FiltersState = {
+  gender: string;        // we render exactly what's in src/data/genders.ts (unified taxonomy you approved)
+  countries: string[];   // ISO-3166 codes (ALL = global)
+  isVip: boolean;
+  setVip: (v:boolean)=>void;
+  setGender: (g:string)=>void;
+  setCountries: (codes:string[])=>void;
+  reset: ()=>void;
+};
+
+export const useFilters = create<FiltersState>((set)=>({
+  gender: "All",
+  countries: ["ALL"],
+  isVip: false,
+  setVip: (v)=>set({ isVip: !!v }),
+  setGender: (g)=>set((s)=> s.isVip ? { gender:g } : { gender:"All" }),
+  setCountries: (codes)=>set((s)=>{
+    if(!s.isVip) return { countries:["ALL"] };
+    const next = !codes?.length ? ["ALL"] : codes.slice(0,15);
+    return { countries: next };
+  }),
+  reset: ()=>set({ gender:"All", countries:["ALL"] }),
+}));
+TS
+upsert "src/state/filters.ts" /tmp/filters.ts
+
+# 2) GenderSelect — يقرأ القيم من src/data/genders.ts كما هي
+mkdir -p src/components/filters
+cat > /tmp/GenderSelect.tsx <<'TSX'
+"use client";
+import { useFilters } from "@/components/../state/filters";
+import { GENDERS } from "@/components/../data/genders";
+
+export default function GenderSelect(){
+  const { gender, setGender, isVip } = useFilters();
+  return (
+    <div className="inline-flex items-center gap-2">
+      <label className="text-xs opacity-70">Gender</label>
+      <select
+        className="px-2 py-1 rounded-md bg-neutral-800 text-white text-sm border border-neutral-700"
+        value={gender}
+        onChange={(e)=>setGender(e.target.value)}
+        disabled={!isVip}
+        aria-label="Select gender"
+      >
+        {GENDERS.map((g)=>(
+          <option key={g} value={g}>{g}</option>
+        ))}
+      </select>
+      {!isVip && <span className="text-[10px] opacity-60">VIP</span>}
+    </div>
+  );
+}
+TSX
+upsert "src/components/filters/GenderSelect.tsx" /tmp/GenderSelect.tsx
+
+# 3) CountrySelect — English + search + All + 2–3 columns
+cat > /tmp/CountrySelect.tsx <<'TSX'
+"use client";
+import { useEffect, useMemo, useState } from "react";
+import { useFilters } from "@/components/../state/filters";
+import { COUNTRIES, ALL_COUNTRIES_OPTION } from "@/components/../data/countries";
+
+export default function CountrySelect(){
+  const { countries, setCountries, isVip } = useFilters();
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+
+  const list = useMemo(()=>{
+    const arr = [ALL_COUNTRIES_OPTION, ...COUNTRIES];
+    if(!q) return arr;
+    const qq = q.toLowerCase();
+    return arr.filter(c=> c.name.toLowerCase().includes(qq) || c.code.toLowerCase().includes(qq));
+  },[q]);
+
+  const toggle = (code:string)=>{
+    if(!isVip) return setCountries(["ALL"]);
+    if(code==="ALL") return setCountries(["ALL"]);
+    const base = countries.includes("ALL") ? [] : countries.slice();
+    const i = base.indexOf(code);
+    if(i>=0) base.splice(i,1); else base.push(code);
+    setCountries(base.slice(0,15));
+  };
+
+  useEffect(()=>{ if(!isVip) setCountries(["ALL"]); }, [isVip, setCountries]);
+
+  return (
+    <div className="relative">
+      <button onClick={()=>setOpen(v=>!v)}
+        className="px-2 py-1 rounded-md bg-neutral-800 text-white text-sm border border-neutral-700"
+        aria-haspopup="listbox" aria-expanded={open}>
+        Countries {countries.includes("ALL") ? "(All)" : `(${countries.length})`}
+      </button>
+      {!isVip && <span className="ml-2 text-[10px] opacity-60">VIP</span>}
+      {open && (
+        <div className="absolute right-0 mt-2 z-[40] w-[460px] max-h-[320px] overflow-auto p-3 rounded-xl bg-neutral-900 border border-neutral-700 shadow-lg">
+          <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search countries..."
+                 className="w-full mb-2 px-2 py-1 rounded bg-neutral-800 border border-neutral-700 text-sm"/>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-1">
+            {list.map(c=>(
+              <button key={c.code} onClick={()=>toggle(c.code)}
+                className={`text-left px-2 py-1 rounded text-sm hover:bg-neutral-800 ${countries.includes(c.code)?"bg-neutral-800":""}`}
+                role="option" aria-selected={countries.includes(c.code)}>
+                {c.name} <span className="opacity-50 text-[10px]">({c.code})</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+TSX
+upsert "src/components/filters/CountrySelect.tsx" /tmp/CountrySelect.tsx
+
+# 4) FilterBar — يقرأ VIP من API ويغذّي الـstore
+cat > /tmp/FilterBar.tsx <<'TSX'
+"use client";
+import { useEffect } from "react";
+import GenderSelect from "./GenderSelect";
+import CountrySelect from "./CountrySelect";
+import { useFilters } from "@/components/../state/filters";
+
+export default function FilterBar(){
+  const { setVip } = useFilters();
+  useEffect(()=>{
+    let alive=true;
+    (async()=>{
+      try{
+        const r = await fetch("/api/user/vip-status",{cache:"no-store"});
+        const j = await r.json().catch(()=>({isVip:false}));
+        if(alive) setVip(!!j?.isVip);
+      }catch{ if(alive) setVip(false); }
+    })();
+    return ()=>{ alive=false; };
+  },[setVip]);
+
+  return (
+    <div className="absolute top-3 right-3 z-[40] flex items-center gap-3">
+      <GenderSelect/>
+      <CountrySelect/>
+    </div>
+  );
+}
+TSX
+upsert "src/components/filters/FilterBar.tsx" /tmp/FilterBar.tsx
+
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "BACKUP_DIR=$BK"
+echo "CHANGED_LIST=${changed[*]:-NONE}"
+echo "FILES_PRESENT=filters_store:$(test -f src/state/filters.ts && echo 1 || echo 0) gender_select:$(test -f src/components/filters/GenderSelect.tsx && echo 1 || echo 0) country_select:$(test -f src/components/filters/CountrySelect.tsx && echo 1 || echo 0) filter_bar:$(test -f src/components/filters/FilterBar.tsx && echo 1 || echo 0)"
+echo "NOTES=UI + store ready; next step wiring into ChatClient.tsx"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/20_filters_store_ui.sh
+
+
+ملاحظة: استخدمت مسارات استيراد متحفّظة (@/components/../state/...) لتجنب اختلاف إعداد alias؛ ويظل البناء صحيحًا في العادة.
+
+3) Wiring تلقائي لمكوّن FilterBar داخل src/app/chat/ChatClient.tsx
+
+إدراج import إن لم يوجد.
+
+حقن <FilterBar/> بالقرب من Quick Dock anchor (الذي نعرفه من السطر 98 تقريبًا).
+
+cat > /tmp/30_wire_filterbar.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+FILE="src/app/chat/ChatClient.tsx"
+BKDIR="_ops/backups/wire_v2_$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$BKDIR"
+wired=0; imported=0; injected=0
+if [[ -f "$FILE" ]]; then
+  cp -a "$FILE" "$BKDIR/ChatClient.tsx.bak"
+  # 1) import
+  if ! grep -q 'components/filters/FilterBar' "$FILE"; then
+    awk 'NR==1{print; print "import FilterBar from \"@/components/filters/FilterBar\";"; next}1' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+    imported=1
+  fi
+  # 2) inject near Quick Dock anchor if possible
+  if ! grep -q '<FilterBar' "$FILE"; then
+    if grep -q 'absolute right-3 -top-24 z-\[40\]' "$FILE"; then
+      # ضع المكوّن بعد العنصر ذي الـclass المذكور
+      sed -i '0,/-top-24 z-\[40\]">/s//&\n      <FilterBar \/>\n/' "$FILE" || true
+      injected=1
+    else
+      # fallback: ضع المكوّن بعد أول div في return
+      sed -i '0,/<div/{s//&\n      <FilterBar \/>\n/}' "$FILE" || true
+      injected=1
+    fi
+  fi
+  grep -q '<FilterBar' "$FILE" && wired=1
+fi
+
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "TARGET=$FILE"
+echo "WIRED=$wired IMPORTED=$imported INJECTED=$injected"
+if [[ "$wired" -eq 0 ]]; then
+  echo "TODO=Open ChatClient.tsx and insert:"
+  echo "  import FilterBar from \"@/components/filters/FilterBar\";"
+  echo "  place <FilterBar/> in the UPPER section (top-right)."
+fi
+echo "-- End Acceptance --"
+BASH
+bash /tmp/30_wire_filterbar.sh
+
+4) Dev Preview على 3000 + فحوص سريعة
+cat > /tmp/40_start_preview_3000.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+fuser -k 3000/tcp 2>/dev/null || true; pkill -f "next dev" 2>/dev/null || true
+corepack enable >/dev/null 2>&1 || true
+pnpm exec next dev -p 3000 -H 0.0.0.0 &
+sleep 7
+VIP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/user/vip-status || echo "n/a")
+HLT=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/_health || echo "n/a")
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "RUN_MODE=dev PORT=3000"
+echo "CHECKS=/api/user/vip-status:$VIP /api/_health:$HLT"
+echo "VISUAL=/chat: FilterBar visible (top-right), Gender disabled for guest, Countries shows All+search+full list."
+echo "-- End Acceptance --"
+BASH
+bash /tmp/40_start_preview_3000.sh
+
+
+على الـAgent: افتح Preview → /chat وتحقّق بصريًا من ظهور FilterBar أعلى اليمين، وسلوك VIP-gating (غير VIP = All فقط والجندر مقفول).
+
+5) تقرير نهائي Markdown شامل (كل ما جرى + لقطات مطلوبة)
+cat > /tmp/90_finalize_batch_v2_report.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+TS="$(date -u +%Y%m%d-%H%M%S)"
+OUT="_ops/reports/AGENT_BATCH_V2_${TS}.md"; mkdir -p "$(dirname "$OUT")"
+VIP=$(curl -sSf http://localhost:3000/api/user/vip-status || echo '{"error":"preview-blocked"}')
+HL=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/_health || echo "n/a")
+WIRE=$(grep -RIn '<FilterBar' src/app/chat/ChatClient.tsx 2>/dev/null | head -1 || echo "not-wired")
+
+cat > "$OUT" <<MD
+# Agent Batch v2 — Filters + VIP-gating + Health ( ${TS} )
+
+## What changed (with backups)
+- Ensured **/api/_health** returns \`200 {ok:true}\`.
+- Ensured **English-first config** (\`src/config/app.ts\`).
+- Added **Zustand store** \`src/state/filters.ts\`.
+- Added **UI components**: \`GenderSelect\`, \`CountrySelect\`, \`FilterBar\`.
+- Wired **FilterBar** into \`ChatClient.tsx\`: \`${WIRE}\` (search for \`<FilterBar\` in file).
+
+## Quick checks
+- VIP status endpoint: \`${VIP}\`
+- Health status code: \`${HL}\`
+
+## Visual checklist (please attach screenshots)
+- **/chat** shows FilterBar top-right ✅
+- Gender disabled for guest; Countries shows **All + search + full list** ✅
+- No error overlay in /chat ✅
+
+## Notes
+- VIP gating limits: up to **15 countries** for VIP; non-VIP locked to **All**.
+- Gender list renders exactly as defined in \`src/data/genders.ts\`.
+
+MD
+
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "REPORT_FILE=$OUT"
+echo "NOTES=Attach 2–3 screenshots from Preview (/chat and dropdown states)."
+echo "-- End Acceptance --"
+BASH
+bash /tmp/90_finalize_batch_v2_report.sh

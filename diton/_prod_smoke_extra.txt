@@ -1,0 +1,10 @@
+## HEADERS /chat بعد العمر
+## robots/sitemap
+HTTP/2 200 
+User-agent: *
+Allow: /
+Allow: /plans
+Allow: /privacy
+Allow: /terms
+## rate-limit burst (5 طلبات)
+CODES: 200 200 200 429 429

@@ -1,0 +1,142 @@
+سأنفّذ «P0 All-in + SEO» دفعة واحدة وبأقل تغييرات لازمة. رجاءً اتّبع الترتيب حرفيًا، مع نسخ احتياطي وفرع عمل، ثم اطبع بلوك قبول نهائي. لا تدفع إلى GitHub.
+
+0) نسخ احتياطي + فرع عمل
+
+أنشئ: _ops/backups/p0_allin_$(date -u +%Y%m%d-%H%M%S).tgz (جذر المشروع).
+
+git checkout -b p0_allin || git checkout p0_allin.
+
+1) عمر 18+ (إقرار ذاتي قابل للتبديل، بدون إزعاج للمستخدم)
+
+أدخل مفتاح تبديل: AGE_PROVIDER=stub|veriff|yoti (ابقِ stub الآن).
+
+أضِف:
+
+GET /api/age/start: يُرجع JSON/HTML خفيف بزر “I’m 18+”.
+
+POST /api/age/webhook: عند الاستدعاء يوقّع JWT خفيف (سرّ من AGE_JWT_SECRET إن وجد، وإلّا مفتاح dev) ويضبط كوكي age_jwt (SameSite=Lax, Path=/).
+
+في middleware.ts: اسمح بـ/chat فقط إذا وُجد age_jwt صالح، وإلّا أعِد التوجيه إلى /api/age/start. أبقِ كل شيء سلسًا (لا مزوّد خارجي الآن).
+
+سجلّ امتثال خفيف (بدون بيانات شخصية): إلى _ops/logs/age/YYYYMMDD.jsonl حقول ts, ip_hash(prefix), ua.
+
+2) Report/Block خفيف (بدون DB)
+
+POST /api/moderation/report (JSON: reason, peerId, ts) مع:
+
+rate-limit بسيط (مثل 10/دقيقة/IP).
+
+CSRF توكن خفيف (اقبل غياب التوكن في dev).
+
+خزّن الحدث إلى _ops/logs/reports/YYYYMMDD.jsonl أو إلى Vercel Blob إن متاح.
+
+على العميل: عند الضغط على Report اقطع الاتصال فورًا، أظهر Toast “Reported”.
+
+3) Cooldown + hCaptcha خفيف على /api/match/next
+
+عميل: طبّق throttle ~700ms في useNextPrev (وأضِف حارس إعادة دخول أثناء انتظار الشبكة).
+
+خادم: حارس sliding-window (>3 طلبات خلال 2s ⇒ 429 و{needCaptcha:true}).
+
+POST /api/captcha/verify: في التطوير اقبل token=dev-ok ثم اسمح بالمحاولة التالية.
+
+4) Stripe VIP (جاهزية، دون كسر تدفّق حالٍ)
+
+أضِف /api/stripe/webhook للأحداث:
+
+checkout.session.completed
+
+customer.subscription.updated|deleted
+
+إن غابت المفاتيح: سجّل stub_webhook=true وأعد 200 ولا تغيّر السلوك. أبقِ إنفورسمنت VIP من السيرفر عند توفّر المفاتيح فقط.
+
+5) رؤوس الأمان (لا تكسر WebRTC)
+
+Permissions-Policy حرفيًا على /chat بعد العمر: camera=(self), microphone=(self). اجعل المصدر في next.config.mjs ضمن headers().
+
+CSP معقولة:
+
+default-src 'self';
+connect-src 'self' wss: https://api.stripe.com;
+img-src 'self' data: blob:;
+media-src 'self' blob:;
+script-src 'self' 'unsafe-inline';
+style-src 'self' 'unsafe-inline'
+
+
+CORS = same-origin. CSRF للواجهات الحسّاسة فقط.
+
+6) Cookie Banner + DSAR
+
+بانر موافقة بسيط قبل أي تتبّع (وليس لدينا Analytics الآن).
+
+قناة خصوصية: mailto:privacy@ditonachat.com.
+
+صفحة /2257 مختصرة تُشير لمحتوى 18+.
+
+7) SEO الأساسيات الآن (صفحات / و /chat + Sitemap/Robots)
+
+أنشئ src/lib/seo.ts وفيه:
+
+siteName="DitonaChat", baseUrl من NEXT_PUBLIC_SITE_URL مع افتراضي https://diton.vercel.app.
+
+keywords:
+["adult video chat","random cam chat","live webcam chat","18+ chat","flingster alternative","omegle alternative for adults","random video chat 18+"].
+
+عناوين/أوصاف:
+
+/ → Title: “DitonaChat — Adult Video Chat 18+ | Random Cam Chat”
+Desc: “Safe, fast 18+ random video chat. Meet adults instantly. No signup.”
+
+/chat → Title: “Live Adult Webcam Chat — Start Now | DitonaChat”
+Desc: “One-click 18+ cam chat. Switch next/prev, filters by gender & countries.”
+
+عدّل src/app/layout.tsx لاستخدام Next Metadata API (title/description/keywords/applicationName/metadataBase + openGraph + twitter + alternates.canonical).
+
+أضِف src/app/sitemap.ts (يُدرج /, /chat, /plans, /privacy, /terms, /2257).
+
+أضِف public/robots.txt مع سطر Sitemap: <baseUrl>/sitemap.xml.
+
+أضِف صورة OG في public/og/og-home.png (Placeholder إن لزم)، وJSON-LD Organization & WebSite في الصفحة الرئيسية.
+
+8) تشغيل محلي وفحوص قبول
+
+شغّل dev بشكل صحيح (بدون -- التي سبّبت خطأ سابقًا):
+
+pnpm exec next dev -p 3000 -H 0.0.0.0 (أو pnpm dev إن كان السكربت يمرّر الأعلام).
+
+نفّذ فحوص shell واطبع قبولًا نهائيًا بهذا الشكل حرفيًا:
+
+-- Acceptance --
+HEALTH=200
+AGE_FLOW=ok
+PERMISSIONS_POLICY=camera=(self), microphone=(self)
+CSS_LINK=1 utilities:found
+VIP=pre:200 post:200
+REPORT=ok COOLDOWN=ok
+SEO=title:ok description:ok og:ok canonical:ok robots:ok sitemap:ok keywords:ok
+NO_CODE_CHANGES=0
+-- End Acceptance --
+
+
+ملاحظات تنفيذ:
+
+لا تغيّر أي شيء لا يلزم البنود أعلاه.
+
+التزم بـ ESM الموجود (Tailwind/PostCSS).
+
+حافظ على مصدر واحد للرؤوس في next.config.mjs.
+
+أي ملفات/سكربتات مؤقّتة ضعها تحت _ops/ فقط.
+
+9) الإخراج المطلوب
+
+مسارات/ملفات أُنشئت/عُدّلت (قائمة).
+
+أي ENV جديدة مطلوبة (أسماء فقط).
+
+مقتطف الفروق git diff --name-status (موجز).
+
+بلوك القبول أعلاه بالحالة النهائية.
+
+لا تدفع إلى GitHub. اكتفِ بـ git commit -m "feat(p0): age+report+cooldown+headers+seo" واترك الدفع لنا.

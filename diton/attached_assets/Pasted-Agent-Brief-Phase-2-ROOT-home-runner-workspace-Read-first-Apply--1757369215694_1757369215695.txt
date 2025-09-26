@@ -1,0 +1,270 @@
+Agent Brief — Phase 2 (جاهز للتنفيذ)
+
+ROOT: /home/runner/workspace
+قواعد: Read-first ثم Apply. نسخ احتياطي قبل أي تعديل. لا تغيّر ENV secrets. إبقِ FREE_FOR_ALL=1 أثناء التطوير.
+هدف الدفعة: Auth/Stripe إنتاجيًا، حواجز VIP خادمية، APIs للأصدقاء/الإعجاب، حدّ رسائل الضيف خادمي، فحص شامل قبل الدفع إلى GitHub/Vercel.
+
+0) تهيئة مسار العمل
+cd /home/runner/workspace
+mkdir -p _ops/phase2 _ops/backups _ops/reports
+
+1) Auth إنتاجيًا
+1.1 إصلاح مزوّد Google في NextAuth
+
+افتح src/app/api/auth/[...nextauth]/route.ts. إن لم يكن هناك authOptions مُصدّرة وGoogle Provider مفعّل شرطيًا على وجود المتغيرات فطبّق التعديل التالي:
+
+// ⬇️ استبدل/وحّد إلى هذا النمط (مع الإبقاء على أي إعدادات موجودة لديك)
+import NextAuth, { NextAuthOptions } from "next-auth";
+import Google from "next-auth/providers/google";
+
+export const authOptions: NextAuthOptions = {
+  providers: [
+    ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+      ? [Google({
+          clientId: process.env.GOOGLE_CLIENT_ID!,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+        })]
+      : []),
+  ],
+  session: { strategy: "jwt" },
+  callbacks: {
+    async jwt({ token }) {
+      // مرّر isVip من مصدرك (DB/Redis) لاحقًا؛ افتراضيًا false
+      if (typeof token.isVip === "undefined") token.isVip = false as any;
+      return token;
+    },
+    async session({ session, token }) {
+      (session as any).isVip = (token as any).isVip || false;
+      return session;
+    },
+  },
+};
+
+const handler = NextAuth(authOptions);
+export { handler as GET, handler as POST };
+
+1.2 صفحة /login
+
+أنشئ src/app/login/page.tsx:
+
+"use client";
+import { signIn } from "next-auth/react";
+export default function LoginPage() {
+  return (
+    <div className="min-h-screen grid place-items-center p-6">
+      <div className="max-w-sm w-full bg-neutral-900 border border-neutral-800 rounded-2xl p-6 space-y-4 text-white">
+        <h1 className="text-xl font-semibold">Sign in</h1>
+        <button
+          onClick={() => signIn("google", { callbackUrl: "/chat" })}
+          className="w-full px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700"
+        >
+          Continue with Google
+        </button>
+      </div>
+    </div>
+  );
+}
+
+2) Stripe/VIP
+2.1 /api/stripe/prices يقرأ 4 IDs فعلية
+
+افتح src/app/api/stripe/prices/route.ts وطبّق منطق: إن توفرت IDs من ENV أرجِع الأربع خطط، وإلا أرجِع stub كما هو. مثال لجسم الاستجابة المطلوب:
+
+// return { plans: [{id, nickname, unit_amount, currency, interval}, ...] }
+
+2.2 Webhook لترقية VIP
+
+حدّث src/app/api/stripe/webhook/route.ts ليستخدم raw body في App Router:
+
+import { NextRequest, NextResponse } from "next/server";
+import Stripe from "stripe";
+
+export const runtime = "nodejs";
+
+export async function POST(req: NextRequest) {
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-06-20" as any });
+  const sig = req.headers.get("stripe-signature");
+  if (!sig) return NextResponse.json({ error: "no sig" }, { status: 400 });
+
+  const raw = await req.text();
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(raw, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const email = (session.customer_details?.email || session.customer_email || "").toLowerCase();
+    if (email) {
+      // TODO: اربط DB/Redis. مؤقتًا: نادِ داخليًا نقطة VIP لديك إن كانت موجودة.
+      try {
+        await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/user/vip/dev/grant`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+      } catch {}
+    }
+  }
+  return NextResponse.json({ ok: true });
+}
+
+3) حواجز VIP خادمية (Prev/Filters/Beauty/Masks/Friends)
+
+في كل راوت مقيّد، اقرأ الجلسة وأعد 403 عند عدم الأهلية مع مراعاة FREE_FOR_ALL:
+
+import { getServerSession } from "next-auth";
+import { authOptions } from "../../auth/[...nextauth]/route";
+// helper:
+export async function requireVip() {
+  if (process.env.FREE_FOR_ALL === "1") return true;
+  const session = await getServerSession(authOptions as any);
+  return !!(session as any)?.isVip;
+}
+
+
+استخدم requireVip() في:
+
+/api/match/next/route.ts عند تفعيل prev أو عند استقبال أكثر من جنس أو >1 دولة.
+
+/api/friends/* و/api/like/* إذا أردت تقييد العرض/الإنشاء حسب خطتك.
+
+نقاط Beauty/Masks إن كانت خادمية.
+
+4) فلاتر الدولة/الجنس خادمًا (في /api/match/next/route.ts)
+
+أضف تحققًا صارمًا قبل المطابقة:
+
+const genders = parsedGendersArray;  // [] | ["male"] | ["male","female"]
+const countries = parsedCountriesArray; // [] | ["DE"] | ["DE","FR",...]
+
+const isVip = await requireVip();
+if (!isVip && process.env.FREE_FOR_ALL !== "1") {
+  if (genders.length > 1) return Response.json({ error: "VIP gender filter" }, { status: 403 });
+  if (countries.length > 1) return Response.json({ error: "VIP country filter" }, { status: 403 });
+}
+if (isVip) {
+  if (genders.length > 2) return Response.json({ error: "max 2 genders" }, { status: 400 });
+  if (countries.length > 15) return Response.json({ error: "max 15 countries" }, { status: 400 });
+}
+
+5) الإعجاب وقائمة الأصدقاء (Server/DB مبسّط مرحليًا)
+
+إن لم تكن موجودة، أنشئ:
+
+src/app/api/like/route.ts:
+
+import { NextRequest, NextResponse } from "next/server";
+let LIKES: Array<{from:string;to:string;ts:number}> = [];
+export async function POST(req: NextRequest){ const { from, to } = await req.json(); LIKES.push({from,to,ts:Date.now()}); return NextResponse.json({ ok: true }); }
+export async function DELETE(req: NextRequest){ const { from, to } = await req.json(); LIKES = LIKES.filter(x=>!(x.from===from && x.to===to)); return NextResponse.json({ ok: true }); }
+
+
+src/app/api/friends/route.ts (عرض فقط من LIKES المؤقتة):
+
+import { NextResponse } from "next/server";
+export async function GET(){ /* استرجع مصفوفة عرض فقط */ return NextResponse.json({ friends: [] }); }
+
+
+اربط لاحقًا بقاعدة بياناتك أو Redis.
+
+6) حدّ رسائل الضيف خادميًا (مرحليًا)
+
+أنشئ src/app/api/message/route.ts لفرض 10 رسائل للضيف/جلسة:
+
+import { NextRequest, NextResponse } from "next/server";
+const COUNTS = new Map<string, number>(); // مؤقت
+export async function POST(req: NextRequest){
+  const ip = req.headers.get("x-forwarded-for") || "local";
+  const n = (COUNTS.get(ip) || 0) + 1;
+  COUNTS.set(ip, n);
+  if (n > 10) return NextResponse.json({ error: "guest limit" }, { status: 429 });
+  return NextResponse.json({ ok: true, n });
+}
+
+7) فحص شامل قبل الدفع (سكربت واحد)
+
+أنشئ _ops/phase2/check_all.sh وشغّله بعد pnpm build && pnpm start:
+
+cat > _ops/phase2/check_all.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-http://localhost:3000}"
+repo_dir="$(pwd)"
+report="_ops/reports/phase2_check_$(date +%s).txt"
+mkdir -p "$(dirname "$report")"
+
+jval(){ node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s)$1)}catch{console.log('')}})" ;}
+
+echo "-- Acceptance --" | tee "$report"
+
+# Auth
+AUTH_PROVIDERS=$(curl -fsS "$BASE/api/auth/providers" || true)
+AUTH_OK=0; [[ -n "$AUTH_PROVIDERS" ]] && AUTH_OK=1
+echo "AUTH_PROVIDERS_NONEMPTY=$AUTH_OK" | tee -a "$report"
+
+SIGNIN_CODE=$(curl -I -s "$BASE/api/auth/signin" | awk 'NR==1{print $2}')
+echo "AUTH_SIGNIN_CODE=$SIGNIN_CODE" | tee -a "$report"
+
+# Stripe prices
+PRICES=$(curl -fsS "$BASE/api/stripe/prices" || true)
+PLANS_COUNT=$(printf "%s" "$PRICES" | jval ".plans && '.'.repeat(JSON.parse(process.argv[1]).plans.length).length" "$PRICES" 2>/dev/null || true)
+[[ -z "$PLANS_COUNT" ]] && PLANS_COUNT=$(printf "%s" "$PRICES" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{let j=JSON.parse(s);console.log(j.length|| (j.plans||[]).length || 0)}catch{console.log(0)}})")
+echo "STRIPE_PLANS_COUNT=$PLANS_COUNT" | tee -a "$report"
+
+# Match ratelimit burst (5)
+codes=""
+for i in 1 2 3 4 5; do
+  code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/match/next?gender=all")
+  codes+="${code},"
+  sleep 0.05
+done
+echo "MATCH_BURST=$codes" | tee -a "$report"
+
+# Permissions-Policy after age
+PP=$(curl -I -s "$BASE/chat" | tr -d '\r' | awk -F': ' 'BEGIN{IGNORECASE=1}/^permissions-policy:/{print $2}')
+echo "PERMISSIONS_POLICY_HEADER_PRESENT=$( [[ -n "$PP" ]] && echo 1 || echo 0 )" | tee -a "$report"
+
+# VIP guards (تخطَّ إذا FREE_FOR_ALL=1)
+VIP_EXPECT=SKIPPED
+if [[ "${FREE_FOR_ALL:-1}" != "1" ]]; then
+  codeG=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/match/next?gender=male&gender=female")
+  codeC=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/match/next?countries=DE,FR")
+  VIP_EXPECT=$([[ "$codeG" == "403" && "$codeC" == "403" ]] && echo OK || echo FAIL)
+fi
+echo "VIP_GUARDS=$VIP_EXPECT" | tee -a "$report"
+
+# Guest message limit (server)
+msgCodes=""
+for i in $(seq 1 12); do
+  c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/message" -H "content-type: application/json" --data '{"txt":"hi"}')
+  msgCodes+="$c,"
+done
+echo "GUEST_MSG_CODES=$msgCodes" | tee -a "$report"
+
+echo "REPORT=$report" | tee -a "$report"
+echo "-- End Acceptance --" | tee -a "$report"
+SH
+chmod +x _ops/phase2/check_all.sh
+
+8) تشغيل محلي وفحص
+pnpm install
+pnpm build && PORT=3000 pnpm start & sleep 4
+_ops/phase2/check_all.sh http://localhost:3000
+
+9) معايير القبول النهائية
+
+اطبع بلوك قبول واحد من سكربت الفحص كما يلي ويكون النجاح عندما:
+
+-- Acceptance --
+AUTH_PROVIDERS_NONEMPTY=1
+AUTH_SIGNIN_CODE=200|302
+STRIPE_PLANS_COUNT=4
+MATCH_BURST=200,200,200,429,429,
+PERMISSIONS_POLICY_HEADER_PRESENT=1
+VIP_GUARDS=OK | SKIPPED (إذا FREE_FOR_ALL=1)
+GUEST_MSG_CODES=200,200,200,200,200,200,200,200,200,200,429,429,
+REPORT=_ops/reports/phase2_check_<timestamp>.txt
+-- End Acceptance --

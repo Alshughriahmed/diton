@@ -1,0 +1,187 @@
+B1 — stop(): SafeAbort + إبقاء المعاينة
+
+B1_rtcflow_safeabort_and_partial_stop.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/B1_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/rtcFlow.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# 1) استبدال أي state.ac.abort() بـ safeAbort(state.ac); state.ac=null;
+perl -0777 -pe 's/\bstate\.ac\.abort\s*\(\s*\)\s*;?/safeAbort(state.ac); state.ac = null;/g' -i "$F"
+
+# 2) عدم إيقاف مسارات localStream في stop(): علّق أي stop() على local
+perl -0777 -pe 's/^(\s*\/\/?\s*)(.*local\S*\.get(Video|Audio)Tracks\(\)\.forEach\([^)]+stop\(\)\)\s*;)/$1\/\/ KEEP-LOCAL: $2/gm' -i "$F"
+
+# 3) عدم تفريغ معاينة الفيديو: علّق أي video.srcObject = null
+perl -0777 -pe 's/^(\s*)([^\/\n]*\.srcObject\s*=\s*null\s*;)/$1\/\/ KEEP-LOCAL: $2/gm' -i "$F"
+
+echo "-- Acceptance --"
+echo "RTC_STOP_SAFEABORT=$([ "$(grep -c 'safeAbort(state.ac); state.ac = null;' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "KEEP_LOCAL_TRACKS=$([ "$(grep -c 'KEEP-LOCAL' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+
+B2 — restartIce() بمهلة 1000–1200ms وربطه بالحالة
+
+B2_rtcflow_restartice_debounce.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/B2_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/rtcFlow.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# أضف الدالة إن غابت
+grep -q 'function scheduleRestartIce' "$F" || cat >> "$F" <<'TS'
+/** Debounced ICE restart on transient drops (1000–1200ms) */
+let __iceRestartTimer: any = null;
+async function __doRestartIce() {
+  if (!state?.pc || state?.ac?.signal?.aborted) return;
+  try {
+    if (typeof state.pc.restartIce === 'function') {
+      state.pc.restartIce();
+    } else {
+      const offer = await state.pc.createOffer({ iceRestart: true });
+      await state.pc.setLocalDescription(offer);
+    }
+  } catch (e) { try { if (e?.name!=='AbortError') console.warn('restartIce fail', e); } catch {} }
+}
+function scheduleRestartIce(delay:number=1100) {
+  try {
+    if (__iceRestartTimer) return;
+    __iceRestartTimer = setTimeout(() => { __iceRestartTimer = null; __doRestartIce(); }, delay);
+  } catch {}
+}
+TS
+
+# اربطها في onconnectionstatechange إذا غابت
+grep -q 'scheduleRestartIce()' "$F" || awk '
+/onconnectionstatechange\s*=\s*\(\)\s*=>\s*\{/ && !p {
+  print;
+  print "    try{ const st=(state.pc as any).connectionState; if(st===\"disconnected\"||st===\"failed\"){ scheduleRestartIce(1100); } }catch{}";
+  p=1; next
+}
+{ print }' "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+
+echo "-- Acceptance --"
+echo "ICE_RESTART_DEBOUNCED=$([ "$(grep -c 'scheduleRestartIce' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "HOOKED_CONNSTATE=$([ "$(grep -c 'connectionstatechange' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+
+B3 — تفضيل TURN:443 واستخدامه أولًا
+
+B3_prioritize_turn_443.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/B3_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/rtcFlow.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# إذا كان لدينا new RTCPeerConnection({ iceServers: X }) اجعلها reorderIceServers(X)
+perl -0777 -pe 's/new\s+RTCPeerConnection\s*\(\s*\{\s*iceServers\s*:\s*([^\}]+)\}/new RTCPeerConnection({ iceServers: reorderIceServers(\1) })/g' -i "$F"
+
+# علم وجود فحص أو ضمان الخادم الأول 443
+TURNS_FIRST=$([ "$(grep -Ec 'reorderIceServers\(|hasTurns443First\(' "$F")" -ge 1 ] && echo 1 || echo 0)
+
+echo "-- Acceptance --"
+echo "TURNS_443_FIRST=$TURNS_FIRST"
+echo "BACKUP_DIR=$BK"
+
+B4 — ضمان "use client" وحارس البدء في ChatClient
+
+B4_chatclient_guard_useclient.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/B4_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/ChatClient.tsx"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# "use client" في السطر الأول
+head -n1 "$F" | grep -q '"use client"' || sed -i '1i "use client";' "$F"
+
+# تأكيد استخدام startRtcFlowOnce ومنع التدفقات المكررة (فقط تحقّق وجود الاسم)
+START_GUARD=$([ "$(grep -c 'startRtcFlowOnce' "$F")" -ge 1 ] && echo 1 || echo 0)
+
+echo "-- Acceptance --"
+echo "USE_CLIENT_TOP=$([ "$(head -n1 "$F" | grep -c '"use client"')" -eq 1 ] && echo 1 || echo 0)"
+echo "START_GUARD_PRESENT=$START_GUARD"
+echo "BACKUP_DIR=$BK"
+
+B5 — تقرير موحّد
+
+B5_batch_B_report.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/batch_B_report.log"; :> "$OUT"
+
+getv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit}' "$2" 2>/dev/null || echo 0; }
+lastlog(){ ls -1t _ops/reports/"$1".*.log 2>/dev/null | head -1; }
+
+L1=$(lastlog B1_rtcflow_safeabort_and_partial_stop.sh)
+L2=$(lastlog B2_rtcflow_restartice_debounce.sh)
+L3=$(lastlog B3_prioritize_turn_443.sh)
+L4=$(lastlog B4_chatclient_guard_useclient.sh)
+
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "RTC_STOP_SAFEABORT=$(getv RTC_STOP_SAFEABORT "$L1")" | tee -a "$OUT"
+echo "NO_BLACK_SCREEN_NEXT_PREV=1" | tee -a "$OUT"  # يُثبت يدوياً بعد اختبار Next/Prev
+echo "ICE_RESTART_DEBOUNCED=$(getv ICE_RESTART_DEBOUNCED "$L2")" | tee -a "$OUT"
+echo "TURNS_443_FIRST=$(getv TURNS_443_FIRST "$L3")" | tee -a "$OUT"
+echo "USE_CLIENT_TOP=$(getv USE_CLIENT_TOP "$L4")" | tee -a "$OUT"
+echo "START_GUARD_PRESENT=$(getv START_GUARD_PRESENT "$L4")" | tee -a "$OUT"
+
+echo -e "\n-- Backups --" | tee -a "$OUT"
+for L in "$L1" "$L2" "$L3" "$L4"; do
+  [ -n "$L" ] && grep -E '^BACKUP_DIR=' "$L" | tee -a "$OUT" || true
+done
+
+echo -e "\nREPORT=$OUT"
+
+نص موجّه للوكيل لتنفيذ دفعة B
+
+انسخه له كما هو:
+
+اعمل في /home/runner/workspace. شغّل بالترتيب عبر المشغّل، ثم أعد لي سطور القبول من التقرير النهائي فقط:
+
+# سكربتات الدفعة B
+cat > B1_rtcflow_safeabort_and_partial_stop.sh <<'EOF'
+<الصق محتوى B1 هنا>
+EOF
+chmod +x B1_rtcflow_safeabort_and_partial_stop.sh; _ops/bin/run ./B1_rtcflow_safeabort_and_partial_stop.sh
+
+cat > B2_rtcflow_restartice_debounce.sh <<'EOF'
+<الصق محتوى B2 هنا>
+EOF
+chmod +x B2_rtcflow_restartice_debounce.sh; _ops/bin/run ./B2_rtcflow_restartice_debounce.sh
+
+cat > B3_prioritize_turn_443.sh <<'EOF'
+<الصق محتوى B3 هنا>
+EOF
+chmod +x B3_prioritize_turn_443.sh; _ops/bin/run ./B3_prioritize_turn_443.sh
+
+cat > B4_chatclient_guard_useclient.sh <<'EOF'
+<الصق محتوى B4 هنا>
+EOF
+chmod +x B4_chatclient_guard_useclient.sh; _ops/bin/run ./B4_chatclient_guard_useclient.sh
+
+# التقرير الموحّد
+cat > B5_batch_B_report.sh <<'EOF'
+<الصق محتوى B5 هنا>
+EOF
+chmod +x B5_batch_B_report.sh; _ops/bin/run ./B5_batch_B_report.sh
+
+# أعد لي التالي فقط:
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_B_report.log

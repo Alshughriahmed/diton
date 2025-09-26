@@ -1,0 +1,160 @@
+Replit Agent — Phase 3 (VIP + Webhook) — Single Task
+
+Goal:
+Enable dev VIP toggle (grant/revoke via cookie), make /api/user/vip-status read that cookie, add idempotent Stripe webhook, rebuild, run, verify, and append a report with an Acceptance block.
+
+Constraints:
+
+Work ONLY in /home/runner/workspace.
+
+Make a backup first at _ops/backups/phase3_<UTC>/ (exclude node_modules and .next).
+
+Do not print secrets.
+
+If any step fails, fix it and retry once within this task before proceeding.
+
+Steps:
+
+cd /home/runner/workspace
+Create backup tar at _ops/backups/phase3_<UTC>/src_backup.tgz excluding node_modules and .next.
+
+Create/overwrite these files with EXACT content:
+
+src/app/api/user/vip-status/route.ts
+
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+export async function GET() {
+  const c = cookies().get("vip");
+  const isVip = c?.value === "1";
+  return NextResponse.json({ isVip }, { status: 200 });
+}
+export const dynamic = "force-dynamic";
+
+
+src/app/api/user/vip/dev/grant/route.ts
+
+import { NextResponse } from "next/server";
+export async function POST() {
+  const res = NextResponse.json({ ok: true, isVip: true }, { status: 200 });
+  res.cookies.set("vip", "1", { path: "/", sameSite: "Lax", httpOnly: false, maxAge: 60 * 60 * 24 * 30 });
+  return res;
+}
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+
+src/app/api/user/vip/dev/revoke/route.ts
+
+import { NextResponse } from "next/server";
+export async function POST() {
+  const res = NextResponse.json({ ok: true, isVip: false }, { status: 200 });
+  res.cookies.set("vip", "", { path: "/", maxAge: 0, sameSite: "Lax", httpOnly: false });
+  return res;
+}
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+
+src/app/api/stripe/webhook/route.ts
+
+import { NextResponse } from "next/server";
+import { promises as fs } from "fs";
+import path from "path";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+const FILE = path.join(process.cwd(), "_ops", "runtime", "stripe_events.json");
+async function loadSet(): Promise<Set<string>> {
+  try {
+    const buf = await fs.readFile(FILE, "utf8");
+    const arr = JSON.parse(buf) as string[];
+    return new Set(arr);
+  } catch {
+    return new Set();
+  }
+}
+async function saveSet(set: Set<string>) {
+  await fs.mkdir(path.dirname(FILE), { recursive: true });
+  const arr = Array.from(set);
+  await fs.writeFile(FILE, JSON.stringify(arr, null, 2));
+}
+export async function POST(req: Request) {
+  let body: any;
+  try { body = await req.json(); }
+  catch { return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 }); }
+  const id = body?.id;
+  if (typeof id !== "string" || !id) {
+    return NextResponse.json({ ok: false, error: "missing_id" }, { status: 400 });
+  }
+  const set = await loadSet();
+  const duplicate = set.has(id);
+  if (!duplicate) { set.add(id); await saveSet(set); }
+  return NextResponse.json({ ok: true, duplicate }, { status: 200 });
+}
+
+
+Stop any running Next server (kill PID from /tmp/app.pid and pkill "next start"), then:
+
+pnpm run build (if it fails due to missing dirs/files, create them and retry once).
+
+Start with PORT=3000 pnpm start and save PID into /tmp/app.pid.
+
+Verify automatically:
+
+VIP toggle:
+
+POST /api/user/vip/dev/grant (store cookie), then GET /api/user/vip-status must return {"isVip":true}.
+
+POST /api/user/vip/dev/revoke (with cookie), then GET /api/user/vip-status must return {"isVip":false}.
+
+Webhook idempotency:
+
+POST /api/stripe/webhook with {"id":"evt_test_123"} must return { ok:true, duplicate:false }.
+
+Post the same payload again must return { ok:true, duplicate:true }.
+
+Basic HTTP checks (expect 200 or 302 where appropriate): /api/health, /, /plans, /chat, /api/user/vip-status, /api/turn.
+
+Append to FINAL_REPORT.md a section “Phase 3 — VIP & Webhook” summarizing:
+
+Edited files list.
+
+VIP toggle results (grant/revoke JSON outputs).
+
+Webhook duplicate results (first=false, second=true).
+
+HTTP checks table.
+
+Note: “Dev toggle uses cookie; real Stripe keys will be set on Vercel.”
+
+Print EXACTLY this Acceptance block to stdout (single line per item):
+
+-- Acceptance --
+STRIPE_TEST=webhook:idempotent:ok dev_vip_toggle:ok
+VIP_FLIPPED=1 UI_REFLECTS=via vip-status (cookie)
+NOTES=Dev toggle for VIP until real Stripe keys on Vercel
+-- End Acceptance --
+
+
+If any verification fails, fix and retry once within this task, then proceed.
+
+بعد ما يخلص الوكيل
+
+الصق في الـShell هذا الفحص السريع (نسخ/لصق + Enter فقط) للتأكّد يدويًا:
+
+bash -lc '
+set -e
+cd /home/runner/workspace 2>/dev/null || cd ~/workspace
+PORT=${PORT:-3000}
+echo "== VIP quick check =="
+rm -f /tmp/cookies.txt
+curl -sS -c /tmp/cookies.txt -X POST "http://127.0.0.1:$PORT/api/user/vip/dev/grant" >/dev/null
+curl -sS -b /tmp/cookies.txt "http://127.0.0.1:$PORT/api/user/vip-status"
+curl -sS -b /tmp/cookies.txt -X POST "http://127.0.0.1:$PORT/api/user/vip/dev/revoke" >/dev/null
+curl -sS -b /tmp/cookies.txt "http://127.0.0.1:$PORT/api/user/vip-status"
+echo; echo "== Webhook quick check =="
+curl -sS -X POST "http://127.0.0.1:$PORT/api/stripe/webhook" -H "Content-Type: application/json" -d "{\"id\":\"evt_test_123\"}"
+echo
+curl -sS -X POST "http://127.0.0.1:$PORT/api/stripe/webhook" -H "Content-Type: application/json" -d "{\"id\":\"evt_test_123\"}"
+echo
+'

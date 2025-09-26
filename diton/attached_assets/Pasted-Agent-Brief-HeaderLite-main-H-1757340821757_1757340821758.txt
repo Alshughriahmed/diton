@@ -1,0 +1,160 @@
+Agent Brief — حلّ تعارض HeaderLite + صورة الهيرو + بناء + دفع إلى main
+الهدف
+
+إزالة تعارض الدمج في HeaderLite.tsx الذي يكسر الـbuild.
+
+التأكد من وجود SessionProvider في layout.tsx دون تكرار.
+
+التأكد من وجود الخلفية public/hero.webp وربطها في الهوم.
+
+نجاح pnpm run build.
+
+دفع الكود إلى main ثم فحص قبول سريع بعد النشر على Vercel.
+
+القيود
+
+ممنوع لمس أي ملفات خارج القائمة أدناه إلا إذا كان الإصلاح مستحيلًا دونها.
+
+لا تغيّر ENV ولا إعدادات Vercel.
+
+أقل تغييرات ممكنة. اقرأ أولًا ثم عدّل فقط عند الحاجة.
+
+الملفات المسموح تعديلها فقط
+
+src/components/HeaderLite.tsx
+
+src/app/layout.tsx و/أو src/components/providers/SessionProviderClient.tsx (للتحقق/الإضافة مرة واحدة فقط)
+
+src/components/home/HomeClient.tsx (قراءة فقط إلا إذا تطلّب إصلاح رابط الخلفية)
+
+public/hero.webp (تأكيد وجود الملف أو إعادة تسميته من hero.webp.webp إلى hero.webp)
+
+خطة التنفيذ منخفضة التكلفة
+1) فحوص قراءة سريعة
+
+افتح src/components/HeaderLite.tsx وابحث عن علامات التعارض: <<<<<<<, =======, >>>>>>>.
+
+تحقق من وجود سطر واحد فقط:
+const { data: session } = useSession();
+
+افتح src/app/layout.tsx وابحث عن لفّ <body> بمزوّد جلسة. إن لم يوجد، تحقق من وجود الملف:
+src/components/providers/SessionProviderClient.tsx بمحتوى:
+
+"use client";
+import { SessionProvider } from "next-auth/react";
+export default function SessionProviderClient({ children }: { children: React.ReactNode }) {
+  return <SessionProvider>{children}</SessionProvider>;
+}
+
+
+افتح src/components/home/HomeClient.tsx وتأكد أن الخلفية تستخدم: bg-[url('/hero.webp')].
+
+تحقق من وجود الملف: public/hero.webp.
+إن وُجد فقط public/hero.webp.webp فأعد تسميته إلى hero.webp.
+
+2) الإصلاحات الدقيقة
+
+في HeaderLite.tsx:
+
+احذف جميع أسطر التعارض <<<<<<< / ======= / >>>>>>>.
+
+أبقِ سطرًا واحدًا فقط لتعريف الجلسة:
+
+const { data: session } = useSession();
+
+
+تأكد من:
+
+"use client";
+import Link from "next/link";
+import { useSession } from "next-auth/react";
+
+
+لا تُكرر useSession() مرة ثانية داخل الدالة.
+
+في layout.tsx:
+
+إذا لا يوجد SessionProvider، أضِف الاستيراد أعلى الملف:
+
+import SessionProviderClient from "@/components/providers/SessionProviderClient";
+
+
+لفّ الأطفال داخل <body>:
+
+<body>
+  <SessionProviderClient>
+    {children}
+  </SessionProviderClient>
+</body>
+
+
+لا تُضيف مزوّدًا ثانيًا إن كان موجودًا.
+
+الخلفية:
+
+إن كان الملف الوحيد هو public/hero.webp.webp أعد تسميته إلى public/hero.webp.
+
+لا تغيّر كلاس الخلفية في HomeClient.tsx إذا كان يشير إلى /hero.webp.
+
+3) بناء محلّي
+
+شغّل:
+
+pnpm install --silent
+pnpm run build
+
+
+إن فشل البناء فقط بسبب /plans وuseSession:
+
+اجعل /plans/page.tsx خادميًا يستدعي مكوّن عميل PlansClient، وداخل PlansClient استخدم useSession().
+
+لكن لا تفعل ذلك إلا إذا فشل البناء لهذا السبب.
+
+4) دفع مباشر إلى main
+
+نفّذ:
+
+git fetch origin
+git checkout main
+git pull --no-rebase origin main
+git add -A
+git commit -m "fix: resolve HeaderLite conflict; ensure SessionProvider; hero.webp"
+git push origin main
+
+
+إن كانت Branch protection تمنع الدفع المباشر، افتح PR بعنوان:
+fix: resolve HeaderLite conflict; ensure SessionProvider; hero.webp ثم ادمجه.
+
+5) قبول إنتاج بعد نشر Vercel
+
+نفّذ هذه الأوامر وأعد لي الكتلة كما هي:
+
+BASE=https://www.ditonachat.com
+echo "-- Acceptance --"
+echo "HOME_TEXT=$(curl -fsS $BASE/ | grep -Eo 'Unleash Your Wild Side|Welcome to Ditona Video Chat' -m1)"
+echo "HERO_200=$(curl -s -o /dev/null -w "%{http_code}" $BASE/hero.webp)"
+echo "PLANS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE/plans)"
+echo -n "MATCH_BURST="; for i in 1 2 3 4 5; do printf "%s," "$(curl -s -o /dev/null -w "%{http_code}" $BASE/api/match/next)"; sleep 0.05; done; echo
+curl -fsS -c /tmp/ck.txt -X POST $BASE/api/age/allow >/dev/null
+echo "CHAT_AFTER_AGE=$(curl -s -o /dev/null -w "%{http_code}" -b /tmp/ck.txt $BASE/chat)"
+echo "PERMISSIONS_POLICY=$(curl -fsSI $BASE/chat | awk -F': ' 'tolower($1)=="'"'"permissions-policy"'"'"{print $2}' | tr -d "\r")"
+echo "AUTH_PROVIDERS_LEN=$(curl -fsS $BASE/api/auth/providers | wc -c || echo 0)"
+echo "-- End Acceptance --"
+
+معايير النجاح
+
+pnpm run build ناجح.
+
+HOME_TEXT يحتوي أحد النصين.
+
+HERO_200=200.
+
+PLANS_STATUS=200.
+
+MATCH_BURST=200,200,200,429,429,
+
+CHAT_AFTER_AGE=200 وPERMISSIONS_POLICY=camera=(self), microphone=(self).
+
+مخرجات auth قد تبقى 500 إن لم تُضبط مفاتيح Google/NextAuth. لا تصلح ENV. فقط أبلغ عن الحالة.
+
+مهم: لا تغيّر أي شيء خارج الملفات المحددة. أوقف المهمة وأبلغ بحالة الفشل لو تعذّر البناء دون تعديل إضافي.

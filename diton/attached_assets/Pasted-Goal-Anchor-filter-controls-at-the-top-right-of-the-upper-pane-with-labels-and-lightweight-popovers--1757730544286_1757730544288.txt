@@ -1,0 +1,269 @@
+Goal
+Anchor filter controls at the top-right of the upper pane with labels and lightweight popovers. Hide the “Queue 0 (redis)” badge. No backend changes. Minimal-Diff. Keep all existing features.
+
+Do (single shell batch)
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+LABEL="ui_popover_filters_$(date -u +%Y%m%d-%H%M%S)"
+BR="feat/ui-popover-filters"
+BACKUP_DIR="_ops/backups/$LABEL"
+mkdir -p "$BACKUP_DIR"
+
+echo "[1/7] Branch"
+git checkout -b "$BR" 2>/dev/null || git checkout "$BR"
+
+echo "[2/7] Backups"
+for f in \
+  "src/app/chat/components/FilterBar.tsx" \
+  "src/app/chat/ChatClient.tsx" \
+  "src/components/ui/HeaderLite.tsx"
+do [ -f "$f" ] && install -D "$f" "$BACKUP_DIR/$f"; done
+
+echo "[3/7] FilterBar => anchored popovers with labels"
+cat > src/app/chat/components/FilterBar.tsx <<'TSX'
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import regions from "@/lib/regions"; // [{code:"DE", name:"Germany"}, ...] (existing)
+type GenderKey = "everyone"|"female"|"male"|"couples"|"lgbt";
+
+const flag = (cc:string) =>
+  cc.length===2 ? String.fromCodePoint(...[...cc.toUpperCase()].map(c=>127397+c.charCodeAt(0))) : "🌍";
+
+const useOutsideClose = (ref: React.RefObject<HTMLElement>, onClose: ()=>void) => {
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    const k = (e: KeyboardEvent) => { if (e.key==="Escape") onClose(); };
+    document.addEventListener("mousedown", h);
+    document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("mousedown", h); document.removeEventListener("keydown", k); };
+  }, [ref, onClose]);
+};
+
+export default function FilterBar() {
+  const [openG, setOpenG] = useState(false);
+  const [openC, setOpenC] = useState(false);
+  const [q, setQ] = useState("");
+  const [myCountry, setMyCountry] = useState<string>("");
+
+  // persisted selections (local UI only; backend still clamps)
+  const [selG, setSelG] = useState<GenderKey[]>(() => {
+    if (typeof window==="undefined") return ["everyone"];
+    try { const v = JSON.parse(localStorage.getItem("ditona:filters:genders")||"[]"); return (v.length? v : ["everyone"]); } catch { return ["everyone"]; }
+  });
+  const [selC, setSelC] = useState<string[]>(() => {
+    if (typeof window==="undefined") return [];
+    try { const v = JSON.parse(localStorage.getItem("ditona:filters:countries")||"[]"); return v; } catch { return []; }
+  });
+
+  useEffect(() => {
+    // fetch geo once
+    (async () => {
+      try {
+        const r = await fetch("/api/geo", { cache: "no-store" }).then(r=>r.ok?r.json():null);
+        if (r?.country) setMyCountry(String(r.country).toUpperCase());
+      } catch {}
+    })();
+  }, []);
+
+  // save to localStorage on change
+  useEffect(() => {
+    if (typeof window!=="undefined") localStorage.setItem("ditona:filters:genders", JSON.stringify(selG));
+  }, [selG]);
+  useEffect(() => {
+    if (typeof window!=="undefined") localStorage.setItem("ditona:filters:countries", JSON.stringify(selC));
+  }, [selC]);
+
+  // countries list: "All Countries" then myCountry, then rest filtered, two columns
+  const countries = useMemo(() => {
+    const base = regions as Array<{code:string; name:string}>;
+    const seen = new Set<string>();
+    const arr: Array<{code:string; name:string}> = [];
+    arr.push({code:"ALL", name:"All Countries"});
+    if (myCountry) arr.push({code:myCountry, name: base.find(x=>x.code===myCountry)?.name || myCountry});
+    for (const c of base) {
+      if (c.code===myCountry) continue;
+      if (q && !c.name.toLowerCase().includes(q.toLowerCase())) continue;
+      if (!seen.has(c.code)) { arr.push(c); seen.add(c.code); }
+    }
+    return arr;
+  }, [q, myCountry]);
+
+  // popover refs + outside close
+  const popG = useRef<HTMLDivElement>(null);
+  const popC = useRef<HTMLDivElement>(null);
+  useOutsideClose(popG, () => setOpenG(false));
+  useOutsideClose(popC, () => setOpenC(false));
+
+  // helpers
+  const toggleGender = (g: GenderKey) => {
+    if (g==="everyone") { setSelG(["everyone"]); return; }
+    const withoutEveryone = selG.filter(x=>x!=="everyone");
+    const exists = withoutEveryone.includes(g);
+    let next = exists ? withoutEveryone.filter(x=>x!==g) : [...withoutEveryone, g];
+    // allow up to 2; feel free-all now
+    if (next.length===0) next = ["everyone"];
+    if (next.length>2) next = next.slice(-2);
+    setSelG(next);
+  };
+  const toggleCountry = (cc: string) => {
+    if (cc==="ALL") { setSelC([]); return; }
+    const exists = selC.includes(cc);
+    let next = exists ? selC.filter(x=>x!==cc) : [...selC, cc];
+    // allow up to 15; free-all now
+    if (next.length>15) next = next.slice(0,15);
+    setSelC(next);
+  };
+
+  const genderCount = selG.includes("everyone") ? 0 : selG.length;
+  const countryCount = selC.length;
+
+  return (
+    <div className="absolute top-1 right-1 z-[80] flex items-center gap-3 pointer-events-none select-none">
+      {/* Location button */}
+      <div className="relative pointer-events-auto">
+        <button
+          type="button"
+          data-ui="country-button"
+          aria-haspopup="listbox"
+          aria-expanded={openC}
+          onClick={() => { setOpenC(v=>!v); setOpenG(false); }}
+          className="h-8 px-3 rounded-xl bg-black/35 hover:bg-black/45 text-white text-sm flex items-center gap-2 backdrop-blur transition"
+        >
+          <span aria-hidden>🌍</span>
+          <span>Location</span>
+          {countryCount>0 && <span className="ml-1 text-[11px] px-1.5 py-0.5 rounded bg-white/20">{countryCount}</span>}
+        </button>
+
+        {openC && (
+          <div ref={popC}
+               className="absolute right-0 mt-2 w-[min(92vw,560px)] max-h-[70vh] overflow-auto rounded-xl bg-zinc-900/95 text-zinc-100 shadow-xl ring-1 ring-white/10 p-3 grid gap-2"
+               style={{gridTemplateRows:"auto 1fr"}}>
+            <div className="flex items-center gap-2">
+              <input
+                placeholder="Search country"
+                value={q}
+                onChange={e=>setQ(e.target.value)}
+                className="w-full rounded-lg bg-zinc-800/70 px-3 py-2 text-sm outline-none"
+              />
+              <button className="px-3 py-2 text-sm rounded-lg bg-zinc-800/70 hover:bg-zinc-700" onClick={()=>{setQ(""); setOpenC(false);}}>
+                Done
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+              {countries.map(c=>(
+                <button
+                  key={c.code}
+                  type="button"
+                  onClick={()=>toggleCountry(c.code)}
+                  className={"flex items-center justify-between gap-2 px-2 py-2 rounded-lg hover:bg-white/10 " + ( (c.code==="ALL" && selC.length===0) || (c.code!=="ALL" && selC.includes(c.code)) ? "bg-white/10" : "")}
+                >
+                  <span className="flex items-center gap-2">
+                    <span aria-hidden>{flag(c.code==="ALL"?"":c.code)}</span>
+                    <span className="text-sm">{c.name}</span>
+                  </span>
+                  <span className="text-xs opacity-60">{c.code==="ALL"?"":c.code}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Gender button */}
+      <div className="relative pointer-events-auto">
+        <button
+          type="button"
+          data-ui="gender-button"
+          aria-haspopup="listbox"
+          aria-expanded={openG}
+          onClick={() => { setOpenG(v=>!v); setOpenC(false); }}
+          className="h-8 px-3 rounded-xl bg-black/35 hover:bg-black/45 text-white text-sm flex items-center gap-2 backdrop-blur transition"
+        >
+          <span aria-hidden className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-rose-400">⚧</span>
+          <span>Gender</span>
+          {genderCount>0 && <span className="ml-1 text-[11px] px-1.5 py-0.5 rounded bg-white/20">{genderCount}</span>}
+        </button>
+
+        {openG && (
+          <div ref={popG}
+               className="absolute right-0 mt-2 w-[min(92vw,300px)] rounded-xl bg-zinc-900/95 text-zinc-100 shadow-xl ring-1 ring-white/10 p-2 grid">
+            {([
+              {k:"everyone", label:"Everyone", icon:"👥", clr:""},
+              {k:"female",   label:"Female",   icon:"♀️", clr:"text-rose-300"},
+              {k:"male",     label:"Male",     icon:"♂️", clr:"text-blue-300"},
+              {k:"couples",  label:"Couples",  icon:"👫", clr:"text-purple-300"},
+              {k:"lgbt",     label:"LGBT",     icon:"🏳️‍🌈", clr:""},
+            ] as Array<{k:GenderKey,label:string,icon:string,clr:string}>).map(o=>(
+              <button key={o.k}
+                      type="button"
+                      onClick={()=>toggleGender(o.k as GenderKey)}
+                      className={"flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white/10 " + (selG.includes(o.k as GenderKey) ? "bg-white/10" : "")}>
+                <span className="flex items-center gap-2">
+                  <span aria-hidden className={o.clr}>{o.icon}</span>
+                  <span className="text-sm">{o.label}</span>
+                </span>
+                {selG.includes(o.k as GenderKey) ? <span className="text-xs opacity-70">Selected</span> : null}
+              </button>
+            ))}
+            <div className="flex justify-end pt-1">
+              <button className="px-3 py-2 text-sm rounded-lg bg-zinc-800/70 hover:bg-zinc-700" onClick={()=>setOpenG(false)}>Done</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+TSX
+
+echo "[4/7] Hide queue badge in production (HeaderLite)"
+if [ -f "src/components/ui/HeaderLite.tsx" ]; then
+  cat > src/components/ui/HeaderLite.tsx <<'TSX'
+"use client";
+export default function HeaderLite(){ return null; }
+TSX
+fi
+
+echo "[5/7] Build + read-only RTC acceptance"
+set +e
+pnpm build >/tmp/build.log 2>&1
+BUILD_RC=$?
+bash _ops/acc_rtc.sh https://www.ditonachat.com >/tmp/acc.log 2>&1
+ACC_RC=$?
+set -e
+
+echo "[6/7] Commit + push branch (no main push)"
+git add -A
+git commit -m "feat(ui): top-right Location/Gender with anchored popovers; hide queue badge in prod; no backend changes" || true
+git push -u origin "$BR"
+
+echo "[7/7] Acceptance summary"
+echo "-- Acceptance --"
+echo "BACKUP_DIR=$BACKUP_DIR"
+echo "HAS_LOCATION_BTN=$(grep -c 'data-ui=\"country-button\"' src/app/chat/components/FilterBar.tsx || true)"
+echo "HAS_GENDER_BTN=$(grep -c 'data-ui=\"gender-button\"' src/app/chat/components/FilterBar.tsx || true)"
+echo "BUILD_RC=$BUILD_RC  (see /tmp/build.log)"
+echo "ACC_RC=$ACC_RC     (see /tmp/acc.log)"
+echo "MANUAL_1=Open /chat → buttons at top-right with labels 'Location' and 'Gender'"
+echo "MANUAL_2=Click buttons → anchored popovers (not fullscreen), close on outside click/Esc/Done"
+echo "MANUAL_3=Country list shows 'All Countries', then my country, then full list; two columns; search works"
+echo "MANUAL_4=Selections persist locally (localStorage) and show counts; server remains unchanged"
+echo "MANUAL_5=Queue badge hidden"
+
+
+Acceptance
+
+Buttons “🌍 Location” and “⚧ Gender” visible at the extreme top-right of the upper pane.
+
+Popovers open inline (not fullscreen), close on outside click/Esc/Done.
+
+Countries: two columns, flags, first item “All Countries”, second = user country, search works, multi-select up to 15, count badge updates.
+
+Gender: icons and colors, select up to two, “Done” closes.
+
+Queue badge hidden.
+
+pnpm build passes; _ops/acc_rtc.sh RC=0.

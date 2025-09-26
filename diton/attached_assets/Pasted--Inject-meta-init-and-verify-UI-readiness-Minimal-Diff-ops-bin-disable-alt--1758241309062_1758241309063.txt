@@ -1,0 +1,69 @@
+العنوان
+
+Inject meta:init and verify UI readiness (Minimal-Diff)
+
+أوامر الوكيل
+_ops/bin/disable_alt_screen.sh bash -lc '
+set -Eeuo pipefail; export TERM=dumb CI=1 NO_COLOR=1 FORCE_COLOR=0 PAGER=cat GIT_PAGER=cat LESS=FRX
+STAMP=$(date -u +%Y%m%d-%H%M%S); ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+RPT="_ops/reports/agentC_meta_${STAMP}.log"; BK="_ops/backups/agentC_meta_${STAMP}.tar"
+mkdir -p "${RPT%/*}" _ops/backups
+
+# 0) نسخ احتياطي
+tar -cf "$BK" --exclude=.git --exclude=node_modules --exclude="_ops/backups/*" --exclude="_ops/tmp/*" . || true
+
+# 1) إنشاء ملف يرسل meta:init عند اتصال الـDC
+mkdir -p src/app/chat
+cat > src/app/chat/metaInit.client.ts <<'"'"'TS'"'"'
+"use client";
+(function(){
+  if (typeof window === "undefined") return;
+  function send(){
+    try {
+      const dc = (window as any).__ditonaDataChannel as RTCDataChannel | undefined;
+      if (dc && dc.readyState === "open") {
+        dc.send(JSON.stringify({ type: "meta:init" }));
+      }
+    } catch {}
+  }
+  function onPhase(e:any){
+    try {
+      if (e && e.detail && e.detail.phase === "connected") {
+        setTimeout(send, 0); setTimeout(send, 300);
+      }
+    } catch {}
+  }
+  window.addEventListener("rtc:phase", onPhase);
+})();
+TS
+
+# 2) إدراج الاستيراد أعلى ChatClient.tsx بطريقة idempotent عبر Node
+CHAT="src/app/chat/ChatClient.tsx"
+if [ -f "$CHAT" ]; then
+node - <<NODE
+const fs=require("fs"); const p="${CHAT}";
+let s=fs.readFileSync(p,"utf8");
+if(!s.includes('metaInit.client')){
+  if(s.startsWith('"use client";')) s='"use client";\\nimport "@/app/chat/metaInit.client";\\n'+s.split("\\n").slice(1).join("\\n");
+  else s='"use client";\\nimport "@/app/chat/metaInit.client";\\n'+s;
+  fs.writeFileSync(p,s);
+  console.log("[inject] import added");
+} else {
+  console.log("[inject] already present");
+}
+NODE
+fi
+
+# 3) قبول سريع
+ok_meta=0; grep -q "meta:init" src/app/chat/metaInit.client.ts && grep -q "metaInit.client" "$CHAT" && ok_meta=1 || true
+ok_ffa=0; grep -Rni --include="*.tsx" -E "isFFA\\(\\)\\s*\\|\\|\\s*isVip" src/**/ChatToolbar*.tsx src/**/FilterBar*.tsx src/**/GenderSelect*.tsx src/**/CountrySelect*.tsx >/dev/null 2>&1 && ok_ffa=1
+ok_swipe=0; grep -Rni --include="*.tsx" -E "onTouch(Start|End)|pointer|swipe" src/app/chat >/dev/null 2>&1 && ok_swipe=1 || true
+ok_env=0; curl -fsS https://www.ditonachat.com/api/rtc/env | grep -qE "\"FREE_FOR_ALL\":\"1\"|\"NEXT_PUBLIC_FREE_FOR_ALL\":\"1\"" && ok_env=1 || true
+
+echo "-- Acceptance --"                | tee    "$RPT"
+echo "META_INIT_SEND_OK=${ok_meta}"    | tee -a "$RPT"
+echo "FFA_BINDING_OK=${ok_ffa}"        | tee -a "$RPT"
+echo "SWIPE_HANDLERS_PRESENT=${ok_swipe}" | tee -a "$RPT"
+echo "ENV_FFA_RUNTIME_OK=${ok_env}"    | tee -a "$RPT"
+echo "[i] Report: $RPT"
+'

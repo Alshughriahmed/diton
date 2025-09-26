@@ -1,0 +1,79 @@
+المهمة (للAgent)
+
+ربط مكوّن QueueBadge داخل ChatClient.tsx (استيراد + رندر فوق اليمين بعد <RemoteTopRight />) دون أي تغيير بصري آخر.
+
+الهدف
+
+إظهار شارة الطابور أعلى يمين القسم العلوي، وتبقى بقية الواجهة كما هي.
+
+معايير القبول
+
+سطر استيراد: import QueueBadge from "@/components/chat/QueueBadge";
+
+وجود JSX: <QueueBadge /> مباشرة بعد <RemoteTopRight />.
+
+pnpm build يمرّ بنجاح.
+
+سكربت القبول يطبع: CHATCLIENT_IMPORTED_BADGE=1 و CHATCLIENT_RENDERS_BADGE=1.
+
+[patches] (ضع الملف التالي باسم queue-badge-wire.patch)
+*** a/src/app/chat/ChatClient.tsx
+--- b/src/app/chat/ChatClient.tsx
+@@
+-import ChatMessagingBar from "@/components/chat/ChatMessaging";
++import ChatMessagingBar from "@/components/chat/ChatMessaging";
++import QueueBadge from "@/components/chat/QueueBadge";
+ import { getMobileOptimizer } from "@/lib/mobile";
+@@
+-            {/* Filters - Top Right */}
+-            <RemoteTopRight />
++            {/* Filters - Top Right */}
++            <RemoteTopRight />
++            {/* Queue length badge - Top Right overlay */}
++            <div className="absolute top-2 right-2 z-40 pointer-events-none">
++              <QueueBadge />
++            </div>
+             
+             {/* Like System - Bottom Right */}
+
+
+ملاحظة: هذا باتش “minimal diff” فقط على ملف واحد. المكوّن QueueBadge.tsx والهوك useQueueLen.ts موجودان مسبقًا، فلا نلمسهما.
+
+[acc.sh] (سكربت قبول واحد)
+
+احفظه في جذر الريبو باسم acc.sh ثم اجعله قابلًا للتنفيذ.
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+F="src/app/chat/ChatClient.tsx"
+
+echo "-- Acceptance --"
+grep -qE 'import\s+QueueBadge\s+from\s+"@/components/chat/QueueBadge"' "$F" \
+  && echo CHATCLIENT_IMPORTED_BADGE=1 || echo CHATCLIENT_IMPORTED_BADGE=0
+
+grep -q '<QueueBadge\s*/>' "$F" \
+  && echo CHATCLIENT_RENDERS_BADGE=1 || echo CHATCLIENT_RENDERS_BADGE=0
+
+# Build (بدون frozen-lockfile لتفادي شكوى اختلاف القفل)
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm i --no-frozen-lockfile >/dev/null
+  if pnpm build >/dev/null; then
+    echo BUILD_OK=1
+  else
+    echo BUILD_OK=0
+  fi
+else
+  echo PNPM_MISSING=1
+fi
+
+echo "-- End Acceptance --"
+
+أوامر الفرع وفتح PR (انسخ كما هي)
+git checkout -b feature/queue-badge-wire
+git apply queue-badge-wire.patch || echo "apply manually w/ same logic"
+chmod +x acc.sh
+bash ./acc.sh
+git add -A && git commit -m "queue-badge: wire QueueBadge (import + JSX)"
+git push -u origin feature/queue-badge-wire
+# افتح Pull Request من الفرع feature/queue-badge-wire إلى main

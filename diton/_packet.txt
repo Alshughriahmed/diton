@@ -1,0 +1,35 @@
+{
+  "repo": {
+    "git": "aab7cb2",
+    "filters_source": "useFilters",
+    "cooldown_700ms": true,
+    "gesture_layer_has_neg_z": true,
+    "api_routes": "[\n  \"/api/age/allow/route.ts\",\n  \"/api/age/start/route.ts\",\n  \"/api/age/webhook/route.ts\",\n  \"/api/auth/[...nextauth]/route.ts\",\n  \"/api/captcha/verify/route.ts\",\n  \"/api/health/route.ts\",\n  \"/api/ice/route.ts\",\n  \"/api/internal/reconcile/route.ts\",\n  \"/api/match/next/route.ts\",\n  \"/api/moderation/report/route.ts\",\n  \"/api/monitoring/metrics/route.ts\",\n  \"/api/stripe/portal/route.ts\",\n  \"/api/stripe/prices/route.ts\",\n  \"/api/stripe/subscribe/route.ts\",\n  \"/api/stripe/webhook/route.ts\",\n  \"/api/turn/route.ts\",\n  \"/api/user/vip/dev/grant/route.ts\",\n  \"/api/user/vip/dev/revoke/route.ts\",\n  \"/api/user/vip-status/route.ts\"\n]",
+    "pages": "[\n  \"/2257\",\n  \"/abuse\",\n  \"/api\",\n  \"/chat\",\n  \"/content\",\n  \"/dmca\",\n  \"/plans\",\n  \"/privacy\",\n  \"/terms\"\n]",
+    "toolbar_buttons": 21
+  },
+  "prod": {
+    "base": "https://www.ditonachat.com",
+    "health": 200,
+    "age_flow": {
+      "pre": "307",
+      "post": 200
+    },
+    "permissions_policy": "",
+    "css_utilities": true,
+    "vip": {
+      "pre": 200,
+      "post": 200
+    },
+    "ratelimit_burst": [
+      "200",
+      "200",
+      "200",
+      "429",
+      "429"
+    ]
+  }
+}
+-----BEGIN-DITONACHAT-PACKET-----
+ewogICJyZXBvIjogewogICAgImdpdCI6ICJhYWI3Y2IyIiwKICAgICJmaWx0ZXJzX3NvdXJjZSI6ICJ1c2VGaWx0ZXJzIiwKICAgICJjb29sZG93bl83MDBtcyI6IHRydWUsCiAgICAiZ2VzdHVyZV9sYXllcl9oYXNfbmVnX3oiOiB0cnVlLAogICAgImFwaV9yb3V0ZXMiOiAiW1xuICBcIi9hcGkvYWdlL2FsbG93L3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9hZ2Uvc3RhcnQvcm91dGUudHNcIixcbiAgXCIvYXBpL2FnZS93ZWJob29rL3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9hdXRoL1suLi5uZXh0YXV0aF0vcm91dGUudHNcIixcbiAgXCIvYXBpL2NhcHRjaGEvdmVyaWZ5L3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9oZWFsdGgvcm91dGUudHNcIixcbiAgXCIvYXBpL2ljZS9yb3V0ZS50c1wiLFxuICBcIi9hcGkvaW50ZXJuYWwvcmVjb25jaWxlL3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9tYXRjaC9uZXh0L3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9tb2RlcmF0aW9uL3JlcG9ydC9yb3V0ZS50c1wiLFxuICBcIi9hcGkvbW9uaXRvcmluZy9tZXRyaWNzL3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9zdHJpcGUvcG9ydGFsL3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9zdHJpcGUvcHJpY2VzL3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9zdHJpcGUvc3Vic2NyaWJlL3JvdXRlLnRzXCIsXG4gIFwiL2FwaS9zdHJpcGUvd2ViaG9vay9yb3V0ZS50c1wiLFxuICBcIi9hcGkvdHVybi9yb3V0ZS50c1wiLFxuICBcIi9hcGkvdXNlci92aXAvZGV2L2dyYW50L3JvdXRlLnRzXCIsXG4gIFwiL2FwaS91c2VyL3ZpcC9kZXYvcmV2b2tlL3JvdXRlLnRzXCIsXG4gIFwiL2FwaS91c2VyL3ZpcC1zdGF0dXMvcm91dGUudHNcIlxuXSIsCiAgICAicGFnZXMiOiAiW1xuICBcIi8yMjU3XCIsXG4gIFwiL2FidXNlXCIsXG4gIFwiL2FwaVwiLFxuICBcIi9jaGF0XCIsXG4gIFwiL2NvbnRlbnRcIixcbiAgXCIvZG1jYVwiLFxuICBcIi9wbGFuc1wiLFxuICBcIi9wcml2YWN5XCIsXG4gIFwiL3Rlcm1zXCJcbl0iLAogICAgInRvb2xiYXJfYnV0dG9ucyI6IDIxCiAgfSwKICAicHJvZCI6IHsKICAgICJiYXNlIjogImh0dHBzOi8vd3d3LmRpdG9uYWNoYXQuY29tIiwKICAgICJoZWFsdGgiOiAyMDAsCiAgICAiYWdlX2Zsb3ciOiB7CiAgICAgICJwcmUiOiAiMzA3IiwKICAgICAgInBvc3QiOiAyMDAKICAgIH0sCiAgICAicGVybWlzc2lvbnNfcG9saWN5IjogIiIsCiAgICAiY3NzX3V0aWxpdGllcyI6IHRydWUsCiAgICAidmlwIjogewogICAgICAicHJlIjogMjAwLAogICAgICAicG9zdCI6IDIwMAogICAgfSwKICAgICJyYXRlbGltaXRfYnVyc3QiOiBbCiAgICAgICIyMDAiLAogICAgICAiMjAwIiwKICAgICAgIjIwMCIsCiAgICAgICI0MjkiLAogICAgICAiNDI5IgogICAgXQogIH0KfQo=
+-----END-DITONACHAT-PACKET-----

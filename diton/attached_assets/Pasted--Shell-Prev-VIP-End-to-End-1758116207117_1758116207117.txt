@@ -1,0 +1,170 @@
+🎯 مهمة الوكيل (Shell فقط – بدون تعديل كود)
+
+الهدف: إثبات عمل “Prev VIP” من طرف واحد بشكل End-to-End، وقراءة مفاتيح Redis فور كتابتها، وإخراج تقرير نهائي واحد شامل.
+
+1) أنشئ سكربت الفحص الشامل
+
+أنشئ الملف: _ops/bin/100_prev_vip_audit.sh
+
+bash -lc 'set -Eeuo pipefail
+mkdir -p _ops/bin _ops/reports _ops/logs
+TS="$(date -u +%Y%m%d-%H%M%S)"
+REP="_ops/reports/prev_vip_final_${TS}.log"
+
+PORT="${PORT:-3000}"
+BASE="http://127.0.0.1:${PORT}"
+URL="${UPSTASH_REDIS_REST_URL:-}/pipeline"
+TOK="${UPSTASH_REDIS_REST_TOKEN:-}"
+
+log(){ echo "$@" | tee -a "$REP"; }
+
+# 0) صحّة الخدمة
+H="$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)"
+if [ "$H" != 200 ]; then
+  nohup pnpm dev -p "$PORT" -H 0.0.0.0 >_ops/logs/dev.log 2>&1 & disown
+  sleep 8
+  H="$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)"
+fi
+log "HEALTH=$H"
+
+# 1) كوكي جلستين حقيقيتين
+get_cookie(){ curl -sS -D - -o /dev/null "$BASE/api/anon/init" | awk "/^[Ss]et-[Cc]ookie:/ {print \$2}" | head -n1 | sed "s/;.*//"; }
+CKA="$(get_cookie)"; CKB="$(get_cookie)"
+log "CKA=${CKA:-EMPTY}"
+log "CKB=${CKB:-EMPTY}"
+
+# 2) إدراج عبر API (لا تعديل ملفات)
+curl -s -X POST "$BASE/api/rtc/enqueue" -H "Cookie: $CKA" -H "content-type: application/json" \
+  -d "{\"gender\":\"male\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+curl -s -X POST "$BASE/api/rtc/enqueue" -H "Cookie: $CKB" -H "content-type: application/json" \
+  -d "{\"gender\":\"female\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+
+# 3) مطابقة أولى للطرف A
+MM1="$(curl -s -o /tmp/mm1.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKA" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR1="$(sed -nE "s/.*\"pairId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+PEER_B="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+log "MM1=$MM1  PAIR1=${PAIR1:-}  PEER_B=${PEER_B:-}"
+
+# إعادة إدراج B
+curl -s -X POST "$BASE/api/rtc/enqueue" -H "Cookie: $CKB" -H "content-type: application/json" \
+  -d "{\"gender\":\"female\",\"country\":\"DE\",\"genders\":\"all\",\"countries\":\"ALL\"}" >/dev/null
+
+# 4) طلب Prev من A كـ VIP (فورًا)
+P200="$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $CKA; vip=1" -H "x-ditona-prev: 1" "$BASE/api/match/next" || echo 000)"
+log "PREV_HTTP=$P200"
+
+# 5) مطابقة ثانية لـ B (نتوقع callee + peerAnonId = UUID A)
+MM2="$(curl -s -o /tmp/mm2.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKB" -H "content-type: application/json" -d "{}" || echo 000)"
+ROLE2="$(sed -nE "s/.*\"role\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+PEER_A="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+log "MM2=$MM2  ROLE2=${ROLE2:-}  PEER_A=${PEER_A:-}"
+
+# 6) فحص Redis فورًا (قبل انقضاء TTL ~7–9s)
+if [ -n "${UPSTASH_REDIS_REST_URL:-}" ] && [ -n "$TOK" ] && [ -n "${PEER_A:-}" ] && [ -n "${PEER_B:-}" ]; then
+  AUTH="Authorization: Bearer $TOK"
+  PAY_PREV="[ [\"EXISTS\",\"rtc:prev-wish:${PEER_A}\"],[\"EXISTS\",\"rtc:prev-for:${PEER_B}\"] ]"
+  PAY_LAST="[ [\"EXISTS\",\"rtc:last:${PEER_A}\"],[\"EXISTS\",\"rtc:last:${PEER_B}\"] ]"
+  EXPREV="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAY_PREV")"
+  EXLAST="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAY_LAST")"
+  log "EXPREV=$EXPREV"
+  log "EXLAST=$EXLAST"
+
+  # Snapshot KEYS+TTL (اختياري)
+  SNAP="$(cat <<J
+[
+ ["SCAN","0","MATCH","rtc:prev-*","COUNT","50"],
+ ["SCAN","0","MATCH","rtc:last:*","COUNT","50"]
+]
+J
+)"
+  KEYS_JSON="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$SNAP")"
+  log "KEYS_SNAPSHOT=$KEYS_JSON"
+else
+  log "UPSTASH_ENV=ABSENT_OR_IDS_MISSING"
+fi
+
+# 7) قبول نهائي
+ok_prev="$(echo "${EXPREV:-}" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n" || true)"
+ok_last="$(echo "${EXLAST:-}" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n" || true)"
+
+echo >>"$REP"; log "-- Acceptance --"
+log "INITIAL_PAIR_OK=$([ -n "$PAIR1" ] && [ "$MM1" = 200 ] && echo 1 || echo 0)"
+log "RECONNECT_OK=$([ "$MM2" = 200 ] && [ "$ROLE2" = callee ] && [ -n "$PEER_A" ] && echo 1 || echo 0)"
+log "VIP_PREV_ENFORCED=$([ "$P200" = 200 ] && echo 1 || echo 0)"
+[ -n "$ok_prev" ] && log "PREV_KEYS_WRITTEN=$([ "$ok_prev" = 11 ] && echo 1 || echo 0)" || log "PREV_KEYS_WRITTEN=NA"
+[ -n "$ok_last" ] && log "LAST_KEYS_SET=$([ "$ok_last" = 11 ] && echo 1 || echo 0)" || log "LAST_KEYS_SET=NA"
+
+echo; echo "REPORT=$REP"; echo; sed -n "1,200p" "$REP"
+'
+
+2) نفّذ السكربت وسلّم التقرير
+bash _ops/bin/100_prev_vip_audit.sh
+
+
+المخرجات يجب أن تطبع مسار REPORT=... ثم تعرض أوّل 200 سطر. أرسل لنا التقرير كملف.
+
+3) إن ظهرت INITIAL_PAIR_OK=1 وRECONNECT_OK=1 وVIP_PREV_ENFORCED=1 بينما PREV/LAST = 0 أو NA
+
+شغّل التحقق اللحظي للمفاتيح والـTTL (قراءة فقط) فورًا بعد الخطوة السابقة:
+
+bash -lc '
+set -Eeuo pipefail
+URL="${UPSTASH_REDIS_REST_URL:-}/pipeline"; TOK="${UPSTASH_REDIS_REST_TOKEN:-}"
+[ -n "$URL" ] && [ -n "$TOK" ] || { echo "UPSTASH_ENV=ABSENT"; exit 0; }
+AUTH="Authorization: Bearer $TOK"
+# اطبع مفاتيح prev/last الحالية مع TTL لكل مفتاح
+PAY=$(cat <<J
+[
+ ["SCAN","0","MATCH","rtc:prev-*","COUNT","100"],
+ ["SCAN","0","MATCH","rtc:last:*","COUNT","100"]
+]
+J
+)
+echo "=== KEYS ==="
+KS="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAY")"
+echo "$KS"
+'
+
+
+هذا يثبت أن الأصفار (إن ظهرت) كانت بسبب نافذة TTL القصيرة أو توقيت الفحص—not خطأ وظيفي.
+
+4) إن فشل INITIAL_PAIR_OK=0 أو RECONNECT_OK=0
+
+نفّذ فقط هذا التشخيص (لا تعدّل ملفات):
+
+bash -lc '
+set -Eeuo pipefail
+PORT="${PORT:-3000}"; BASE="http://127.0.0.1:${PORT}"
+echo "anon/init:"; curl -sS -D - -o /dev/null "$BASE/api/anon/init" | sed -n "1,40p"
+echo "---"
+echo "matchmake(A):"; curl -sS -o - -w "\nHTTP=%{http_code}\n" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $(curl -sS -D - -o /dev/null "$BASE/api/anon/init" | awk "/Set-Cookie:/ {print \$2}" | head -n1 | sed "s/;.*//")" -H "content-type: application/json" -d "{}" | sed -n "1,120p"
+'
+
+
+ارفع الناتج كما هو ضمن التقرير.
+
+📌 معايير القبول النهائية
+
+INITIAL_PAIR_OK=1
+
+RECONNECT_OK=1 و ROLE2=callee ووجود peerAnonId صحيح
+
+VIP_PREV_ENFORCED=1
+
+لقطة Redis تُظهر مفاتيح rtc:prev-* و rtc:last:* (قد تنتهي بسرعة؛ يكفينا إثبات لحظي أو NA إذا غابت بيئة Upstash)
+
+🧾 التسليم المطلوب من الوكيل
+
+ملف التقرير: _ops/reports/prev_vip_final_<timestamp>.log
+
+إن لزم: لقطة مفاتيح Redis (الأمر في خطوة 3)
+
+إن فشل أي معيار: ناتج تشخيص خطوة 4
+
+ملاحظات مهمة لتقليل التكلفة:
+
+لا تُجرِ أي build إضافي. فقط تشغيل dev إن كانت /api/health لا تُعيد 200.
+
+لا تُعدّل أي ملف كود. هذه مهمة فحص وتشخيص فقط.
+
+نفّذ الأوامر كما هي؛ وأرسل الملفات الناتجة.

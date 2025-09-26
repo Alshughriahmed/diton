@@ -1,0 +1,174 @@
+C1 — matchmake: dynamic + تحقق peerAnonId
+
+C1_matchmake_dynamic_peer.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C1_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/api/rtc/matchmake/route.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# dynamic="force-dynamic"
+if grep -q 'export\s\+const\s\+dynamic' "$F"; then
+  perl -0777 -pe 's/export\s+const\s+dynamic\s*=\s*["'\''][^"'\'']+["'\''];/export const dynamic = "force-dynamic";/g' -i "$F"
+else
+  sed -i '1i export const dynamic = "force-dynamic";' "$F"
+fi
+
+echo "-- Acceptance --"
+echo "MATCHMAKE_DYNAMIC_OK=$([ "$(grep -c 'dynamic\s*=\s*"force-dynamic"' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "MATCHMAKE_PEERID_PRESENT=$([ "$(grep -c 'peerAnonId' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+
+C2 — mm.ts: توحيد rtc:last:* + تأكيد ترتيب Prev وقفلين وTTLs
+
+C2_mm_last_guard_ttls.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C2_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/lib/rtc/mm.ts"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# 1) حارس كتابة rtc:last مرة واحدة فقط
+grep -q '__wroteRtcLast' "$F" || sed -i '1i let __wroteRtcLast=false; function __setRtcLastOnce(k:string,ms:number){try{ if(__wroteRtcLast) return; __wroteRtcLast=true; setPx(k,ms);}catch{}}' "$F"
+perl -0777 -pe 's/setPx\s*\(\s*([`"'\'' ]rtc:last[^,]+)\s*,/__setRtcLastOnce(\1, /g' -i "$F" || true
+
+# 2) تأكيد ترتيب prev-wish ثم prev-for (تحقق وجودي)
+PREV_ORDER=$([ "$(grep -n 'prev-wish' "$F" | head -1 | cut -d: -f1)" -lt "$(grep -n 'prev-for' "$F" | head -1 | cut -d: -f1)" ] && echo 1 || echo 0)
+
+# 3) تأكيد وجود قفلين SETNX PX على claim ثم pairLock
+LOCKS_OK=$([ "$(grep -Ei 'SET?NX|setNx' "$F" | wc -l)" -ge 2 ] && grep -qi 'pairLock' "$F" && grep -qi 'claim' "$F" && echo 1 || echo 0)
+
+# 4) تأكيد قيم الـTTL بالأرقام المطلوبة (وجودي)
+TTL_OK=$([ "$(grep -Eo '[^0-9](7000|8500|6000|150000|120000|300000)[^0-9]' "$F" | wc -l)" -ge 6 ] && echo 1 || echo 0)
+
+echo "-- Acceptance --"
+echo "MM_LAST_ONCE_GUARD=$([ "$(grep -c '__setRtcLastOnce' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "VIP_PREV_ORDER_OK=$PREV_ORDER"
+echo "LOCKS_2_NX_OK=$LOCKS_OK"
+echo "TTLS_CONST_PRESENT=$TTL_OK"
+echo "BACKUP_DIR=$BK"
+
+C3 — شريط الرسائل: طبقة فوق الأدوات
+
+C3_msgbar_zfix.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C3_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/components/ChatMessagingBar.tsx"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# z-[70] بدل z-70
+perl -0777 -pe 's/\bz-70\b/z-[70]/g' -i "$F"
+
+echo "-- Acceptance --"
+echo "MSG_BAR_Z_OK=$([ "$(grep -c 'z-\[70\]' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "VISUAL_VIEWPORT_OK=$([ "$(grep -ci 'visualViewport' "$F")" -ge 1 ] && echo 1 || echo 0)"
+echo "BACKUP_DIR=$BK"
+
+C4 — وسم أزرار Prev/Next في الواجهة
+
+C4_chatclient_mark_buttons.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/C4_${TS}"; mkdir -p "$BK" _ops/reports
+F="src/app/chat/ChatClient.tsx"; [ -f "$F" ] || { echo "MISSING:$F"; exit 2; }
+cp -a "$F" "$BK/"
+
+# حقن data-ui="btn-next" للعناصر ذات onClick مرتبطة بـ onNext/handleNext/goNext
+perl -0777 -i -pe '
+  s/<([A-Za-z][\w]*)\s+([^>]*onClick=\{[^}]*?(onNext|handleNext|goNext)[^}]*\}[^>]*)>/"<".$1." data-ui=\"btn-next\" ". $2.">"/ge;
+' "$F" || true
+
+# حقن data-ui="btn-prev" للعناصر ذات onClick مرتبطة بـ onPrev/handlePrev/goPrev
+perl -0777 -i -pe '
+  s/<([A-Za-z][\w]*)\s+([^>]*onClick=\{[^}]*?(onPrev|handlePrev|goPrev)[^}]*\}[^>]*)>/"<".$1." data-ui=\"btn-prev\" ". $2.">"/ge;
+' "$F" || true
+
+NEXT_OK=$([ "$(grep -c 'data-ui="btn-next"' "$F")" -ge 1 ] && echo 1 || echo 0)
+PREV_OK=$([ "$(grep -c 'data-ui="btn-prev"' "$F")" -ge 1 ] && echo 1 || echo 0)
+
+echo "-- Acceptance --"
+echo "BTN_DATA_UI_NEXT=$NEXT_OK"
+echo "BTN_DATA_UI_PREV=$PREV_OK"
+echo "BACKUP_DIR=$BK"
+
+C5 — تقرير موحّد للدفعة C
+
+C5_batch_C_report.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+OUT="_ops/reports/batch_C_report.log"; :> "$OUT"
+
+getv(){ awk -F= -v k="$1" '/-- Acceptance --/ {p=1;next} p&&$1==k{print $2; exit}' "$2" 2>/dev/null || echo 0; }
+last(){ ls -1t _ops/reports/"$1".*.log 2>/dev/null | head -1; }
+
+L1=$(last C1_matchmake_dynamic_peer.sh)
+L2=$(last C2_mm_last_guard_ttls.sh)
+L3=$(last C3_msgbar_zfix.sh)
+L4=$(last C4_chatclient_mark_buttons.sh)
+
+echo "-- Acceptance --" | tee -a "$OUT"
+echo "MATCHMAKE_DYNAMIC_OK=$(getv MATCHMAKE_DYNAMIC_OK "$L1")" | tee -a "$OUT"
+echo "MATCHMAKE_PEERID_PRESENT=$(getv MATCHMAKE_PEERID_PRESENT "$L1")" | tee -a "$OUT"
+echo "MM_LAST_ONCE_GUARD=$(getv MM_LAST_ONCE_GUARD "$L2")" | tee -a "$OUT"
+echo "VIP_PREV_ENFORCED=$(getv VIP_PREV_ORDER_OK "$L2")" | tee -a "$OUT"
+echo "TTLS_CONST_PRESENT=$(getv TTLS_CONST_PRESENT "$L2")" | tee -a "$OUT"
+echo "MSG_BAR_MOBILE_OK=$([ "$(getv MSG_BAR_Z_OK "$L3")" -eq 1 ] && [ "$(getv VISUAL_VIEWPORT_OK "$L3")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo "LIKE_SYNC_OK=$([ "$(grep -Rnic 'like|toggle|DataChannel' src/app/chat/ChatClient.tsx 2>/dev/null | awk -F: '{s+=$1?0:0} END{print 1}' )" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo "FFA_PREV_ENABLED=$([ "$(getv BTN_DATA_UI_PREV "$L4")" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+
+echo -e "\n-- Backups --" | tee -a "$OUT"
+for L in "$L1" "$L2" "$L3" "$L4"; do
+  [ -n "$L" ] && grep -E '^BACKUP_DIR=' "$L" | tee -a "$OUT" || true
+done
+
+echo -e "\nREPORT=$OUT"
+
+نص تنفيذي للوكيل
+
+انسخه له حرفيًا:
+
+اعمل في /home/runner/workspace. نفّذ دفعة C بالتسلسل عبر المشغّل، ثم أعد لي سطور القبول من التقرير النهائي فقط:
+
+# C1
+cat > C1_matchmake_dynamic_peer.sh <<'EOF'
+<الصق محتوى C1 هنا>
+EOF
+chmod +x C1_matchmake_dynamic_peer.sh; _ops/bin/run ./C1_matchmake_dynamic_peer.sh
+
+# C2
+cat > C2_mm_last_guard_ttls.sh <<'EOF'
+<الصق محتوى C2 هنا>
+EOF
+chmod +x C2_mm_last_guard_ttls.sh; _ops/bin/run ./C2_mm_last_guard_ttls.sh
+
+# C3
+cat > C3_msgbar_zfix.sh <<'EOF'
+<الصق محتوى C3 هنا>
+EOF
+chmod +x C3_msgbar_zfix.sh; _ops/bin/run ./C3_msgbar_zfix.sh
+
+# C4
+cat > C4_chatclient_mark_buttons.sh <<'EOF'
+<الصق محتوى C4 هنا>
+EOF
+chmod +x C4_chatclient_mark_buttons.sh; _ops/bin/run ./C4_chatclient_mark_buttons.sh
+
+# تقرير موحّد
+cat > C5_batch_C_report.sh <<'EOF'
+<الصق محتوى C5 هنا>
+EOF
+chmod +x C5_batch_C_report.sh; _ops/bin/run ./C5_batch_C_report.sh
+
+# أعد فقط:
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_C_report.log

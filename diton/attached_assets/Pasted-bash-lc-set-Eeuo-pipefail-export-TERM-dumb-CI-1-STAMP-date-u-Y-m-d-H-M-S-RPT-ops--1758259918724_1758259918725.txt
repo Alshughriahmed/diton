@@ -1,0 +1,65 @@
+bash -lc '
+set -Eeuo pipefail; export TERM=dumb CI=1
+
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+RPT="_ops/reports/phase1_bridge_ffa_${STAMP}.log"
+BK="_ops/backups/phase1_bridge_ffa_${STAMP}.tar"
+mkdir -p "${RPT%/*}" "${BK%/*}"
+
+# 0) نسخ احتياطي
+tar -cf "$BK" --exclude=.git --exclude=node_modules --exclude="_ops/backups/*" --exclude="_ops/reports/*" .
+
+F="src/app/chat/freeForAllBridge.ts"
+test -f "$F" || { echo "-- Acceptance --" | tee "$RPT"; echo "FILE_FOUND=0" | tee -a "$RPT"; exit 1; }
+
+# 1) حقن جسر window<->events bus إن لم يكن موجودًا
+if ! grep -q "__ditonaBridgeInit" "$F"; then
+cat >> "$F" <<'"'"'JS'"'"'
+;(()=>{ try{
+  if (typeof window==="undefined") return;
+  if ((window as any).__ditonaBridgeInit) return;
+  (window as any).__ditonaBridgeInit=1;
+  (async()=>{ try{
+    const m=await import("@/utils/events");
+    const on=m.on, emit=m.emit;
+    const N=["rtc:pair","rtc:phase","ditona:peer-meta"] as const;
+    // window -> bus
+    N.forEach((n)=>window.addEventListener(n as any,(ev:any)=>{ try{ emit(n as any,(ev as any)?.detail);}catch{} },{passive:true}));
+    // bus -> window
+    N.forEach((n)=>{ try{ on(n as any,(detail:any)=>{ try{ window.dispatchEvent(new CustomEvent(n as any,{detail})); }catch{} }); }catch{} });
+  }catch{} })();
+} catch{} })();
+JS
+fi
+
+# 2) تفعيل FFA وقت التشغيل عبر dynamic import (Idempotent)
+if ! grep -q "__ditonaFFALoaded" "$F"; then
+cat >> "$F" <<'"'"'JS'"'"'
+;(()=>{ try{
+  if (typeof window==="undefined") return;
+  if ((window as any).__ditonaFFALoaded) return;
+  (window as any).__ditonaFFALoaded=1;
+  (async()=>{ try{ const m=await import("@/utils/ffa"); await m.loadFFA?.(); }catch{} })();
+} catch{} })();
+JS
+fi
+
+# 3) قبول
+ok_bridge=0;   grep -q "__ditonaBridgeInit" "$F" && ok_bridge=1 || true
+ok_ffa=0;      grep -q "__ditonaFFALoaded" "$F" && ok_ffa=1 || true
+ok_client=0;   grep -q "freeForAllBridge" src/app/chat/ChatClient.tsx && ok_client=1 || true
+env_ok=0;      curl -fsS https://www.ditonachat.com/api/rtc/env | grep -qE "\"FREE_FOR_ALL\":\"1\"|\"NEXT_PUBLIC_FREE_FOR_ALL\":\"1\"" && env_ok=1 || true
+
+{
+  echo "-- Acceptance --"
+  echo "EVENT_BRIDGE_OK=${ok_bridge}"
+  echo "FFA_BOOTSTRAP_OK=${ok_ffa}"
+  echo "CHATCLIENT_IMPORT_OK=${ok_client}"
+  echo "ENV_FFA_RUNTIME_OK=${env_ok}"
+  echo "[refs] backup=$BK"
+} | tee "$RPT"
+echo "[i] Report: $RPT"
+
+# إشارة لاستدعاء الوكيل إن فشل أي بند
+test "$ok_bridge" -eq 1 && test "$ok_ffa" -eq 1 && exit 0 || exit 2
+'

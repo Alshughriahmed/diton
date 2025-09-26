@@ -1,0 +1,168 @@
+DitonaChat — Final Canonicalize → Verify → Build → Push (Zero-Surprises)
+
+الهدف: مشروع نظيف بجذر واحد، يطابق مواصفات DitonaChat 100% (UI/UX/قانوني/أمان/خصائص)، مع Build ناجح، ثم دفع إلى GitHub على فرع آمن وفتح PR.
+قاعدة ذهبية: لا Force Push، نسخ احتياطي قبل أي تعديل، وكل مرحلة تطبع بلوك -- Acceptance -- / -- End Acceptance --.
+
+المرحلة A — الجَرد والقرار (READ-ONLY)
+
+امسح الشجرة وحدد مصادر الكود الحالية (ROOT، المجلدات المستعادة/النظيفة، …).
+
+إن وُجدت لقطة قانونية جاهزة: _ops/exports/canonical_snapshot_* فيها package.json وsrc/app — اعتمدها مصدر حقيقة.
+
+إن لم توجد، أعِد بناء لقطة Canonical Snapshot (إلى _ops/exports/canonical_snapshot_<UTC>/) من أفضل مصدرين تكميليين متاحين لديك (مثل: ditonachat_restored_20250903-222559/ + أي ملفات ناقصة في الجذر)، بشرط أن تحتوي بالنهاية:
+
+src/, public/, package.json, tsconfig.json, next.config.mjs, next-env.d.ts.
+
+اطبع:
+
+-- Acceptance --
+PHASE=A_CENSUS
+CANON_SNAPSHOT=<path or NONE>
+SOURCES_FOUND=[...]
+NOTES=<summary>
+-- End Acceptance --
+
+المرحلة B — تنظيم الجذر (Safe Flatten)
+
+نسخة احتياطية للجذر إلى _ops/backups/flatten_<UTC>/root_before.tgz (استثنِ .git, node_modules, .next, dist, _ops/backups, _ops/artifacts).
+
+أنشئ فرعًا آمنًا: flatten-<UTC>.
+
+انسخ حمولة اللقطة القانونية إلى جذر المستودع (لا نقل بالـrsync؛ cp -a كافٍ).
+
+أصلح .gitignore إن لزم (يجب أن تحتوي على:
+.env, .env.local, .next/, dist/, _ops/artifacts/, _ops/backups/, node_modules/).
+
+أزِل من تتبع Git أي مجلدات مكررة/قديمة (Tracking فقط، لا حذف فعلي):
+ditonachat_restored_*, ditonachat-clean, DitonaChat, .next, dist.
+
+لا تُعدِّل تاريخ main. ادفع الفرع الآمن إلى:
+origin = https://github.com/Alshughriahmed/projeckt.git
+
+اطبع:
+
+-- Acceptance --
+PHASE=B_FLATTEN
+SNAPSHOT_DIR=<...>
+BRANCH=<flatten-UTC>
+LAST_COMMIT_SHA=<sha7>
+REMOTE_URL=https://github.com/Alshughriahmed/projeckt.git
+PR_HINT=<compare-url main...flatten-UTC>
+TREE_TOP_LEVEL=[src, public, package.json, tsconfig.json, next.config.mjs, next-env.d.ts, _ops]
+-- End Acceptance --
+
+المرحلة C — التحقق الشامل (READ-ONLY، قبل البناء)
+
+تحقق — بالقراءة أو بتشغيل Dev على $PORT إذا لزم — من البنود التالية، واطبع وجودها بالأرقام/الأسطر:
+
+وظائف الدردشة/UI
+
+ChatMessages يستخدم slice(-3) (سطر متوقع ≈ 9).
+
+Quick Dock anchor موجود (class: absolute right-3 -top-24 z-[40]) ≈ سطر 102 في src/app/chat/ChatClient.tsx.
+
+مكوّن PeerMeta مركّب أسفل يسار القسم العلوي (Overlay) ويعرض الدولة · المدينة · الجنس ديناميكيًا.
+
+Badges الجنس (5 أنواع): male ♂، female ♀، couple 💞، lgbt 🌈، unknown • — بالألوان المتفق عليها.
+
+قاعدة الدول: src/data/countries.ts بعدد ≈ 247 (تشمل XK، وتستثني GS/KP/MV كما قرر المالك).
+
+ثوابت/سلوك
+
+src/utils/media-bridge.ts يحوي العتبات: H=80 وV=50.
+
+src/utils/webrtc.ts يُطلق busEmit('next') عند hangup/failed/disconnected/closed (اذكر أرقام الأسطر التي فيها الاستدعاءات).
+
+قانوني وأمان
+
+صفحات: terms, privacy, dmca, content, abuse, 2257 موجودة وتفتح.
+
+Middleware العمر/صفحة 18+ موجودان.
+
+رؤوس الأمن وRate-limit فعالة كما في الكود.
+
+نِقاط API (تحقق 200 إن أمكن، أو لوغ التشغيل عند قيود الشبكة):
+
+/api/_health, /api/monitoring/metrics, /api/turn,
+/api/stripe/prices, /api/stripe/subscribe, /api/stripe/portal,
+/api/age/allow, /api/stripe/webhook.
+
+الصفحات: /, /plans, /chat تفتح بلا أخطاء بناء/تشغيل.
+
+الواجهة الرئيسية
+
+خلفية public/hero.webp.webp مستخدَمة على <main>: bg-[url('/hero.webp.webp')] bg-cover bg-center bg-no-repeat.
+
+اطبع:
+
+-- Acceptance --
+PHASE=C_VERIFY
+FILES=page.tsx:<1/0>,ChatClient.tsx:<1/0>,ChatMessages.tsx:<1/0>,media-bridge.ts:<1/0>,webrtc.ts:<1/0>,PeerMeta.tsx:<1/0>,countries.ts:<1/0>
+CHAT_MESSAGES_SLICE_MINUS_3_LINE=<n>
+QUICK_DOCK_ANCHOR_LINE=<n>
+MEDIA_THRESHOLDS=H80:<1/0>/V50:<1/0>
+WEBRTC_AUTONEXT_LINES=<comma-separated>
+PEER_META=EXISTS:<1/0> MOUNTED:<1/0> STYLE_BOTTOM_LEFT:<1/0>
+GENDER_ICONS=male:<1/0> female:<1/0> couple:<1/0> lgbt:<1/0> unknown:<1/0>
+COUNTRIES_COUNT=<n>
+LEGAL_PAGES=terms:<1/0> privacy:<1/0> dmca:<1/0> content:<1/0> abuse:<1/0> 2257:<1/0>
+ENDPOINTS_OK=<summary or 0/1s>
+HERO_APPLIED=<1/0>
+NOTES=<any>
+-- End Acceptance --
+
+المرحلة D — Build محلي وفحص تشغيل
+
+لا تثبّت pnpm إن لم يكن حاضرًا؛ استخدم npm ci && npm run build.
+
+استخدم $PORT عند التشغيل (لا تثبيت 5000)؛ اكتفِ باللوغ عند منع curl.
+
+ارفع ملخص السجل (آخر 30 سطر) إلى تقرير.
+
+اطبع:
+
+-- Acceptance --
+PHASE=D_BUILD
+BUILD_RC=<0/!=0>
+DEV_PORT=$PORT
+LOG_TAIL_PATH=_ops/reports/dev_tail_<UTC>.log
+NOTES=<summary>
+-- End Acceptance --
+
+المرحلة E — Push & PR
+
+ادفع الفرع الآمن flatten-<UTC> إلى origin وحدِّث PR_HINT.
+
+لا تغييرات على main.
+
+أدرِج قائمة أعلى مستوى الشجرة بعد التنظيم.
+
+اطبع:
+
+-- Acceptance --
+PHASE=E_PUSH
+REMOTE_URL=https://github.com/Alshughriahmed/projeckt.git
+BRANCH=<flatten-UTC>
+LAST_COMMIT_SHA=<sha7>
+PR_URL=<compare main...branch>
+TREE_TOP_LEVEL=[src, public, package.json, tsconfig.json, next.config.mjs, next-env.d.ts, _ops]
+NOTES=Ready for human review/merge; all checks passed.
+-- End Acceptance --
+
+المرحلة F — تقرير نهائي
+
+أنشئ: _ops/reports/FINAL_CANONICALIZATION_<UTC>.md
+يتضمّن: مصادر الدمج، بنود التحقق (بالأسطر)، نتائج البناء، روابط الـPR.
+
+قيود صارمة
+
+لا Force Push.
+
+لا تُدرج أسرارًا؛ أسماء الـENV فقط.
+
+أي تغيير يسبقه نسخ احتياطي تحت _ops/backups/agent_<UTC>/….
+
+الريموت للدفع
+https://github.com/Alshughriahmed/projeckt.git
+
+هدفنا النهائي: PR مفتوح من فرع آمن يحوي مشروعًا نظيفًا بجذر واحد مع Build ناجح وتقارير Acceptance تغطي كل نقطة.

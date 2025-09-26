@@ -22,7 +22,12 @@ if (typeof window !== "undefined" && !window.__ditonaBridgeInit) {
       try {
         const r = await fetch("/api/rtc/env", { cache: "no-store" });
         const j = await r.json().catch(() => ({}));
-        const ffa = (j?.server?.FREE_FOR_ALL === "1") || (j?.public?.NEXT_PUBLIC_FREE_FOR_ALL === "1");
+        const ffa =
+  (j?.server?.FREE_FOR_ALL === "1") ||
+  (typeof window !== "undefined" &&
+   (globalThis as any).__vip &&
+   ((((globalThis as any).__vip).FREE_FOR_ALL === 1) ||
+    (((globalThis as any).__vip).FREE_FOR_ALL === "1")));
         window.__DITONA_FFA = ffa ? 1 : 0;
         window.__ditonaFFALoaded = 1;
         window.dispatchEvent(new CustomEvent("ffa:ready", { detail: { ffa: window.__DITONA_FFA } }));

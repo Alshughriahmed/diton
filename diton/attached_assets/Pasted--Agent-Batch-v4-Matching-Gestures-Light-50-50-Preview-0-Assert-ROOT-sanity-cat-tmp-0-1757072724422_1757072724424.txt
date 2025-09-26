@@ -1,0 +1,293 @@
+🚀 Agent Batch v4 — Matching + Gestures + Light 50/50 + Preview
+0) Assert ROOT (sanity)
+cat > /tmp/00_assert_root_v4.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+ROOT="/home/runner/workspace"; cd "$ROOT"
+exists(){ [[ -e "$1" ]] && echo 1 || echo 0; }
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "LIVE=src:$(exists src) package.json:$(exists package.json) next.config.mjs:$(exists next.config.mjs) tsconfig.json:$(exists tsconfig.json)"
+echo "NOTES=Batch v4 will wire filters+gestures to Next/Prev safely"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/00_assert_root_v4.sh
+
+1) Hooks + UI bridge (useNextPrev, useGestures) — آمن ومكرّر بدون ضرر
+cat > /tmp/10_hooks_and_bridge_v4.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+UTC="$(date -u +%Y%m%d-%H%M%S)"; BK="_ops/backups/batch_v4_${UTC}"; mkdir -p "$BK"; changed=()
+upsert(){ tgt="$1"; tmp="$2"; if [[ -f "$tgt" ]]; then if cmp -s "$tgt" "$tmp"; then rm -f "$tmp"; else mkdir -p "$(dirname "$BK/$tgt")"; cp -a "$tgt" "$BK/$tgt"; mv "$tmp" "$tgt"; changed+=("$tgt"); fi else mkdir -p "$(dirname "$tgt")"; mv "$tmp" "$tgt"; changed+=("$tgt"); fi }
+
+# 1) useNextPrev — يقرأ الفلاتر ويرسل أحداث UI (ui:next/ui:prev) مع حارس تكرار
+mkdir -p src/hooks
+cat > /tmp/useNextPrev.ts <<'TS'
+"use client";
+import { useRef, useCallback } from "react";
+import { useFilters } from "@/src/state/filters";
+
+type Detail = { gender:string; countries:string[] };
+
+function emit(type:"ui:next"|"ui:prev", detail:Detail){
+  try{
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(type, { detail }));
+    }
+  }catch{}
+}
+
+export function useNextPrev(){
+  const { gender, countries } = useFilters();
+  const lastTs = useRef(0);
+
+  const guard = () => {
+    const now = Date.now();
+    if (now - lastTs.current < 700) return false; // حارس ازدواج
+    lastTs.current = now; return true;
+  };
+
+  const next = useCallback(()=>{ if(!guard()) return;
+    const detail = { gender, countries };
+    emit("ui:next", detail);
+  }, [gender, countries]);
+
+  const prev = useCallback(()=>{ if(!guard()) return;
+    const detail = { gender, countries };
+    emit("ui:prev", detail);
+  }, [gender, countries]);
+
+  return { next, prev };
+}
+TS
+upsert "src/hooks/useNextPrev.ts" /tmp/useNextPrev.ts
+
+# 2) useGestures — يلتقط السحب ويحوّلها لـ next/prev أو تبديل وضع (عمودي)
+cat > /tmp/useGestures.ts <<'TS'
+"use client";
+import { useEffect } from "react";
+import { isHorizontalDrag, isVerticalDrag } from "@/src/utils/media-bridge";
+import { useNextPrev } from "@/src/hooks/useNextPrev";
+
+export function useGestures(){
+  const { next, prev } = useNextPrev();
+  useEffect(()=>{
+    let sx=0, sy=0;
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches?.[0]; if (!t) return; sx=t.clientX; sy=t.clientY;
+    };
+    const onEnd = (e: TouchEvent) => {
+      const t = e.changedTouches?.[0]; if (!t) return;
+      const dx = t.clientX - sx, dy = t.clientY - sy;
+      if (isHorizontalDrag(dx,dy)) { (dx<0? next(): prev()); }
+      else if (isVerticalDrag(dx,dy)) {
+        // مساحة لتبديل وضع العرض/الرسائل إن لزم لاحقًا
+        window.dispatchEvent(new CustomEvent("ui:toggle-mode"));
+      }
+    };
+    window.addEventListener("touchstart", onStart, { passive:true });
+    window.addEventListener("touchend", onEnd, { passive:true });
+    return ()=> {
+      window.removeEventListener("touchstart", onStart);
+      window.removeEventListener("touchend", onEnd);
+    };
+  }, [next, prev]);
+}
+TS
+upsert "src/hooks/useGestures.ts" /tmp/useGestures.ts
+
+# 3) ui-listeners في webrtc.ts (اختياري تلقائي) — يعيد بثّ busEmit إن وُجد
+WRTC="src/utils/webrtc.ts"
+if [[ -f "$WRTC" ]]; then
+  cp -a "$WRTC" "$BK/webrtc.ts.bak"
+  if ! grep -q "ui:next" "$WRTC"; then
+    cat > "$WRTC.tmp" <<'TS'
+/* ui-bridge listeners (auto-wired) */
+if (typeof window !== "undefined") {
+  // @ts-ignore - busEmit may be in scope in this module
+  // Next
+  window.addEventListener("ui:next", (e:any)=>{
+    try { /* @ts-ignore */ if (typeof busEmit === "function") busEmit('next', e?.detail || {}); } catch {}
+  });
+  // Prev
+  window.addEventListener("ui:prev", (e:any)=>{
+    try { /* @ts-ignore */ if (typeof busEmit === "function") busEmit('prev', e?.detail || {}); } catch {}
+  });
+}
+TS
+    # أدرج أعلاه في أول الملف
+    awk 'NR==1{print; print "__UI_BRIDGE__"; next}1' "$WRTC" > "$WRTC.tmp2" && mv "$WRTC.tmp2" "$WRTC"
+    sed -i 's/__UI_BRIDGE__.*$/__UI_BRIDGE__/' "$WRTC" || true
+    awk 'BEGIN{p=1} { if($0=="__UI_BRIDGE__"){ system("cat src/utils/webrtc.ts.tmp"); p=0; next } }1' "$WRTC" > "$WRTC.patched" && mv "$WRTC.patched" "$WRTC"
+    rm -f "src/utils/webrtc.ts.tmp"
+  fi
+fi
+
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "BACKUP_DIR=$BK"
+echo "CHANGED_LIST=${changed[*]:-NONE} webrtc_bridge=$(test -f \"$WRTC\" && grep -q 'ui:next' \"$WRTC\" && echo 1 || echo 0)"
+echo "HOOKS=useNextPrev:$(test -f src/hooks/useNextPrev.ts && echo 1 || echo 0) useGestures:$(test -f src/hooks/useGestures.ts && echo 1 || echo 0)"
+echo "NOTES=Hooks ready; webrtc bridge added if file exists"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/10_hooks_and_bridge_v4.sh
+
+2) وصل الأزرار والإيماءات في الواجهة (ChatToolbar + ChatClient)
+cat > /tmp/20_wire_toolbar_gestures_v4.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+BK="_ops/backups/wire_toolbar_v4_$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$BK"
+changed=()
+
+# 1) ChatToolbar: اربط أزرار Prev/Next بـ useNextPrev
+TFILE="src/components/chat/ChatToolbar.tsx"
+if [[ -f "$TFILE" ]]; then
+  cp -a "$TFILE" "$BK/ChatToolbar.tsx.bak"
+  if ! grep -q "useNextPrev" "$TFILE"; then
+    awk 'NR==1{print; print "import { useNextPrev } from \"@/src/hooks/useNextPrev\";"; next}1' "$TFILE" > "$TFILE.tmp" && mv "$TFILE.tmp" "$TFILE"
+  fi
+  if ! grep -q "const { next, prev }" "$TFILE"; then
+    sed -i '0,/"use client";/s//"use client";\nconst noop=()=>{};/' "$TFILE" || true
+    # أدخل hook داخل المكوّن
+    sed -i '0,/export default function ChatToolbar\(\){/s//export default function ChatToolbar(){\n  const { next, prev } = useNextPrev();/' "$TFILE" || true
+  fi
+  # اربط الأزرار
+  sed -i 's/aria-label="Prev">Prev/aria-label="Prev" onClick={(e)=>{e.preventDefault(); prev();}}>Prev/' "$TFILE" || true
+  sed -i 's/aria-label="Next">Next/aria-label="Next" onClick={(e)=>{e.preventDefault(); next();}}>Next/' "$TFILE" || true
+  changed+=("$TFILE")
+fi
+
+# 2) ChatClient: فعّل useGestures وعلِّم الحاوية الرئيسية
+CFILE="src/app/chat/ChatClient.tsx"
+if [[ -f "$CFILE" ]]; then
+  cp -a "$CFILE" "$BK/ChatClient.tsx.bak"
+  if ! grep -q "useGestures" "$CFILE"; then
+    awk 'NR==1{print; print "import { useGestures } from \"@/src/hooks/useGestures\";"; next}1' "$CFILE" > "$CFILE.tmp" && mv "$CFILE.tmp" "$CFILE"
+    # استدعاء hook داخل المكوّن (أول body)
+    sed -i '0,/function .*ChatClient.*\(/s//&\n{\n  useGestures();/' "$CFILE" || true
+  fi
+  # علّم أول div رئيسي ب data-testid حتى تعرّفه أدواتنا إن احتجنا
+  if ! grep -q 'data-testid="gesture-root"' "$CFILE"; then
+    sed -i '0,/<div/{s//&\n      {/* gesture root */}\n      <div data-testid="gesture-root"><\/div>\n/}' "$CFILE" || true
+  fi
+  changed+=("$CFILE")
+fi
+
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "BACKUP_DIR=$BK"
+echo "CHANGED_LIST=${changed[*]:-NONE}"
+echo "TOOLBAR_WIRED=$(grep -q \"onClick={(e)=>{e.preventDefault(); prev();}}\" \"$TFILE\" && echo 1 || echo 0)/$(grep -q \"onClick={(e)=>{e.preventDefault(); next();}}\" \"$TFILE\" && echo 1 || echo 0)"
+echo "CHATCLIENT_GESTURES=$(grep -q \"useGestures();\" \"$CFILE\" && echo 1 || echo 0)"
+echo "NOTES=Prev/Next now honor filters; gestures emit ui:next/ui:prev"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/20_wire_toolbar_gestures_v4.sh
+
+3) (اختياري وخفيف) لمسة 50/50 آمنة—من دون تفكيك DOM
+
+نضيف class توجيهية أعلى الحاوية إن لم تكن موجودة؛ لا ننقل عناصر، فقط نساعد في تخطيط عمودي متوازن.
+
+cat > /tmp/30_light_fifty_fifty_v4.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+BK="_ops/backups/fiftyfifty_v4_$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$BK"
+CFILE="src/app/chat/ChatClient.tsx"
+applied=0
+if [[ -f "$CFILE" ]]; then
+  cp -a "$CFILE" "$BK/ChatClient.tsx.bak"
+  # أضف grid rows-2 + h-screen بأول div رئيسي إن أمكن
+  if grep -q '<div className="' "$CFILE"; then
+    sed -i '0,/<div className="/s//&grid grid-rows-2 h-screen /' "$CFILE" && applied=1 || true
+  fi
+fi
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "TARGET=$CFILE"
+echo "FIFTY_FIFTY_HINT=$applied (1=classes injected, 0=skipped)"
+echo "NOTES=Non-destructive hint only; full layout fine-tune follows visual review"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/30_light_fifty_fifty_v4.sh
+
+4) Preview على 3000 + فحوص سريعة
+cat > /tmp/40_preview_v4_3000.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+fuser -k 3000/tcp 2>/dev/null || true; pkill -f "next dev" 2>/dev/null || true
+corepack enable >/dev/null 2>&1 || true
+pnpm exec next dev -p 3000 -H 0.0.0.0 &
+sleep 7
+H=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/_health || echo "n/a")
+V=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/user/vip-status || echo "n/a")
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "RUN_MODE=dev PORT=3000"
+echo "CHECKS=/api/_health:$H /api/user/vip-status:$V"
+echo "VISUAL=/chat: swipe left/right triggers Next/Prev; Prev/Next buttons honor filters (guest: gender locked, countries=All)"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/40_preview_v4_3000.sh
+
+5) تقرير نهائي (Markdown)
+cat > /tmp/90_report_batch_v4.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'echo; read -r -p "HOLD: اضغط Enter للإنهاء..." _' EXIT
+cd /home/runner/workspace
+TS="$(date -u +%Y%m%d-%H%M%S)"
+OUT="_ops/reports/AGENT_BATCH_V4_${TS}.md"; mkdir -p "$(dirname "$OUT")"
+
+H=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/_health || echo "n/a")
+V=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/user/vip-status || echo "n/a")
+
+WIRE_TOOLBAR=$(grep -RIn "useNextPrev" src/components/chat/ChatToolbar.tsx 2>/dev/null | head -1 || echo "not-wired")
+WIRE_GESTURES=$(grep -RIn "useGestures" src/app/chat/ChatClient.tsx 2>/dev/null | head -1 || echo "not-wired")
+WRTC_BRIDGE=$(test -f src/utils/webrtc.ts && (grep -RIn "ui:next" src/utils/webrtc.ts || true) | head -1 || echo "webrtc:absent-or-not-patched")
+
+cat > "$OUT" <<MD
+# Agent Batch v4 — Matching + Gestures (${TS})
+
+## Changes
+- Added hooks: \`useNextPrev\`, \`useGestures\`.
+- Wired **Prev/Next** buttons to respect filters (gender/countries).
+- Global **swipe gestures**: horizontal → prev/next, vertical → reserved toggle.
+- Optional **webrtc bridge**: listens to \`ui:next/ui:prev\` and re-emits \`busEmit('next'/'prev')\` if available.
+- Light **50/50 hint** classes injected (non-destructive).
+
+## Wiring
+- Toolbar: \`${WIRE_TOOLBAR}\`
+- Gestures: \`${WIRE_GESTURES}\`
+- WebRTC bridge: \`${WRTC_BRIDGE}\`
+
+## Quick checks
+- /api/_health → \`${H}\`
+- /api/user/vip-status → \`${V}\`
+
+## Visual checklist (attach screenshots)
+- /chat: Buttons and swipes trigger transitions; duplicates are gated (~700ms).
+- Filters impact next/prev selection logic via event detail.
+- No console errors.
+
+## Notes
+- Full 50/50 fine-tune (grid/container) to be finalized after visual review.
+- Next step: **Batch 5 (Data/Auth/VIP)** ثم **Batch 6 (Hardening, CI/CD, Vercel)**.
+MD
+
+echo "-- Acceptance --"
+echo "ROOT=$(pwd)"
+echo "REPORT_FILE=$OUT"
+echo "NOTES=Attach screenshots (/chat) showing swipe and button behavior"
+echo "-- End Acceptance --"
+BASH
+bash /tmp/90_report_batch_v4.sh

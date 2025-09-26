@@ -1,0 +1,81 @@
+bash -lc 'set -euo pipefail
+
+# 1) استبدال/إنشاء شريط الرسائل الإنجليزي مع زر الإيموجي (ثابت أسفل الشاشة + z-60)
+cat > src/components/chat/ChatMessaging.tsx << "TSX"
+"use client";
+import { useEffect, useRef, useState } from "react";
+
+const EMOJIS = ["😋","😜","🤗","😊","😏","🤭","😬","😳","😍","🥰","💔","🫦","🍒","⚘️","🔥","🎆","🌈","💦","💫","💋","😈","🫶","👍","🍦","🍺","✨️","🖕","💨","💧","🩱","👙","💯"];
+
+export default function ChatMessagingBar({ onSend }: { onSend?: (m: string) => void }) {
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const close = () => setOpen(false);
+    window.addEventListener("scroll", close, { passive: true });
+    return () => window.removeEventListener("scroll", close);
+  }, []);
+
+  function send() {
+    const v = text.trim();
+    if (!v) return;
+    onSend?.(v);
+    setText("");
+  }
+
+  return (
+    <div className="fixed inset-x-2 bottom-[max(env(safe-area-inset-bottom),0.5rem)] z-[60] pointer-events-none">
+      <div className="mx-auto max-w-5xl rounded-xl bg-black/35 backdrop-blur-sm border border-white/10 p-2 flex items-center gap-2 pointer-events-auto">
+        {/* Emoji (left) */}
+        <div className="relative">
+          <button aria-label="emoji" onClick={() => setOpen((o) => !o)} className="p-2 rounded-lg hover:bg-white/10">😊</button>
+          {open && (
+            <div className="absolute bottom-full mb-2 left-0 max-h-40 w-64 overflow-auto rounded-xl bg-black/90 border border-white/10 p-2 grid grid-cols-8 gap-1 z-[70]">
+              {EMOJIS.map((e) => (
+                <button
+                  key={e}
+                  onClick={() => { setText((t) => t + e); setOpen(false); inputRef.current?.focus(); }}
+                  className="text-xl leading-6 hover:scale-110"
+                >
+                  {e}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <input
+          ref={inputRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Type a message..."
+          className="flex-1 bg-transparent outline-none placeholder:text-slate-300/60 px-2 py-2"
+        />
+
+        {/* Send (right) */}
+        <button onClick={send} className="px-3 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 active:scale-95">
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+TSX
+
+# 2) إضافة padding سفلي في القسم السفلي لمنع تداخل الأدوات مع شريط الرسائل
+#   نستبدل أول occurrence لعنصر القسم السفلي بإضافة pb-28 md:pb-24
+f=src/app/chat/ChatClient.tsx
+if grep -q "className=\"relative rounded-2xl bg-black/20 overflow-hidden\"" "$f"; then
+  sed -i \'s/className="relative rounded-2xl bg-black\/20 overflow-hidden"/className="relative rounded-2xl bg-black\/20 overflow-hidden pb-28 md:pb-24"/\' "$f"
+fi
+
+echo "-- Acceptance --"
+[ -f src/components/chat/ChatMessaging.tsx ] && echo HAS_EN_CHATBAR=1 || echo HAS_EN_CHATBAR=0
+grep -q "Type a message\.\.\." src/components/chat/ChatMessaging.tsx && echo PLACEHOLDER_EN=1 || echo PLACEHOLDER_EN=0
+grep -q "Send" src/components/chat/ChatMessaging.tsx && echo SEND_EN=1 || echo SEND_EN=0
+grep -q "pb-28 md:pb-24" "$f" && echo BOTTOM_PAD_ADDED=1 || echo BOTTOM_PAD_ADDED=0
+echo "-- End Acceptance --"
+'

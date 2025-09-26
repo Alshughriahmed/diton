@@ -1,0 +1,147 @@
+الهدف: تفعيل “Prev أحادي للطرف VIP” فعليًا من البداية للنهاية. كتابة rtc:last:* عند كل مطابقة ناجحة، وكتابة prev-wish/prev-for من مسار /api/match/next عند طلب Prev من VIP. إثبات القبول رقميًا.
+
+القيود: Minimal-Diff. لا حذف ولا تعطيل ميزات. كل تعديل مع نسخة احتياطية. التنفيذ عبر الشِل فقط.
+
+التسليم: ملف تقرير في _ops/reports/prev_vip_e2e_<ts>.log يتضمن: ما عُدِّل، diff، ونتائج القبول الخمسة.
+
+نفّذ الأمر التالي كما هو
+
+يُنشئ نسخ احتياطية، يطبّق باتشات صغيرة على mm.ts وmatch/next/route.ts إن لزم، ثم يجري فحص قبول بجلسات حقيقية عبر /api/anon/init، ويكتب تقريرًا.
+
+bash -lc '
+set -Eeuo pipefail
+
+TS="$(date -u +%Y%m%d-%H%M%S)"
+REP="_ops/reports/prev_vip_e2e_${TS}.log"
+BKP_DIR="_ops/backups/prev_vip_${TS}"
+mkdir -p "$BKP_DIR" _ops/reports
+
+echo "=== START ${TS} ===" | tee "$REP"
+
+# 0) نسخ احتياطية للملفات المستهدفة
+for f in src/lib/rtc/mm.ts src/app/api/match/next/route.ts; do
+  [ -f "$f" ] && cp -a "$f" "$BKP_DIR/$(basename "$f")" || true
+done
+
+# 1) باتش mm.ts: كتابة rtc:last:* في مسار المطابقة العام (إن لم تكن موجودة)
+if ! grep -q "rtc:last:" src/lib/rtc/mm.ts; then
+  perl -0777 -i -pe '"'"'BEGIN{$n=0}
+    s/return \{status:200 as const, body:\{pairId, role:"caller" as const, peerAnonId:cand\}\};/
+      ++$n==2
+        ? "await Promise.all([ setPx(`rtc:last:${self}`, cand, 90_000), setPx(`rtc:last:${cand}`, self, 90_000) ]);\n      return {status:200 as const, body:{pairId, role:\"caller\" as const, peerAnonId:cand}};"
+        : $&/ges
+  '"'"' src/lib/rtc/mm.ts
+  echo "[mm.ts] wrote rtc:last:* on general match" | tee -a "$REP"
+else
+  echo "[mm.ts] rtc:last already present" | tee -a "$REP"
+fi
+
+# 2) باتش route.ts: كتابة prev-wish/prev-for داخل if(prev) + فرض VIP إن لم تكن موجودة
+if ! grep -q "prev requires vip" src/app/api/match/next/route.ts; then
+  echo "[route.ts] missing VIP check; aborting to avoid logic drift" | tee -a "$REP"
+else
+  # imports upstash helpers if missing
+  if ! grep -q "lib/rtc/upstash" src/app/api/match/next/route.ts; then
+    sed -i '"'"'s|import { requireVip } from "../../../../utils/vip";|import { requireVip } from "../../../../utils/vip";\
+import { get as upGet, setPx as upSetPx } from "../../../../lib/rtc/upstash";|'"'"' src/app/api/match/next/route.ts
+  fi
+  # anonFromCookies helper if missing
+  if ! grep -q "function anonFromCookies" src/app/api/match/next/route.ts; then
+    sed -i '"'"'s|export const dynamic = "force-dynamic";|export const dynamic = "force-dynamic";\
+\
+function anonFromCookies(){ try{ const c = cookies(); return c.get("anon")?.value || c.get("ditona_anon")?.value || ""; }catch{ return "" } }|'"'"' src/app/api/match/next/route.ts
+  fi
+  # write prev keys body if not present
+  if ! grep -q "rtc:prev-for" src/app/api/match/next/route.ts; then
+    perl -0777 -i -pe '"'"'
+      s/const prev = \(req.headers.get\("x-ditona-prev"\) === "1"\);\s*if \(prev\) \{([^}]*)\}/
+      "const prev = (req.headers.get(\"x-ditona-prev\") === \"1\");\n  if (prev) {\n    const isVip = await requireVip();\n    if (!isVip) { return new Response(\"prev requires vip\", { status: 403 }); }\n    const me = anonFromCookies();\n    if (me) {\n      try {\n        const last:any = await upGet(`rtc:last:${me}`);\n        const peer = String(last||\"\");\n        if (peer) {\n          const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;\n          try { await Promise.all([ upSetPx(`rtc:prev-wish:${me}`, peer, ttl), upSetPx(`rtc:prev-for:${peer}`, me, ttl) ]); } catch {}\n        }\n      } catch {}\n    }\n  }"/s
+    '"'"' src/app/api/match/next/route.ts
+    echo "[route.ts] wrote prev-wish/prev-for on VIP prev" | tee -a "$REP"
+  else
+    echo "[route.ts] prev-wish/prev-for already present" | tee -a "$REP"
+  fi
+fi
+
+# 3) إظهار diff مختصر
+echo "=== DIFF (first 120 lines each) ===" | tee -a "$REP"
+for f in mm.ts route.ts; do
+  [ -f "$BKP_DIR/$f" ] && diff -u "$BKP_DIR/$f" "src/lib/rtc/$f" 2>/dev/null | sed -n "1,120p" | tee -a "$REP" || true
+  [ "$f" = "route.ts" ] && diff -u "$BKP_DIR/$f" "src/app/api/match/next/$f" 2>/dev/null | sed -n "1,120p" | tee -a "$REP" || true
+done
+
+# 4) تشغيل dev إن لم يكن يعمل
+BASE="http://127.0.0.1:${PORT:-3000}"
+if [ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)" != 200 ]; then
+  nohup pnpm dev -p "${PORT:-3000}" -H 0.0.0.0 >"_ops/logs/dev.log" 2>&1 & sleep 8
+fi
+
+# 5) قبول نهائي بجلسات حقيقية
+URL="${UPSTASH_REDIS_REST_URL}/pipeline"; AUTH="Authorization: Bearer ${UPSTASH_REDIS_REST_TOKEN}"
+get_cookie(){ curl -sS -D - -o /dev/null "$BASE/api/anon/init" | awk "/^[Ss]et-[Cc]ookie:/ {print \$2}" | head -n1 | sed "s/;.*//"; }
+COOKIE_A="$(get_cookie)"; COOKIE_B="$(get_cookie)"
+ANON_A="$(printf "%s" "$COOKIE_A" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+ANON_B="$(printf "%s" "$COOKIE_B" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+
+now="$(date +%s%3N)"; GA=male; GB=female; CA=DE; CB=DE
+PAYLOAD=$(cat <<JSON
+[
+ ["HSET","rtc:attrs:${ANON_A}","gender","${GA}","country","${CA}"],["EXPIRE","rtc:attrs:${ANON_A}","120"],
+ ["HSET","rtc:filters:${ANON_A}","genders","all","countries","ALL"],["EXPIRE","rtc:filters:${ANON_A}","120"],
+ ["ZADD","rtc:q","${now}","${ANON_A}"],["ZADD","rtc:q:gender:${GA}","${now}","${ANON_A}"],["ZADD","rtc:q:country:${CA}","${now}","${ANON_A}"],
+ ["HSET","rtc:attrs:${ANON_B}","gender","${GB}","country","${CB}"],["EXPIRE","rtc:attrs:${ANON_B}","120"],
+ ["HSET","rtc:filters:${ANON_B}","genders","all","countries","ALL"],["EXPIRE","rtc:filters:${ANON_B}","120"],
+ ["ZADD","rtc:q","${now}","${ANON_B}"],["ZADD","rtc:q:gender:${GB}","${now}","${ANON_B}"],["ZADD","rtc:q:country:${CB}","${now}","${ANON_B}"]
+]
+JSON
+)
+curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$PAYLOAD" >/dev/null
+
+MM1_CODE="$(curl -s -o /tmp/mm1.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: ${COOKIE_A}" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR1="$(sed -nE "s/.*\"pairId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+echo "MM1_HTTP=$MM1_CODE PAIR=$PAIR1" | tee -a "$REP"
+
+# امسح mapping وأعد إدراج B
+curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" \
+  -d "[[\"DEL\",\"rtc:pair:map:${ANON_A}\"],[\"DEL\",\"rtc:pair:map:${ANON_B}\"],[\"ZADD\",\"rtc:q\",\"$((now+1))\",\"${ANON_B}\"],[\"ZADD\",\"rtc:q:gender:${GB}\",\"$((now+1))\",\"${ANON_B}\"],[\"ZADD\",\"rtc:q:country:${CB}\",\"$((now+1))\",\"${ANON_B}\"]]">/dev/null
+
+P200="$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: ${COOKIE_A}; vip=1" -H "x-ditona-prev: 1" "$BASE/api/match/next" || echo 000)"
+echo "PREV_HTTP=$P200" | tee -a "$REP"
+
+EX_PREV="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:prev-wish:${ANON_A}\"],[\"EXISTS\",\"rtc:prev-for:${ANON_B}\"]]")"
+EX_LAST_BEF="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:last:${ANON_A}\"],[\"EXISTS\",\"rtc:last:${ANON_B}\"]]")"
+echo "EXISTS_prev=$EX_PREV" | tee -a "$REP"
+echo "EXISTS_last_before=$EX_LAST_BEF" | tee -a "$REP"
+
+MM2_CODE="$(curl -s -o /tmp/mm2.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: ${COOKIE_B}" -H "content-type: application/json" -d "{}" || echo 000)"
+ROLE2="$(sed -nE "s/.*\"role\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+PEER2="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+echo "MM2_HTTP=$MM2_CODE ROLE=$ROLE2 PEER=$PEER2" | tee -a "$REP"
+
+EX_LAST_AFT="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:last:${ANON_A}\"],[\"EXISTS\",\"rtc:last:${ANON_B}\"]]")"
+echo "EXISTS_last_after=$EX_LAST_AFT" | tee -a "$REP"
+
+# حساب القبول
+OK_INIT=$([ -n "$PAIR1" ] && [ "$MM1_CODE" = 200 ] && echo 1 || echo 0)
+OK_PREV=$([ "$(echo "$EX_PREV" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n")" = "11" ] && echo 1 || echo 0)
+OK_LAST=$([ "$(echo "$EX_LAST_AFT" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n")" = "11" ] && echo 1 || echo 0)
+OK_RECON=$([ "$MM2_CODE" = 200 ] && [ "$ROLE2" = callee ] && [ "$PEER2" = "$ANON_A" ] && echo 1 || echo 0)
+VIP_OK=$([ "$P200" = 200 ] && echo 1 || echo 0)
+
+echo "-- Acceptance --" | tee -a "$REP"
+echo "INITIAL_PAIR_OK=$OK_INIT" | tee -a "$REP"
+echo "LAST_KEYS_SET=$OK_LAST" | tee -a "$REP"
+echo "PREV_KEYS_WRITTEN=$OK_PREV" | tee -a "$REP"
+echo "RECONNECT_OK=$OK_RECON" | tee -a "$REP"
+echo "VIP_PREV_ENFORCED=$VIP_OK" | tee -a "$REP"
+
+echo "REPORT=$REP"
+'
+
+النتيجة المطلوبة
+
+القبول الخمسة = 1.
+
+تقرير عند المسار المطبوع REPORT=... يحتوي تفاصيل التعديلات والـdiff والـHTTP.
+
+إن تعذر الوصول للقبول، على الوكيل إصلاحه بحد أدنى داخل نفس الملفين فقط، ثم إعادة تشغيل نفس الأمر وإرفاق التقرير النهائي.

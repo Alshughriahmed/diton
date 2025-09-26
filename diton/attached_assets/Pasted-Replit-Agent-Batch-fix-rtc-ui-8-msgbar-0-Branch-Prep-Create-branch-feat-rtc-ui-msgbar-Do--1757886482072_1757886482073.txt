@@ -1,0 +1,277 @@
+Replit Agent — Batch: fix-rtc-ui-8 + msgbar
+0) Branch & Prep
+
+Create branch: feat/rtc-ui-msgbar
+
+Do not touch visual design except ما ورد أدناه.
+
+Keep all RTC logic؛ نضيف حراسات وأحداث فقط.
+
+1) Auto-start + Rematch ثابت (rtcFlow)
+
+Edit: src/app/chat/rtcFlow.ts
+
+Goals
+
+يبدأ البحث تلقائيًا بعد جاهزية الميديا.
+
+stop() تُنظّف pollers وتعيد الحالة إلى idle.
+
+next() يوقف الجلسة ثم يعاود start() مع تبريد 700ms.
+
+بثّ أحداث خفيفة للواجهة:
+window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase,role}}))
+window.dispatchEvent(new CustomEvent('rtc:pair',{detail:{pairId,role}}))
+window.dispatchEvent(new CustomEvent('rtc:remote-track',{detail:{stream}}))
+
+Patch (أضِف/عدّل باقتضاب):
+
+// + أعلى الملف
+const sleep = (ms:number)=>new Promise(r=>setTimeout(r,ms));
+let cooldownNext = false;
+
+// داخل start(): أول سطر
+window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'searching',role:null}}));
+
+// بعد matchmake OK:
+localStorage.setItem('ditona_pair', pairId);
+localStorage.setItem('ditona_role', role);
+window.dispatchEvent(new CustomEvent('rtc:pair',{detail:{pairId,role}}));
+window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'matched',role}}));
+
+// في ontrack لأول مرّة لكل stream:
+window.dispatchEvent(new CustomEvent('rtc:remote-track',{detail:{stream:e.streams[0]}}));
+window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'connected',role:state.role}}));
+
+// في stop()/cleanup():
+window.dispatchEvent(new CustomEvent('rtc:phase',{detail:{phase:'idle',role:null}}));
+
+// new method:
+export async function next(){
+  if(cooldownNext) return;
+  cooldownNext = true;
+  try{ await stop(); await sleep(700); await start(); }
+  finally{ cooldownNext = false; }
+}
+
+2) ChatClient: ربط الأحداث + تشغيل تلقائي + معلومات الطرف
+
+Edit: src/app/chat/ChatClient.tsx
+
+Goals
+
+تشغيل المطابقة تلقائيًا بعد getUserMedia() مباشرة.
+
+تحديث الهيدر العلوي (اسم/أفاتار/لايكات) وBadges (الدولة/المدينة/الجنس) عند rtc:pair.
+
+إبراز عبارة “Searching for a partner…” فقط أثناء phase=searching مع زر Cancel.
+
+Next/Prev تلتزم بالتبريد 700ms. Prev = VIP فقط (Tooltip).
+
+لا تُطفأ الكاميرا عند Next: لا تستدعِ getUserMedia من جديد إلا عند فشل.
+
+Patch (مختصر):
+
+// + imports
+import * as rtc from '@/app/chat/rtcFlow';
+import { useEffect, useRef, useState } from 'react';
+
+const [phase, setPhase] = useState<'idle'|'searching'|'matched'|'connected'>('idle');
+const [pair, setPair] = useState<{id?:string, role?:'caller'|'callee'}>({});
+const [remoteInfo, setRemoteInfo] = useState<{name?:string; likes?:number; country?:string; city?:string; gender?:string}>({});
+
+useEffect(() => {
+  const onPhase = (e:any)=>setPhase(e.detail?.phase);
+  const onPair  = (e:any)=>{ setPair({id:e.detail?.pairId, role:e.detail?.role}); /* TODO: fetch remote profile by pairId */ };
+  const onTrack = (e:any)=>{ remoteVideoRef.current!.srcObject = e.detail.stream; };
+  addEventListener('rtc:phase', onPhase);
+  addEventListener('rtc:pair', onPair);
+  addEventListener('rtc:remote-track', onTrack);
+  return ()=>{ removeEventListener('rtc:phase', onPhase); removeEventListener('rtc:pair', onPair); removeEventListener('rtc:remote-track', onTrack); };
+}, []);
+
+useEffect(() => {
+  (async () => {
+    const s = await navigator.mediaDevices.getUserMedia({video:true,audio:true});
+    localVideoRef.current!.srcObject = s;
+    await rtc.start(); // auto-match
+  })().catch(()=>{/* show permission hint */});
+}, []);
+
+const onNext = () => rtc.next();
+
+
+ملاحظة: الحصول على بيانات الطرف (remoteInfo) يعتمد على مصدر متاح لديك (إن وجد). ابدأ مؤقتًا بتمهيد الاسم/البلد من الفلاتر أو peerAnonId إن متاح.
+
+3) تبريد الأزرار وVIP-Prev
+
+Edit: src/app/chat/components/ChatToolbar.tsx
+
+اجعل Prev مغلقًا لغير VIP مع Tooltip.
+
+Next يستدعي rtc.next() فقط.
+
+لا توقف مسارات الفيديو المحلية.
+
+<Button onClick={()=>rtc.next()} /* next */ />
+<Button disabled={!isVip} title={isVip?'':'VIP only'} /* prev */ />
+
+4) شريط الرسائل — ظهور/اختفاء وزي-إندكس ورفع فوق الكيبورد
+
+Edit: src/app/chat/components/ChatMessagingBar.tsx
+
+Goals
+
+الشريط مُركب دائمًا؛ يُظهر/يخفي بـ CSS (translate/opacity).
+
+يغطي زري ⏭/⏮ تمامًا عند الفتح (z-[70]).
+
+درج الإيموجي داخل نفس الحاوية absolute bottom-full.
+
+عند الكتابة يرفع نفسه فوق الكيبورد باستخدام visualViewport.
+
+Patch مختصر:
+
+const [open,setOpen]=useState(false);
+useEffect(()=>{
+  const t=()=>setOpen(o=>o); // placeholder
+  const onToggle=()=>setOpen(v=>!v);
+  addEventListener('msgbar:toggle', onToggle);
+  return ()=>removeEventListener('msgbar:toggle', onToggle);
+},[]);
+
+<div className={`fixed left-0 right-0 transition-all duration-200 z-[70] ${open?'opacity-100 translate-y-0':'opacity-0 translate-y-6 pointer-events-none'}`}
+     style={{bottom:`calc(env(safe-area-inset-bottom) + ${kb}px)`}}>
+  {/* input + send(➤) right, emoji 🙂 left */}
+</div>
+
+useEffect(()=>{
+  if(!('visualViewport'in window)) return;
+  const vv=(window as any).visualViewport;
+  const h=()=>setKb(Math.max(0, Math.round((vv.height - window.innerHeight)*-1)));
+  vv.addEventListener('resize',h); vv.addEventListener('scroll',h);
+  return ()=>{vv.removeEventListener('resize',h); vv.removeEventListener('scroll',h);};
+},[]);
+
+
+Edit: src/app/chat/components/ChatToolbar.tsx
+زر 💬 يطلق: window.dispatchEvent(new CustomEvent('msgbar:toggle')).
+
+5) Like الصحيح (لكل pairId) + تزامن مبسّط
+
+New: src/app/api/like/route.ts (Upstash REST)
+
+POST {pairId, action:'like'|'unlike'} باستخدام anonId من الكوكي.
+يخزن:
+
+HINCRBY like:<pairId> count <±1> (bounded ≥0)
+
+SADD like:<pairId>:who <anonId> أو SREM
+
+GET ?pairId=… يرجّع {count, mine:true|false}.
+
+import { NextResponse } from 'next/server';
+const U = process.env.UPSTASH_REDIS_REST_URL!;
+const T = process.env.UPSTASH_REDIS_REST_TOKEN!;
+
+async function upstash(cmd:any[]){
+  const res = await fetch(U,{method:'POST',headers:{Authorization:`Bearer ${T}`,'Content-Type':'application/json'},body:JSON.stringify([cmd])});
+  return res.ok ? (await res.json())[0].result : null;
+}
+export async function GET(req:Request){
+  const {searchParams}=new URL(req.url); const pairId=searchParams.get('pairId')||'';
+  const [c,m] = await Promise.all([
+    upstash(['HGET',`like:${pairId}`,'count']).then(x=>Number(x||0)),
+    upstash(['SISMEMBER',`like:${pairId}:who`, req.headers.get('cookie')||'anon'])
+  ]);
+  return NextResponse.json({count:c, mine:!!m});
+}
+export async function POST(req:Request){
+  const {pairId,action}=await req.json(); const who=(req.headers.get('cookie')||'anon').slice(0,64);
+  let c = Number(await upstash(['HGET',`like:${pairId}`,'count']))||0;
+  if(action==='like'){ await upstash(['SADD',`like:${pairId}:who`,who]); c++; }
+  if(action==='unlike'){ await upstash(['SREM',`like:${pairId}:who`,who]); c=Math.max(0,c-1); }
+  await upstash(['HSET',`like:${pairId}`,'count',String(c)]);
+  return NextResponse.json({ok:true,count:c});
+}
+
+
+Client (ChatClient/LikeButton):
+
+عند rtc:pair ابدأ polling كل 2s: GET /api/like?pairId=... لتحديث العداد.
+
+زر ❤️ يرسل POST /api/like مع pairId وlike/unlike ويحدّث العداد فورًا (optimistic).
+
+6) طبقات الرسوميات (z-index) والتغطية
+
+Edit: src/styles/globals.css (أو ملف Tailwind config)
+
+/* تأكيد الأولويات */
+:root { --z-toolbar:60; --z-msgbar:70; }
+
+
+طبّق z-[var(--z-toolbar)] للشريط السفلي، وz-[var(--z-msgbar)] لشريط الرسائل.
+
+7) حرس الأذونات (جهاز واحد/متصفحين)
+
+Edit: src/app/chat/ChatClient.tsx
+
+قبل getUserMedia اعمل probe سريع: إن كان document.visibilityState!=='visible' أو تبويب آخر “نشّط” الكاميرا، أظهر Hint: “قم بإغلاق التبويب الثاني أو اسمح للكاميرا”.
+
+(نص فقط، لا منطق ثقيل.)
+
+8) تبريد الرسائل/الأزرار ومنع السباقات
+
+اجعل كل Handlers (Next, Cancel, زر 💬) تعتمد disabled أثناء cooldownNext أو phase==='searching' && !Cancel.
+
+لا تُرسل enqueue ثانية ما دام phase==='searching'.
+
+9) اختبارات القبول
+
+New: _ops/acc_like.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+B="${1:?BASE}"
+PID="acc-$(date +%s)"
+out1="$(curl -sS "$B/api/like?pairId=$PID")"
+p1="$(echo "$out1"|sed -n 's/.*"count":\([0-9]\+\).*/\1/p')"
+curl -sS -X POST "$B/api/like" -H 'content-type: application/json' -d "{\"pairId\":\"$PID\",\"action\":\"like\"}" >/dev/null
+out2="$(curl -sS "$B/api/like?pairId=$PID")"
+p2="$(echo "$out2"|sed -n 's/.*"count":\([0-9]\+\).*/\1/p')"
+echo "-- Acceptance --"
+echo "LIKE_INC_OK=$([ "$p2" -eq $((p1+1)) ] && echo 1 || echo 0)"
+echo "-- End Acceptance --"
+
+
+Run (by agent):
+
+Build: pnpm build
+
+Dev smoke: pnpm dev (ensure /chat بلا أخطاء)
+
+Accept:
+
+bash _ops/acc_rtc.sh https://www.ditonachat.com → يجب بقاء PAIR_ID_MATCH=1, NO_403_ON_RTC=1
+
+bash _ops/acc_metrics.sh https://www.ditonachat.com → METRICS_API_OK=true
+
+bash _ops/acc_like.sh https://www.ditonachat.com → LIKE_INC_OK=1
+
+Expected Results (100%)
+
+يبدأ البحث تلقائيًا بعد تشغيل الكاميرا، مع “Searching…” وزر Cancel.
+
+Next لا يطفئ الكاميرا؛ ينتقل بثبات بعد 700ms.
+
+تتحدّث معلومات الطرف (الاسم/اللايكات/الدولة/الجنس) مع كل pair.
+
+عداد ❤️ مرتبط بـ pairId، يتزامن بين الطرفين.
+
+شريط الرسائل يظهر/يغطي ⏭/⏮ ويعلو فوق الكيبورد ويختفي بالتبديل.
+
+لا سباقات: لا enqueue مزدوجة، لا 403.
+
+طبقات الواجهة ثابتة (z-index) بلا حجب.
+
+إن واجه الوكيل أي اختلاف أسماء مسارات/مكوّنات، يحافظ على المبدأ نفسه: لا تغيير كبير، فقط ربط أحداث، تبريد، وطبقات واضحة.

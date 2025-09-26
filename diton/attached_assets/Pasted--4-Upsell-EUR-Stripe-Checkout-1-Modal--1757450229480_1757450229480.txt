@@ -1,0 +1,177 @@
+الدفعة 4 — Upsell EUR (٤ خطط) + Stripe Checkout
+1) باتش الواجهة (Modal يعرض الخطط كاملة)
+
+احفظه باسم 4001-upsell-eur-modal.patch ثم طبّقه بـgit apply.
+
+*** a/src/components/chat/UpsellModal.tsx
+--- b/src/components/chat/UpsellModal.tsx
+@@
+-import React, { useEffect, useState } from "react";
+-
+-export default function UpsellModal(props:any){
+-  // existing minimal modal...
+-  const [plans, setPlans] = useState<any[]>([]);
+-  useEffect(()=>{ (async()=>{
+-    try{
+-      const res = await fetch("/api/stripe/prices");
+-      const json = await res.json();
+-      setPlans(Array.isArray(json?.plans)? json.plans : []);
+-    }catch{}
+-  })(); },[]);
+-  return (
+-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[101]">
+-      <div className="bg-white text-black rounded-lg w-full max-w-lg p-4">
+-        {/* ... */}
+-      </div>
+-    </div>
+-  )
+-}
++import React, { useEffect, useState } from "react";
++
++export default function UpsellModal(_: any) {
++  const [plans, setPlans] = useState<any[]>([]);
++  useEffect(() => {
++    (async () => {
++      try {
++        const res = await fetch("/api/stripe/prices", { cache: "no-store" });
++        const json = await res.json();
++        setPlans(Array.isArray(json?.plans) ? json.plans : []);
++      } catch {}
++    })();
++  }, []);
++
++  const subscribe = async (planId: string) => {
++    try {
++      const res = await fetch("/api/stripe/subscribe", {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({ plan: planId }),
++      });
++      const json = await res.json().catch(() => ({}));
++      if (json?.url) location.href = json.url as string;
++    } catch {}
++  };
++
++  return (
++    <div className="fixed inset-0 z-[101] bg-black/60 flex items-center justify-center p-3">
++      <div className="bg-white text-black rounded-lg w-full max-w-2xl overflow-hidden">
++        <div className="px-4 py-3 border-b font-semibold">ترقية إلى VIP</div>
++        <div className="p-3 max-h-[80vh] overflow-y-auto">
++          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
++            {plans.map((p: any) => (
++              <div key={p.id} className="rounded border p-3 flex flex-col gap-2">
++                <div className="text-sm opacity-70">{p.nickname || p.id}</div>
++                <div className="text-2xl font-bold">
++                  €{(p.amount / 100).toFixed(2)}{" "}
++                  <span className="text-sm opacity-60">/{p.interval}</span>
++                </div>
++                <button
++                  onClick={() => subscribe(p.id)}
++                  className="mt-auto rounded bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2"
++                >
++                  اشترك الآن
++                </button>
++              </div>
++            ))}
++            {plans.length === 0 && (
++              <div className="text-center text-sm opacity-70 p-6">
++                لا تتوفر الخطط الآن. حاول لاحقًا.
++              </div>
++            )}
++          </div>
++        </div>
++      </div>
++    </div>
++  );
++}
+
+2) باتش API للاشتراك
+
+احفظه باسم 4002-stripe-subscribe-route.patch ثم طبّقه.
+
+*** /dev/null
+--- b/src/app/api/stripe/subscribe/route.ts
+@@
++import { NextRequest, NextResponse } from "next/server";
++import Stripe from "stripe";
++
++const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
++  apiVersion: "2022-11-15",
++});
++
++export async function POST(req: NextRequest) {
++  try {
++    const { plan } = (await req.json().catch(() => ({}))) as { plan?: string };
++    const PRICES: Record<string, string | undefined> = {
++      daily: process.env.STRIPE_PRICE_EUR_DAILY,
++      weekly: process.env.STRIPE_PRICE_EUR_WEEKLY,
++      monthly: process.env.STRIPE_PRICE_EUR_MONTHLY,
++      yearly: process.env.STRIPE_PRICE_EUR_YEARLY,
++    };
++    const priceId = plan ? PRICES[plan] : undefined;
++    if (!priceId) {
++      return NextResponse.json({ error: "invalid plan" }, { status: 400 });
++    }
++
++    const url = new URL(req.url);
++    const origin = `${url.protocol}//${url.host}`;
++
++    const session = await stripe.checkout.sessions.create({
++      mode: "subscription",
++      line_items: [{ price: priceId, quantity: 1 }],
++      success_url: `${origin}/api/vip/claim?session_id={CHECKOUT_SESSION_ID}`,
++      cancel_url: `${origin}/plans`,
++    });
++    return NextResponse.json({ url: session.url });
++  } catch (e: any) {
++    return NextResponse.json({ error: e?.message || "stripe_error" }, { status: 500 });
++  }
++}
+
+
+المتطلبات: إعداد مفاتيح Vercel موجود مسبقًا (STRIPE_SECRET_KEY و STRIPE_PRICE_EUR_*).
+إن لم تكن موجودة ستظهر استجابة 500 من المسار.
+
+3) سكربتات قبول سريعة
+
+(أ) acc_prices.sh — يتأكد من وجود ٤ خطط EUR:
+
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+echo "[Prices] GET /api/stripe/prices"
+J=$(curl -s "$BASE/api/stripe/prices")
+echo "$J" | jq '.plans | length' 2>/dev/null || echo "$J"
+echo "expect: 4 items, eur amounts: 149/599/1699/9999"
+
+
+(ب) acc_subscribe.sh — فحص الاشتراك يُعيد URL:
+
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="${1:-https://www.ditonachat.com}"
+post(){ curl -s -H 'content-type: application/json' -X POST -d "{\"plan\":\"$1\"}" "$BASE/api/stripe/subscribe"; }
+for p in daily weekly monthly yearly; do
+  echo "[$p]"; post "$p" | sed -E 's/,"/,\n"/g' | head -n 3
+done
+echo 'expect: لكل خطة JSON يحوي "url": "https://checkout.stripe.com/..."'
+
+4) خطوات التنفيذ المختصرة (للوكيل)
+git checkout -b feature/batch-4
+git apply 4001-upsell-eur-modal.patch
+git apply 4002-stripe-subscribe-route.patch
+
+pnpm i --frozen-lockfile
+pnpm build || pnpm dev
+
+bash acc_prices.sh https://www.ditonachat.com
+bash acc_subscribe.sh https://www.ditonachat.com
+
+git add -A && git commit -m "Batch 4: Upsell EUR + Stripe Checkout (plans grid + subscribe API)"
+
+
+المخرجات المتوقعة:
+
+acc_prices.sh → العدد 4 وقيم EUR المعروفة.
+
+acc_subscribe.sh → لكل خطة كائن JSON يحتوي على حقل url.

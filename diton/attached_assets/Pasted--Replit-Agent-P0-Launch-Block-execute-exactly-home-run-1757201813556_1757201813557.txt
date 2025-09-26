@@ -1,0 +1,212 @@
+🧭 Replit Agent — P0 Launch Block (execute exactly)
+
+قواعد صارمة
+
+اعمل فقط في جذر المشروع: /home/runner/workspace (Git root).
+
+أنشئ نسخة احتياطية قبل أي تعديل: _ops/backups/agent_p0_<UTCSTAMP>/….
+
+لا تُغيّر شيئًا خارج ما هو مطلوب في هذه المهمة.
+
+بعد كل جزء، اطبع Acceptance Block كما بالأسفل.
+
+الهدف العام (P0 اليوم)
+
+عمر +18 قابل للتبديل (AGE_PROVIDER=stub|veriff|yoti) مع:
+
+POST /api/age/start (يعيد session_id أو redirect عند المزود الحقيقي).
+
+POST /api/age/webhook (يثبّت القرار ويضبط جلسة العمر/كوكي).
+
+/chat يجب أن يوجّه 307 إذا لا جلسة عمر، ثم 200 بعد الاعتماد.
+
+Report/Block خفيف بلا DB الآن:
+
+POST /api/moderation/report (JSON: reason, peerId, ts…) + rate-limit + CSRF بسيط.
+
+التخزين مؤقتًا: stdout + ملف محلي في dev (_ops/reports/reports.ndjson). (في Vercel لاحقًا: Blob/Email).
+
+زر الواجهة يقطع الاتصال فورًا بعد الإرسال.
+
+Cooldown + hCaptcha على /api/match/next:
+
+واجهة: throttle 700ms + guard شبكي.
+
+خادم: sliding-window (مثال: >3 Next خلال 2s ⇒ 429) مع دعم hCaptcha token (تحقق اختياري إن توفّر مفاتيح).
+
+Stripe VIP مصدر الحقيقة:
+
+Webhook موقّع (checkout.session.completed, customer.subscription.updated|deleted).
+
+Enforcement من السيرفر (لا اعتماد على الكوكي وحده).
+
+نقطة Reconcile يدوية بسيطة (endpoint داخلي محمي).
+
+رؤوس الأمان:
+
+Permissions-Policy حرفيًا على /chat بعد العمر: camera=(self), microphone=(self).
+
+CSP مناسبة لـ self + wss:// (signal) + Stripe + TURN/STUN.
+
+CSRF لطلبات POST الحسّاسة فقط. CORS = same-origin.
+
+Cookie Banner + DSAR:
+
+Banner فعلي قبل أي تتبع.
+
+قناة خصوصية: mailto:privacy@ditonachat.com وروابط صفحة طلب حذف.
+
+تجهيز سريع
+
+لا تُضيف أسرار للـGit. استخدم ENV فقط. إن لم تتوفر مفاتيح (yoti/veriff/stripe/hcaptcha) استخدم stub آمن لا يُعطل التدفق.
+
+ثبّت أن /api/health هو المرجع الوحيد للصحة (وليس /_health).
+
+🛠️ مهام تنفيذية مفصّلة
+
+0) نسخة احتياطية + فحص جذر
+
+اصنع فولدر backup: _ops/backups/agent_p0_<UTCSTAMP>/…
+
+احفظ نسخًا من هذه الملفات إن وُجدت:
+package.json next.config.mjs middleware.ts src/app/api/** src/app/chat/** src/components/** src/lib/** src/utils/** src/hooks/**
+
+اطبع الجذر الحالي ونتيجة git rev-parse --show-toplevel.
+
+1) عمر +18 قابل للتبديل
+
+أضف متغير AGE_PROVIDER (يدعم: stub افتراضيًا).
+
+أنشئ:
+
+src/app/api/age/start/route.ts
+
+src/app/api/age/webhook/route.ts
+
+سلوك stub:
+
+POST /api/age/start ⇒ { ok:true, session_id: "stub-"+ts }
+
+POST /api/age/webhook ⇒ يضبط Cookie ageok=1 سنة، ويرد { ok:true }
+
+حدّث middleware.ts بحيث:
+
+يُحوِّل /chat إلى 307 عند غياب العمر.
+
+بعد نجاح webhook، تصبح /chat 200.
+
+قبول (بعد التنفيذ):
+شغّل dev محليًا، نفّذ:
+
+أول زيارة /chat ⇒ 307
+
+POST /api/age/webhook ⇒ 200
+
+/chat ⇒ 200
+ثم اطبع Acceptance Block (HEALTH/AGE_FLOW/PP/CSS/VIP placeholders الآن، سنكملها لاحقًا).
+
+2) Report/Block
+
+أنشئ src/app/api/moderation/report/route.ts:
+
+يقبل JSON (reason, peerId, ts, extra?).
+
+rate-limit خفيف (استخدم ما لدينا إن وُجد lib/ratelimit).
+
+CSRF بسيط (توكن في الهيدر مع استثناء dev).
+
+في dev: اكتب سطر NDJSON إلى _ops/reports/reports.ndjson + console.log.
+
+اربط زر الواجهة “Report/Shield” لي:
+
+يرسل POST ويقطع الاتصال (event bus).
+
+يُظهر Toast بالنجاح/الفشل.
+
+قبول: استدعِ endpoint بعيّنة JSON، وتحقق من سطر NDJSON.
+
+3) Cooldown + hCaptcha على /api/match/next
+
+واجهة: تأكد من throttle ~700ms + منع reentry أثناء انتظار الشبكة.
+
+خادم: sliding-window guard:
+
+3 طلبات خلال 2 ثانية ⇒ 429 JSON { rate_limited:true }
+
+دعم hcaptcha_token (إن توفّر ENV، تحقق وإلا تجاوزه في stub).
+
+قبول: نفّذ 5 طلبات سريعة لـ/api/match/next وتحقق من تلقي 429 على الأقل واحدًا.
+
+4) Stripe VIP
+
+أضف/أكمل Webhook:
+
+ركّز على events: checkout.session.completed, customer.subscription.updated|deleted.
+
+حدث نجاح ⇒ vip=true (cookie/session على المدى القريب) + أساس enforcement من السيرفر.
+
+حدّث /api/user/vip-status ليقرأ الحالة من cookie الآن، مع موضع واضح لإضافة قراءة من store/DB لاحقًا.
+
+أضف endpoint داخلي (محمي IP/secret) لـ Reconcile بسيط.
+
+قبول: في dev، حاكِ حدث webhook بنموذج JSON محلي، وتحقق من تغيّر الحالة.
+
+5) رؤوس الأمان
+
+ثبّت نهائيًا في next.config.mjs:
+
+Permissions-Policy: camera=(self), microphone=(self) (طبّقه على /chat).
+
+CSP مُقيدة بشكل آمن (self + wss:// للـsignal + Stripe + TURN/STUN).
+
+قبول:
+
+فعّل العمر، اطلب HEAD /chat: يجب أن ترى الهيدر حرفيًا.
+
+تأكد أن CSS يعمل (رابط / _next/static/css/*.css + Utilities موجودة).
+
+6) Cookie Banner + DSAR
+
+أضف Banner فعلي (يمنع أي تتبع قبل الموافقة).
+
+أضف صفحة/رابط privacy@ditonachat.com.
+
+قبول: اللّوحة تظهر أول زيارة؛ عند الرفض لا تحميل تتبع.
+
+✅ فحوص نهائية (اطبع هذا بالضبط)
+
+بعد تشغيل dev محليًا على :3000 نفّذ:
+
+-- Acceptance --
+HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/health)
+AGE_FLOW=$( (code1=$(curl -s -D - -o /dev/null http://127.0.0.1:3000/chat | awk 'NR==1{print $2}'); curl -s -X POST http://127.0.0.1:3000/api/age/webhook >/dev/null; code2=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/chat); [ "$code1" = "307" ] && [ "$code2" = "200" ] && echo ok || echo fail ))
+PERMISSIONS_POLICY=$(curl -s -I http://127.0.0.1:3000/chat | awk 'BEGIN{IGNORECASE=1}/^Permissions-Policy:/{sub(/\r$/,"");print substr($0,index($0,":")+2)}')
+CSS_LINK=$([ -n "$(curl -s http://127.0.0.1:3000/ | grep -oE "/_next/static/css/[^\"']+\.css" | head -1)" ] && echo 1 || echo 0)
+VIP_PRE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/user/vip-status)
+VIP_POST=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: vip=1" http://127.0.0.1:3000/api/user/vip-status)
+REPORT=$([ -s _ops/reports/reports.ndjson ] && echo ok || echo missing)
+COOLDOWN=$( (n429=0; for i in 1 2 3 4 5; do c=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/match/next); [ "$c" = "429" ] && n429=$((n429+1)); done; [ $n429 -ge 1 ] && echo ok || echo weak) )
+echo "HEALTH=$HEALTH"
+echo "AGE_FLOW=$AGE_FLOW"
+echo "PERMISSIONS_POLICY=$PERMISSIONS_POLICY"
+echo "CSS_LINK=$CSS_LINK utilities:found"
+echo "VIP=pre:$VIP_PRE post:$VIP_POST"
+echo "REPORT=$REPORT  COOLDOWN=$COOLDOWN"
+echo "-- End Acceptance --"
+
+
+تسليمك المطلوب:
+
+التغييرات البرمجية (P0) مكتملة.
+
+لقطات من الـAcceptance Block.
+
+ملخص الملفات المعدّلة + موقع النسخة الاحتياطية.
+
+حواجز التكلفة/الأداء
+
+لا تثبّت حزم جديدة إلا للضرورة.
+
+أعد استخدام dev server قدر الإمكان، وتجنّب build متكرر.
+
+لا تتصل بخدمات خارجية؛ استخدم stub حتى تزوَّد المفاتيح.

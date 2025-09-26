@@ -1,0 +1,19 @@
+node_modules/
+.next/
+dist/
+_ops/backups/
+.vercel/
+.env.local
+
+# ops blobs
+_ops/snapshots/
+_ops/artifacts/
+_ops/backups/
+_ops/**/*.tar.gz
+.vercel
+_ops/reports
+_dist/
+_ops/backups/
+_ops/reports/
+*.zip
+*.tar.gz

@@ -1,0 +1,147 @@
+🧩 Replit Agent — Batch B (Auth + VIP + Age Gate) — Paste-as-is
+
+الهدف: تجهيز قاعدة بيانات Prisma (SQLite dev)، ربط NextAuth (Google) بشكل اختياري لا يعطّل التشغيل إن غابت المفاتيح، جعل /api/user/vip-status يقرأ من Session/DB مع Fallback كوكي dev، تفعيل Age Gate بسيط بوسطية (middleware) تعتمد كوكي ageok=1، والحفاظ على /api/stripe/* كما هي (webhook الموقّع سنفعّله عند وضع مفاتيح Vercel).
+القيود: العمل حصريًا في /home/runner/workspace، نسخة احتياطية أولًا، مخرجات موجزة، بدون أسرار.
+
+Task: Batch B — Auth (NextAuth+Google), DB (Prisma SQLite dev), VIP real path in /api/user/vip-status with dev fallback, Age Gate middleware; build+run+verify; append report and print Acceptance.
+
+Rules:
+- Root only: /home/runner/workspace
+- Backup at _ops/backups/batchB_<UTC>/ (exclude node_modules/.next)
+- Idempotent: if files exist, update in-place; do not break existing dev VIP cookie toggle
+- No secrets in logs; if GOOGLE_* or NEXTAUTH_* missing, NextAuth stays optional (no crash)
+
+Steps:
+1) Backup: tar source into _ops/backups/batchB_<UTC>/src_backup.tgz (exclude node_modules/.next).
+
+2) Prisma (SQLite dev):
+   - Add deps if missing: pnpm add -D prisma && pnpm add @prisma/client
+   - Create prisma/schema.prisma:
+     ---
+     datasource db { provider = "sqlite"; url = "file:./dev.db" }
+     generator client { provider = "prisma-client-js" }
+     model User { id String @id @default(cuid()); email String? @unique; name String?; image String?; createdAt DateTime @default(now()); subscriptions Subscription[] }
+     model Subscription { id String @id @default(cuid()); userId String; user User @relation(fields: [userId], references: [id]); status String @default("inactive"); priceId String?; currentPeriodEnd DateTime?; createdAt DateTime @default(now()); updatedAt DateTime @updatedAt }
+     model ProcessedWebhook { id String @id }
+     ---
+   - Create src/lib/prisma.ts:
+     ---
+     import { PrismaClient } from "@prisma/client";
+     const globalForPrisma = global as unknown as { prisma?: PrismaClient };
+     export const prisma = globalForPrisma.prisma ?? new PrismaClient();
+     if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+     ---
+   - Run: pnpm dlx prisma generate
+
+3) NextAuth (keep optional):
+   - Ensure file exists: src/app/api/auth/[...nextauth]/route.ts with:
+     ---
+     import NextAuth from "next-auth";
+     import Google from "next-auth/providers/google";
+     export const { handlers, auth } = NextAuth({
+       providers: (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
+         ? [Google({ clientId: process.env.GOOGLE_CLIENT_ID!, clientSecret: process.env.GOOGLE_CLIENT_SECRET! })]
+         : [],
+       session: { strategy: "jwt" }
+     });
+     export const GET = handlers.GET; export const POST = handlers.POST;
+     export const runtime = "nodejs"; export const dynamic = "force-dynamic";
+     ---
+   - If the route already exists, keep it; only enforce the “optional providers” behavior.
+
+4) VIP status (DB + session with dev fallback):
+   - Overwrite src/app/api/user/vip-status/route.ts to:
+     ---
+     import { NextResponse } from "next/server";
+     import { cookies } from "next/headers";
+     import { prisma } from "@/lib/prisma";
+     import { auth } from "@/app/api/auth/[...nextauth]/route";
+     export async function GET() {
+       // dev cookie fallback (still supported)
+       const c = cookies().get("vip");
+       if (c?.value === "1") return NextResponse.json({ isVip: true, via: "cookie" }, { status: 200 });
+       try {
+         const session = await auth();
+         const email = session?.user?.email ?? null;
+         if (email) {
+           const user = await prisma.user.findUnique({
+             where: { email }, include: { subscriptions: { orderBy: { updatedAt: "desc" }, take: 1 } }
+           });
+           const isVip = !!user?.subscriptions.find(s => ["active","trialing","past_due"].includes(s.status));
+           return NextResponse.json({ isVip, via: "db" }, { status: 200 });
+         }
+       } catch {}
+       return NextResponse.json({ isVip: false, via: "anon" }, { status: 200 });
+     }
+     export const dynamic = "force-dynamic"; export const runtime = "nodejs";
+     ---
+
+5) Age Gate middleware:
+   - Ensure POST /api/age/allow sets cookie ageok=1 (keep existing route; if missing, create it).
+   - Create src/middleware.ts:
+     ---
+     import type { NextRequest } from "next/server";
+     import { NextResponse } from "next/server";
+     export function middleware(req: NextRequest) {
+       if (req.nextUrl.pathname.startsWith("/chat")) {
+         const ok = req.cookies.get("ageok")?.value === "1";
+         if (!ok) {
+           const url = req.nextUrl.clone();
+           url.pathname = "/";
+           url.searchParams.set("age","required");
+           return NextResponse.redirect(url);
+         }
+       }
+       return NextResponse.next();
+     }
+     export const config = { matcher: ["/chat"] };
+     ---
+
+6) Stripe webhook idempotency (DB-aware now, but keep current dev handler if keys missing):
+   - If STRIPE_WEBHOOK_SECRET is present later on Vercel, webhook should verify signature and write into ProcessedWebhook, and upsert a Subscription row (status active) for the user email (from event data). For now just ensure existing dev webhook remains and document DB idempotency table.
+
+7) Build & run on PORT=3000; verify:
+   - /, /plans, /chat (expect 302 to /?age=required before calling age allow), /api/health
+   - /api/user/vip-status (should be {"isVip":false} for anon)
+   - POST /api/age/allow then /chat should be 200
+   - Dev VIP cookie toggle (if present) still flips status
+
+8) Report:
+   - Append _ops/reports/BATCH_B_<UTC>.md with:
+     * Prisma files created + prisma generate output
+     * NextAuth optional-providers confirmation
+     * Updated vip-status code path (via: db/cookie/anon)
+     * Middleware behavior (show redirect then allow after POST /api/age/allow)
+     * HTTP codes table
+   - Print EXACT block:
+
+-- Acceptance --
+AUTH_GOOGLE=route:ready optional-providers:ok
+AGE_GATE=cookie:ageok enforced via middleware
+VIP_STATUS=db-first with dev-cookie fallback
+HTTP=/:200 /plans:200 /api/health:200 /chat:302->200(after age allow)
+-- End Acceptance --
+
+🧪 بعد ما يخلص الوكيل — فحص شِل سريع (انسخه كما هو)
+bash -lc '
+set -e
+cd /home/runner/workspace 2>/dev/null || cd ~/workspace
+PORT=${PORT:-3000}
+
+echo "== Pre-check (should redirect) =="
+curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:$PORT/chat"
+
+echo "== Allow age =="
+curl -s -X POST -o /dev/null -D /tmp/h -c /tmp/c "http://127.0.0.1:$PORT/api/age/allow"
+grep -i "^set-cookie" /tmp/h || true
+
+echo "== Chat after age allow (should be 200) =="
+curl -s -b /tmp/c -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:$PORT/chat"
+
+echo "== VIP status anon (should be false) =="
+curl -s "http://127.0.0.1:$PORT/api/user/vip-status"
+
+echo "== Dev VIP cookie grant (if present) =="
+curl -s -c /tmp/c -X POST "http://127.0.0.1:$PORT/api/user/vip/dev/grant" >/dev/null || true
+curl -s -b /tmp/c "http://127.0.0.1:$PORT/api/user/vip-status"
+'

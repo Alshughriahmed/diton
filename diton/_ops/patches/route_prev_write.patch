@@ -1,0 +1,40 @@
+--- a/src/app/api/match/next/route.ts
++++ b/src/app/api/match/next/route.ts
+@@ -18,6 +18,14 @@ import { get as upGet } from "../../../../lib/rtc/upstash";
+ 
+ export const dynamic = "force-dynamic";
+ 
++import { cookies } from "next/headers";
++import { setPx as upSetPx } from "../../../../lib/rtc/upstash";
++function anonFromCookies(): string {
++  try {
++    const c = cookies();
++    return c.get("anon")?.value || c.get("ditona_anon")?.value || "";
++  } catch { return ""; }
++}
+ // hCaptcha verification function
+ async function verifyCaptcha(token: string): Promise<boolean> {
+   if (!process.env.HCAPTCHA_SECRET) return true; // skip if not configured
+@@ -60,7 +68,20 @@ export async function GET(req: NextRequest) {
+   const prev = (req.headers.get("x-ditona-prev") === "1");
+   if (prev) {
+     const isVip = await requireVip();
+-    if (!isVip) { return new Response("prev requires vip", { status: 403 }); }
++    if (!isVip) { return new Response("prev requires vip", { status: 403 }); }
++    const me = anonFromCookies();
++    if (me) {
++      try {
++        const last:any = await upGet(`rtc:last:${me}`);
++        const peer = String(last||"");
++        if (peer) {
++          const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;
++          await Promise.all([
++            upSetPx(`rtc:prev-wish:${me}`, peer, ttl),
++            upSetPx(`rtc:prev-for:${peer}`, me, ttl)
++          ]);
++        }
++      } catch {}
++    }
+   }
+ 
+   // Apply rate limiting

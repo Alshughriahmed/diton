@@ -1,0 +1,99 @@
+Phase A — Fix FFA runtime gating (Prev / Filters / Beauty) without touching anything else
+Goals
+
+إزالة أي تجميد build-time مثل const freeForAll = isFFA() واستبداله بنداء وقت التشغيل.
+
+التأكد أن التعطيل يتم بـ disabled={!(isFFA() || isVip)}.
+
+إضافة import لـ isFFA عند اللزوم فقط.
+
+إخراج تقرير قبول في _ops/reports/phaseA_ffa_runtime_fix_*.log.
+
+Target files (exact paths)
+
+src/app/chat/components/ChatToolbar.tsx
+
+src/app/chat/components/FilterBar.tsx
+
+src/app/chat/components/GenderSelect.tsx
+
+src/app/chat/components/CountrySelect.tsx
+
+(للاستيراد) src/utils/ffa.ts يحتوي export function isFFA(): boolean
+
+Steps (run exactly; idempotent)
+bash -lc '
+set -Eeuo pipefail; export TERM=dumb CI=1
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+RPT="_ops/reports/phaseA_ffa_runtime_fix_${STAMP}.log"
+BK="_ops/backups/phaseA_ffa_runtime_fix_${STAMP}.tar"
+mkdir -p _ops/reports _ops/backups
+
+# 1) Backup
+tar -cf "$BK" \
+  src/app/chat/components/ChatToolbar.tsx \
+  src/app/chat/components/FilterBar.tsx \
+  src/app/chat/components/GenderSelect.tsx \
+  src/app/chat/components/CountrySelect.tsx || true
+
+patch_one() {
+  f="$1"; [ -f "$f" ] || return 0
+  # 2) remove frozen const if present
+  perl -0777 -pe "s/^\\s*const\\s+freeForAll\\s*=\\s*isFFA\\(\\)\\s*;\\s*\\n//mg" -i "$f" || true
+  # 3) replace usages
+  perl -0777 -pe "s/\\bfreeForAll\\b/isFFA()/g" -i "$f" || true
+  # 4) normalize disabled guards
+  perl -0777 -pe "s/disabled\\s*=\\s*\\{\\s*!\\s*isVip\\s*\\}/disabled={!(isFFA() || isVip)}/g" -i "$f" || true
+  perl -0777 -pe "s/disabled\\s*=\\s*\\{\\s*!?\\s*\\(\\s*isVip\\s*\\|\\|\\s*isFFA\\(\\)\\s*\\)\\s*\\}/disabled={!(isFFA() || isVip)}/g" -i "$f" || true
+  # 5) add import if missing
+  if ! grep -q "from \\\"@/utils/ffa\\\"" "$f" && grep -q "isFFA()" "$f"; then
+    sed -n "1,3p" "$f" > "$f.__tmp__"
+    echo "import { isFFA } from \"@/utils/ffa\";" >> "$f.__tmp__"
+    sed -n "4,\$p" "$f" >> "$f.__tmp__"
+    mv "$f.__tmp__" "$f"
+  fi
+}
+
+patch_one src/app/chat/components/ChatToolbar.tsx
+patch_one src/app/chat/components/FilterBar.tsx
+patch_one src/app/chat/components/GenderSelect.tsx
+patch_one src/app/chat/components/CountrySelect.tsx
+
+# 6) Acceptance (grep-only, no build)
+ok_toolbar=0
+ok_filters=0
+
+if [ -f src/app/chat/components/ChatToolbar.tsx ]; then
+  if grep -q "data-ui=\\\"btn-prev\\\"" src/app/chat/components/ChatToolbar.tsx \
+     && grep -q "isFFA()" src/app/chat/components/ChatToolbar.tsx \
+     && ! grep -q "const\\s\\+freeForAll\\s*=" src/app/chat/components/ChatToolbar.tsx
+  then ok_toolbar=1; fi
+fi
+
+hits=0
+for f in src/app/chat/components/FilterBar.tsx src/app/chat/components/GenderSelect.tsx src/app/chat/components/CountrySelect.tsx; do
+  [ -f "$f" ] || continue
+  if grep -q "isFFA()" "$f" && ! grep -q "const\\s\\+freeForAll\\s*=" "$f"; then
+    hits=$((hits+1))
+  fi
+done
+[ "$hits" -ge 1 ] && ok_filters=1
+
+{
+  echo "-- Acceptance --"
+  echo "FFA_PREV_RUNTIME_OK=$ok_toolbar"
+  echo "FFA_FILTERS_RUNTIME_OK=$ok_filters"
+  echo "[refs] backup=$BK"
+} | tee "$RPT"
+echo "[i] Report: $RPT"
+sed -n "1,200p" "$RPT"
+'
+
+Success criteria
+
+يظهر في التقرير:
+FFA_PREV_RUNTIME_OK=1 و FFA_FILTERS_RUNTIME_OK=1.
+
+لا تغيير لأي ملف خارج القائمة أعلاه.
+
+لا تشغيل build في هذه الدفعة.

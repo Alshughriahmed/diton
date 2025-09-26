@@ -1,0 +1,171 @@
+A1 — استثناء /api + runtime/dynamic
+
+A1_mw_and_runtime.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/A1_${TS}"; mkdir -p "$BK" _ops/reports
+FILES_TOUCHED="_ops/reports/batch_A_files.tmp"; :> "$FILES_TOUCHED"
+
+# 1) middleware.ts: أول سطر داخل middleware() لحماية /api
+if [ -f src/middleware.ts ]; then
+  cp -a src/middleware.ts "$BK/middleware.ts"
+  # ضمان الاستيراد
+  grep -q 'from "next/server"' src/middleware.ts || sed -i '1i import { NextResponse } from "next/server";' src/middleware.ts
+  # إدراج الحارس كأول سطر داخل الدالة إن لم يوجد
+  perl -0777 -pe 'BEGIN{$/=\undef}
+    s/(export\s+function\s+middleware\s*\(\s*request:[^{]+{\s*)(?!\s*if\s*\(request\.nextUrl\.pathname\.startsWith\("\/api"\)\)\s*return\s+NextResponse\.next\(\);\s*)/$1  if (request.nextUrl.pathname.startsWith("\/api")) return NextResponse.next();\n/s
+  ' -i src/middleware.ts
+  echo "src/middleware.ts" >> "$FILES_TOUCHED"
+fi
+
+# 2) لكل route.ts تحت /api: runtime=nodejs + dynamic=force-dynamic
+mapfile -t API_ROUTES < <(find src/app/api -type f -name route.ts 2>/dev/null || true)
+REPLACED_RT=0; REPLACED_DY=0; TOUCHED=0
+for f in "${API_ROUTES[@]}"; do
+  mkdir -p "$BK/$(dirname "$f")"; cp -a "$f" "$BK/$f"
+  # runtime
+  if grep -q 'export const runtime' "$f"; then
+    perl -0777 -pe 's/export\s+const\s+runtime\s*=\s*["'\'']\w+["'\''];/export const runtime = "nodejs";/g' -i "$f"; ((REPLACED_RT++)) || true
+  else
+    printf '\nexport const runtime = "nodejs";\n' >> "$f"
+  fi
+  # dynamic
+  if grep -q 'export const dynamic' "$f"; then
+    perl -0777 -pe 's/export\s+const\s+dynamic\s*=\s*["'\''][^"'\'']+["'\''];/export const dynamic = "force-dynamic";/g' -i "$f"; ((REPLACED_DY++)) || true
+  else
+    printf 'export const dynamic = "force-dynamic";\n' >> "$f"
+  fi
+  echo "$f" >> "$FILES_TOUCHED"
+  ((TOUCHED++)) || true
+done
+
+# قبول جزئي لهذه الخطوة
+echo "-- Acceptance --"
+echo "API_MW_BYPASS_SET=$( [ -f src/middleware.ts ] && grep -q 'pathname.startsWith(\"/api\")' src/middleware.ts && echo 1 || echo 0 )"
+echo "API_ROUTES_TOUCHED=${TOUCHED}"
+echo "RUNTIME_SET=${REPLACED_RT}"
+echo "DYNAMIC_SET=${REPLACED_DY}"
+echo "BACKUP_DIR=$BK"
+
+A2 — رؤوس JSON + no-store لمسارات REST الحساسة
+
+A2_api_json_headers.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+BK="_ops/backups/A2_${TS}"; mkdir -p "$BK" _ops/reports
+FILES_TOUCHED="_ops/reports/batch_A_files.tmp"
+
+# استهدف فقط REST الحساسة
+mapfile -t TARGETS < <(printf '%s\n' \
+  "src/app/api/rtc" \
+  "src/app/api/monitoring/metrics" \
+  | xargs -I{} bash -lc 'find "{}" -type f -name route.ts 2>/dev/null' || true)
+
+PATCHED=0
+for f in "${TARGETS[@]}"; do
+  [ -f "$f" ] || continue
+  mkdir -p "$BK/$(dirname "$f")"; cp -a "$f" "$BK/$f"
+
+  # أضف مُغلّف jsonNoStore إن لم يكن موجودًا
+  grep -q 'function jsonNoStore' "$f" || sed -i '1i import { NextResponse } from "next/server";\nconst jsonNoStore=(d:any,i?:ResponseInit)=>NextResponse.json(d,{...(i||{}),headers:{...((i&&i.headers)||{}), "Cache-Control":"no-store"}});\n' "$f"
+
+  # استبدل NextResponse.json بـ jsonNoStore
+  perl -0777 -pe 's/\bNextResponse\.json\s*\(/jsonNoStore(/g' -i "$f" || true
+
+  # ضمان استخدام Cache-Control فقط هنا؛ لا نفرض Content-Type على مسارات غير JSON مستقبلًا
+  echo "$f" >> "$FILES_TOUCHED"
+  ((PATCHED++)) || true
+done
+
+echo "-- Acceptance --"
+echo "API_JSON_NOCACHE_TOUCHED=${PATCHED}"
+echo "BACKUP_DIR=$BK"
+
+A3 — بوابة القبول + تقرير موحّد
+
+A3_gate_and_report.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${ROOT:-/home/runner/workspace}"
+BASE="${BASE:-https://www.ditonachat.com}"
+OUT="_ops/reports/batch_A_report.log"; :> "$OUT"
+
+h(){ curl -s -o /dev/null -w '%{http_code}' "$BASE/api/health"; }
+t(){ curl -s "$BASE/api/turn" | tr -d '\r' | tr -d '\n' | grep -Eo '(turns?:[^"]*:(443|5349))' | head -n1; }
+s(){ curl -s "$BASE/api/stripe/prices" | tr -d '\r' | grep -Eo '"id"|"unit_amount' -c; }
+e(){ curl -s "$BASE/api/rtc/env" | tr -d '\r'; }
+
+# رؤوس لمسارين REST فقط
+hdr_ok(){
+  local path="$1"
+  local H="$(curl -s -I "$BASE$path")"
+  echo "$H" | grep -qi '^content-type:.*application/json' && echo "$H" | grep -qi '^cache-control:.*no-store'
+}
+
+HEALTH_OK=$([ "$(h)" = "200" ] && echo 1 || echo 0)
+TURN_443_OK=$([ -n "$(t)" ] && echo 1 || echo 0)
+STRIPE_JSON_OK=$([ "$(s)" -ge 4 ] && echo 1 || echo 0)
+ENV_OUT="$(e)"
+ENV_FFA_OK=$([[ "$ENV_OUT" =~ FREE_FOR_ALL ]] && [[ "$ENV_OUT" =~ NEXT_PUBLIC_FREE_FOR_ALL ]] && echo 1 || echo 0)
+API_JSON_NOCACHE_OK=$(
+  hdr_ok "/api/rtc/matchmake" >/dev/null 2>&1 && hdr_ok "/api/monitoring/metrics" >/dev/null 2>&1 && echo 1 || echo 0
+)
+
+# لائحة الملفات المعدّلة
+FILES_TOUCHED="_ops/reports/batch_A_files.tmp"
+echo "-- Acceptance --"        | tee -a "$OUT"
+echo "HEALTH_OK=$HEALTH_OK"    | tee -a "$OUT"
+echo "TURN_443_OK=$TURN_443_OK"| tee -a "$OUT"
+echo "STRIPE_JSON_OK=$STRIPE_JSON_OK" | tee -a "$OUT"
+echo "STRIPE_PLANS_OK=$([ "$STRIPE_JSON_OK" -eq 1 ] && echo 1 || echo 0)" | tee -a "$OUT"
+echo "ENV_FFA_OK=$ENV_FFA_OK"  | tee -a "$OUT"
+echo "API_JSON_NOCACHE_OK=$API_JSON_NOCACHE_OK" | tee -a "$OUT"
+echo "BASE=$BASE"              | tee -a "$OUT"
+
+echo -e "\n-- Snippets --"     | tee -a "$OUT"
+for P in /api/rtc/matchmake /api/monitoring/metrics; do
+  echo "curl -i $BASE$P (headers)" | tee -a "$OUT"
+  curl -s -I "$BASE$P" | sed -n '1,15p' | tee -a "$OUT"
+done
+
+echo -e "\n-- Files touched --" | tee -a "$OUT"
+if [ -f "$FILES_TOUCHED" ]; then
+  sort -u "$FILES_TOUCHED" | while read -r f; do
+    [ -f "$f" ] && { echo -n "$f  "; wc -l < "$f"; } | tee -a "$OUT"
+  done
+fi
+
+echo -e "\nREPORT=$OUT"
+
+ماذا يسلَّم للوكيل لينفّذ (نص مختصر)
+
+نفّذ محليًا فقط. لا ريموت. استخدم الحارس. أعد سطور القبول من التقرير النهائي.
+
+cd /home/runner/workspace
+export TERM=dumb CI=1
+
+# إنشاء وتشغيل الدفعة A بالتسلسل
+cat > A1_mw_and_runtime.sh <<'EOF'
+<الصق محتوى A1 كما هو>
+EOF
+chmod +x A1_mw_and_runtime.sh; _ops/bin/run ./A1_mw_and_runtime.sh
+
+cat > A2_api_json_headers.sh <<'EOF'
+<الصق محتوى A2 كما هو>
+EOF
+chmod +x A2_api_json_headers.sh; _ops/bin/run ./A2_api_json_headers.sh
+
+cat > A3_gate_and_report.sh <<'EOF'
+<الصق محتوى A3 كما هو>
+EOF
+chmod +x A3_gate_and_report.sh; _ops/bin/run ./A3_gate_and_report.sh
+
+# أعِد لي هذا فقط:
+sed -n '/-- Acceptance --/,$p' _ops/reports/batch_A_report.log

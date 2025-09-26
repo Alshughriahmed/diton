@@ -1,0 +1,79 @@
+Title: Run production A/B RTC verification and return acceptance block
+
+Goal: تشغيل اختبار A/B على https://www.ditonachat.com لإثبات المطابقة والرسائل تحت FFA.
+
+What to do:
+
+أنشئ ملف سكربت تنفيذي /_ops/ab_verify.sh بالمحتوى أدناه حرفيًا. لا تُعدّل الاقتباسات.
+
+شغّل السكربت: bash /_ops/ab_verify.sh.
+
+أعِد الناتج كما هو، خصوصًا بلوك القبول.
+
+Script content (/_ops/ab_verify.sh):
+
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export TERM=dumb LANG=C
+BASE=${BASE:-https://www.ditonachat.com}
+
+A=$(mktemp); B=$(mktemp)
+
+# A
+curl -fsS -c "$A" -b "$A" -X POST "$BASE/api/age/allow" >/dev/null
+curl -fsS -c "$A" -b "$A" -X POST "$BASE/api/anon/init" >/dev/null
+EA=$(curl -fsS -o /dev/null -w "%{http_code}" -c "$A" -b "$A" -X POST "$BASE/api/rtc/enqueue")
+
+# B
+curl -fsS -c "$B" -b "$B" -X POST "$BASE/api/age/allow" >/dev/null
+curl -fsS -c "$B" -b "$B" -X POST "$BASE/api/anon/init" >/dev/null
+EB=$(curl -fsS -o /dev/null -w "%{http_code}" -c "$B" -b "$B" -X POST "$BASE/api/rtc/enqueue")
+
+# matchmake
+MA_JSON=$(mktemp); MB_JSON=$(mktemp)
+MA=$(curl -fsS -H "content-type: application/json" -o "$MA_JSON" -w "%{http_code}" -c "$A" -b "$A" -X POST "$BASE/api/rtc/matchmake" --data "{}")
+MB=$(curl -fsS -H "content-type: application/json" -o "$MB_JSON" -w "%{http_code}" -c "$B" -b "$B" -X POST "$BASE/api/rtc/matchmake" --data "{}")
+
+FA=$(grep -oE "\"found\":(true|false)" "$MA_JSON" | head -1 | cut -d: -f2)
+FB=$(grep -oE "\"found\":(true|false)" "$MB_JSON" | head -1 | cut -d: -f2)
+PA=$(grep -oE "\"pairId\":\"[^\"]+\"" "$MA_JSON" | head -1 | sed -E 's/.*:"([^"]+)"/\1/')
+PB=$(grep -oE "\"pairId\":\"[^\"]+\"" "$MB_JSON" | head -1 | sed -E 's/.*:"([^"]+)"/\1/')
+PAIR_OK=0; [ -n "$PA" ] && [ "$PA" = "$PB" ] && PAIR_OK=1
+
+# message/allow تحت FFA
+MS=0
+if [ -n "$PA" ]; then
+  MS=$(curl -fsS -H "content-type: application/json" -o /dev/null -w "%{http_code}" -c "$A" -b "$A" -X POST "$BASE/api/message/allow" --data "{\"pairId\":\"$PA\"}")
+fi
+
+printf "%s\n" "-- Acceptance --" \
+"ENQUEUE_A_HTTP=$EA" \
+"ENQUEUE_B_HTTP=$EB" \
+"MATCH_A_HTTP=$MA" \
+"MATCH_B_HTTP=$MB" \
+"MATCH_FOUND_A=$FA" \
+"MATCH_FOUND_B=$FB" \
+"PAIR_ONE_ID=$PAIR_OK" \
+"PAIRID_A=$PA" \
+"PAIRID_B=$PB" \
+"MSG_ALLOW_HTTP=$MS" \
+"-- /Acceptance --"
+
+
+Acceptance:
+
+ENQUEUE_A_HTTP=204, ENQUEUE_B_HTTP=204
+
+MATCH_A_HTTP=200, MATCH_B_HTTP=200
+
+MATCH_FOUND_A=true, MATCH_FOUND_B=true
+
+PAIR_ONE_ID=1 وPAIRID_A==PAIRID_B
+
+تحت FFA: MSG_ALLOW_HTTP=200
+
+Notes:
+
+إن تعذّر اللصق في الطرفية، أنشئ الملف عبر محرر Replit GUI، ثم chmod +x /_ops/ab_verify.sh.
+
+لا تغيّر أي كود في المستودع. تشغيل/تحقق فقط.

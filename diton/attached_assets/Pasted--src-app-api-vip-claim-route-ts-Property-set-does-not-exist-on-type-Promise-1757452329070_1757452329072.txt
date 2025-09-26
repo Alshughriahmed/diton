@@ -1,0 +1,127 @@
+المشكلة (ملف: src/app/api/vip/claim/route.ts):
+الخطأ:
+Property 'set' does not exist on type 'Promise<ReadonlyRequestCookies>'
+السبب: cookies() من next/headers قراءة فقط في Route Handlers. لضبط كوكي يجب استخدام NextResponse.cookies.set(...).
+
+الحل (باتش موحّد):
+
+*** a/src/app/api/vip/claim/route.ts
+--- b/src/app/api/vip/claim/route.ts
+@@
+-import { cookies } from "next/headers";
+-import { NextRequest, NextResponse } from "next/server";
++import { NextRequest, NextResponse } from "next/server";
+ import { sign } from "@/utils/vip-sign"; // موجود لديك (يوقّع email+exp أو يعيد "1")
+ 
+ export const runtime = "nodejs";
+ 
+ export async function GET(req: NextRequest) {
+   const url = new URL(req.url);
+   const email = url.searchParams.get("email") || "";
+   const exp = Number(url.searchParams.get("exp") || 0);
+   if (!email) return NextResponse.json({ error: "missing email" }, { status: 400 });
+ 
+   const value = sign(email, exp);
+-  cookies().set({
+-    name: "vip",
+-    value,
+-    httpOnly: true,
+-    secure: true,
+-    sameSite: "lax",
+-    path: "/",
+-    domain: ".ditonachat.com",
+-    expires: exp ? new Date(exp * 1000) : undefined,
+-  });
+-  return NextResponse.json({ ok: true, source: "claim-cookie" });
++  const res = NextResponse.json({ ok: true, source: "claim-cookie" });
++  const isProd = process.env.NODE_ENV === "production";
++  res.cookies.set({
++    name: "vip",
++    value,
++    httpOnly: true,
++    secure: true,
++    sameSite: "lax",
++    path: "/",
++    // لا تضع domain في المعاينة/المحلي حتى لا تفشل الكوكيز
++    ...(isProd ? { domain: ".ditonachat.com" } : {}),
++    ...(exp ? { expires: new Date(exp * 1000) } : {}),
++  });
++  return res;
+ }
+
+
+ملاحظة: إن لم تكن تستخدم sign(email, exp) واستعملت سابقًا vip=1 فقط، أبقِ value: "1" بدل التوقيع.
+
+نفّذ:
+
+git checkout -b fix/vip-claim-cookies
+git apply -p0 <<'PATCH'
+*** a/src/app/api/vip/claim/route.ts
+--- b/src/app/api/vip/claim/route.ts
+@@
+-import { cookies } from "next/headers";
+-import { NextRequest, NextResponse } from "next/server";
++import { NextRequest, NextResponse } from "next/server";
+ import { sign } from "@/utils/vip-sign"; // موجود لديك (يوقّع email+exp أو يعيد "1")
+ 
+ export const runtime = "nodejs";
+ 
+ export async function GET(req: NextRequest) {
+   const url = new URL(req.url);
+   const email = url.searchParams.get("email") || "";
+   const exp = Number(url.searchParams.get("exp") || 0);
+   if (!email) return NextResponse.json({ error: "missing email" }, { status: 400 });
+ 
+   const value = sign(email, exp);
+-  cookies().set({
+-    name: "vip",
+-    value,
+-    httpOnly: true,
+-    secure: true,
+-    sameSite: "lax",
+-    path: "/",
+-    domain: ".ditonachat.com",
+-    expires: exp ? new Date(exp * 1000) : undefined,
+-  });
+-  return NextResponse.json({ ok: true, source: "claim-cookie" });
++  const res = NextResponse.json({ ok: true, source: "claim-cookie" });
++  const isProd = process.env.NODE_ENV === "production";
++  res.cookies.set({
++    name: "vip",
++    value,
++    httpOnly: true,
++    secure: true,
++    sameSite: "lax",
++    path: "/",
++    ...(isProd ? { domain: ".ditonachat.com" } : {}),
++    ...(exp ? { expires: new Date(exp * 1000) } : {}),
++  });
++  return res;
+ }
+PATCH
+ 
+pnpm build
+git add -A
+git commit -m "fix(api): set VIP cookie via NextResponse.cookies in /api/vip/claim (Next 15 compliant)"
+git push origin HEAD
+
+
+فحص سريع محلي/إنتاج:
+
+# إنتاج
+bash _ops/phase2/check_all.sh https://www.ditonachat.com | sed -n '/-- Acceptance --/,/-- End Acceptance --/p'
+
+# تحقق من الأسعار (يجب 4 وخانة العملة eur)
+curl -s https://www.ditonachat.com/api/stripe/prices
+
+# تحقق من claim يضبط الكوكي (مثال توضيحي؛ عدِّل email/exp حسب مسارك):
+curl -i "https://www.ditonachat.com/api/vip/claim?email=dev%2Bt@ditonachat.com&exp=$(($(date +%s)+604800))"
+
+
+تأكيد للنشر على Vercel:
+
+تأكد أن الـ build يمر بدون Type errors.
+
+ادفع إلى main ليتم النشر التلقائي.
+
+أرسل لقطة مخرجات Acceptance + اكتمال البناء على Vercel.

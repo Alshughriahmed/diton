@@ -1,0 +1,93 @@
+باتش Minimal‑Diff (جاهز للّصق)
+
+الهدف: إصلاح عميل Upstash فقط؛ لا حذف/تعطيل لأي ميزة.
+
+1) تصحيح شكل طلب /pipeline
+
+الملف: src/lib/rtc/upstash.ts
+
+-  const r = await fetch(`${URL}/pipeline`, {
+-    method:"POST",
+-    headers:{ "content-type":"application/json", authorization:`Bearer ${TOKEN}`},
+-    body: JSON.stringify({ commands }),  // ❌
+-    cache:"no-store"
+-  });
++  const r = await fetch(`${URL}/pipeline`, {
++    method:"POST",
++    headers:{ "content-type":"application/json", authorization:`Bearer ${TOKEN}`},
++    body: JSON.stringify(commands),      // ✅ Upstash expects a JSON array
++    cache:"no-store"
++  });
+
+
+مهم: هذا وحده يكفي لإزالة 400/500 الحالية وإعادة /api/rtc/qlen إلى { "mode":"redis", "len": ... } ثم يُسمح للمطابقة بإرجاع 200 { pairId, role } بدل 500. (إن كان ملفك يستخدم مسار مختلف لنفس الدالة، طبّق نفس التعديل هناك أيضاً.)
+
+(اختياري–مفيد أثناء الأعطال)
+إن رغبت، أستطيع تزويدك لاحقًا بباتش “fallback للذاكرة” ليمنع 500 حتى في حال انقطاع Upstash، لكن ليس ضروريًا لمعالجة خطأك الحالي.
+
+أوامر “نسخ‑ولصق” للوكيل (Replit Agent)
+
+تُنفّذ من جذر المشروع. لا تغييرات بصرية. إصلاح واحد + قبول.
+
+# 0) فرع آمن
+git checkout -b fix/upstash-pipeline || git checkout fix/upstash-pipeline || true
+mkdir -p _ops/backup || true
+cp -f src/lib/rtc/upstash.ts _ops/backup/upstash.ts.bak 2>/dev/null || true
+
+# 1) تطبيق الباتش (إن فشل apply بسبب اختلافات طفيفة، بدّله بالسطر sed)
+applypatch() {
+cat > /tmp/patch_upstash.diff <<'PATCH'
+*** Begin Patch
+*** Update File: src/lib/rtc/upstash.ts
+@@
+-  const r = await fetch(`${URL}/pipeline`, {
+-    method:"POST",
+-    headers:{ "content-type":"application/json", authorization:`Bearer ${TOKEN}`},
+-    body: JSON.stringify({ commands }),
+-    cache:"no-store"
+-  });
++  const r = await fetch(`${URL}/pipeline`, {
++    method:"POST",
++    headers:{ "content-type":"application/json", authorization:`Bearer ${TOKEN}`},
++    body: JSON.stringify(commands),
++    cache:"no-store"
++  });
+*** End Patch
+PATCH
+git apply --index --reject --whitespace=fix /tmp/patch_upstash.diff
+}
+applypatch || sed -i 's/JSON.stringify({ commands })/JSON.stringify(commands)/' src/lib/rtc/upstash.ts
+git add src/lib/rtc/upstash.ts
+git commit -m "fix(upstash): pipeline body must be JSON array"
+
+# 2) بناء
+pnpm install
+pnpm build
+
+# 3) نشر (حسب طريقتك المعتادة) ثم تشغيل القبول على الإنتاج:
+bash _ops/acc_rtc.sh https://www.ditonachat.com
+
+
+قبول النجاح (Expected):
+
+curl -s https://www.ditonachat.com/api/rtc/qlen → {"mode":"redis","len":...} بدون redis-fail/parse pipeline.
+
+A enqueue: 204 وB enqueue: 204.
+
+A matchmake: 200 { pairId, role } وB matchmake: 200 بنفس pairId مع دور معاكس.
+
+offer/answer POST = 204 (أو 409 exists عند تكرار الاختبار) وGET يعيد { "sdp": "<stringified JSON>" }.
+
+تبادل ICE GET يعيد مصفوفة مرشحين.
+
+بصريًا: من جهازين على /chat الضغط Next يوصل فيديو/صوت خلال ≤ 10 ثوانٍ.
+
+(سكربت القبول الذي بحوزتك يطبع هذه النتائج؛ هو نفس الملف التالي الذي أشرتَ إليه، وهو صالح كما هو.)
+
+لماذا أؤكد أن هذا هو السبب الجذري؟
+
+لقطاتك من DevTools تُظهر 500 متتالية على /api/rtc/matchmake مع qlen: { "mode":"redis-fail" }—وهذا هو مآل أي خطأ في /pipeline.
+
+مخرجات القبول لديك على السيرفر تُظهر حرفياً رسالة Upstash: ERR failed to parse pipeline request، وهي النتيجة المباشرة حين نرسل { "commands":[...] } بدلاً من [[...],[...]].
+
+الأرشيف الذي زوّدته لي يحتوي السطر الخاطئ فعليًا في src/lib/rtc/upstash.ts؛ إذن التصحيح لم يصل بعد إلى البايناري الذي يخدم الإنتاج.

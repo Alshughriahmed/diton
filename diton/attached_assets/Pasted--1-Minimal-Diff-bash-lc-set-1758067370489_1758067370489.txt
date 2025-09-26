@@ -1,0 +1,96 @@
+دفعة 1: تصحيحات Minimal-Diff
+
+نفّذها الوكيل كما هي. تعمل نسخ احتياطي + باتشات دقيقة.
+
+bash -lc '
+set -Eeuo pipefail
+TS="$(date -u +%Y%m%d-%H%M%S)"; BKP="_ops/backups/prev_vip_${TS}"; REP="_ops/reports/prev_vip_patch_${TS}.log"
+mkdir -p "$BKP" _ops/reports
+
+# 0) نسخ احتياطي
+cp -a src/lib/rtc/mm.ts "$BKP/mm.ts" 2>/dev/null || true
+cp -a src/app/api/match/next/route.ts "$BKP/route.ts" 2>/dev/null || true
+cp -a src/lib/rtc/auth.ts "$BKP/auth.ts" 2>/dev/null || true
+
+# 1) mm.ts — كتابة rtc:last قبل كل return نجاح (إن لم تكن موجودة)
+perl -0777 -i -pe '"'"'
+  if (index($_,"rtc:last:")<0) {
+    s/return \{status:200 as const, body:\{pairId, role:"caller" as const, peerAnonId:cand\}\};/
+      await Promise.all([\n        setPx(`rtc:last:${self}`, cand, 90_000),\n        setPx(`rtc:last:${cand}`, self, 90_000),\n      ]);\n      return {status:200 as const, body:{pairId, role:"caller" as const, peerAnonId:cand}};/g;
+  }
+'"'"' src/lib/rtc/mm.ts
+
+# 2) route.ts — عند prev اكتب prev-wish/prev-for بالـbackticks مع فحص VIP والكوكي
+grep -q "rtc:prev-for" src/app/api/match/next/route.ts || perl -0777 -i -pe '"'"'
+  s/const prev = \(req.headers.get\("x-ditona-prev"\) === "1"\);\s*if \(prev\) \{/
+    const prev = (req.headers.get("x-ditona-prev") === "1");\n  if (prev) {\n    const isVip = await requireVip();\n    if (!isVip) { return new Response("prev requires vip", { status: 403 }); }\n    const c = cookies(); const me = c.get("anon")?.value || c.get("ditona_anon")?.value || "";\n    if (me) { try { const last:any = await (await import("../../../../lib/rtc/upstash")).get(`rtc:last:${me}`);\n      const peer = String(last||""); if (peer) { const { setPx } = await import("../../../../lib/rtc/upstash");\n        const ttl = 15000 + Math.floor(Math.random()*2000) - 1000;\n        await Promise.all([ setPx(`rtc:prev-wish:${me}`, peer, ttl), setPx(`rtc:prev-for:${peer}`, me, ttl) ]);\n      } } catch {}\n    }/s
+'"'"' src/app/api/match/next/route.ts
+
+# 3) auth.ts — تأكيد استخراج المعرّف من x-anon أو الكوكي
+if ! grep -q "x-anon" src/lib/rtc/auth.ts; then
+  perl -0777 -i -pe '"'"'
+    s/export function extractAnonId\(([^)]*)\)\s*:\s*string\s*\{[^}]*\}/
+    export function extractAnonId(req:any): string {\n  try { const h = req.headers?.get ? req.headers.get("x-anon") : null; if (h) return String(h);\n    const c = (typeof cookies==="function") ? cookies() : null; const v = c?.get("anon")?.value || c?.get("ditona_anon")?.value;\n    return v ? String(v) : ""; } catch { return ""; }\n  }/s
+  '"'"' src/lib/rtc/auth.ts 2>/dev/null || true
+fi
+
+# 4) تصحيح أي مفاتيح بصيغة اقتباس مفرد → backticks
+perl -0777 -i -pe '"'"'s/'"(rtc:(?:prev-wish|prev-for|last):\$\{[^}]+\})"'"/"`$1`"/g'"'"' \
+  src/lib/rtc/mm.ts src/app/api/match/next/route.ts 2>/dev/null || true
+
+# 5) ملخص diff
+echo "=== DIFF mm.ts ===" | tee "$REP"; diff -u "$BKP/mm.ts" src/lib/rtc/mm.ts 2>/dev/null | sed -n "1,160p" | tee -a "$REP" || true
+echo "=== DIFF route.ts ===" | tee -a "$REP"; diff -u "$BKP/route.ts" src/app/api/match/next/route.ts 2>/dev/null | sed -n "1,160p" | tee -a "$REP" || true
+echo "=== DIFF auth.ts ==="  | tee -a "$REP"; diff -u "$BKP/auth.ts" src/lib/rtc/auth.ts 2>/dev/null | sed -n "1,120p" | tee -a "$REP" || true
+echo "REPORT=$REP"
+'
+
+دفعة 2: فحص قبول نهائي بجلسات حقيقية
+
+يشغّل الخدمة إن لزم ويُخرج القيم الخمسة. لا يغيّر ملفات.
+
+bash -lc '
+set -Eeuo pipefail
+PORT="${PORT:-3000}"; BASE="http://127.0.0.1:$PORT"
+URL="${UPSTASH_REDIS_REST_URL}/pipeline"; AUTH="Authorization: Bearer ${UPSTASH_REDIS_REST_TOKEN}"
+
+[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/health" || echo 000)" = 200 ] || { nohup pnpm dev -p "$PORT" -H 0.0.0.0 >_ops/logs/dev.log 2>&1 & sleep 8; }
+
+get_cookie(){ curl -sS -D - -o /dev/null "$BASE/api/anon/init" | awk "/^[Ss]et-[Cc]ookie:/{sub(/^Set-Cookie:[[:space:]]*/,\"\",\$0); print \$0}" | sed -nE "s/^((ditona_anon|anon)=[^;]+).*/\1/p" | head -n1; }
+CKA="$(get_cookie)"; CKB="$(get_cookie)"
+A="$(printf "%s" "$CKA" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+B="$(printf "%s" "$CKB" | sed -nE "s/^(ditona_anon|anon)=([^;]+)/\2/p")"
+
+now="$(date +%s%3N)"; GA=male; GB=female; CA=DE; CB=DE
+seed(){ curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "$1" >/dev/null; }
+seed "[
+ [\"HSET\",\"rtc:attrs:${A}\",\"gender\",\"${GA}\",\"country\",\"${CA}\"],[\"EXPIRE\",\"rtc:attrs:${A}\",\"120\"],
+ [\"HSET\",\"rtc:filters:${A}\",\"genders\",\"all\",\"countries\",\"ALL\"],[\"EXPIRE\",\"rtc:filters:${A}\",\"120\"],
+ [\"ZADD\",\"rtc:q\",\"${now}\",\"${A}\"],[\"ZADD\",\"rtc:q:gender:${GA}\",\"${now}\",\"${A}\"],[\"ZADD\",\"rtc:q:country:${CA}\",\"${now}\",\"${A}\"],
+ [\"HSET\",\"rtc:attrs:${B}\",\"gender\",\"${GB}\",\"country\",\"${CB}\"],[\"EXPIRE\",\"rtc:attrs:${B}\",\"120\"],
+ [\"HSET\",\"rtc:filters:${B}\",\"genders\",\"all\",\"countries\",\"ALL\"],[\"EXPIRE\",\"rtc:filters:${B}\",\"120\"],
+ [\"ZADD\",\"rtc:q\",\"${now}\",\"${B}\"],[\"ZADD\",\"rtc:q:gender:${GB}\",\"${now}\",\"${B}\"],[\"ZADD\",\"rtc:q:country:${CB}\",\"${now}\",\"${B}\"]
+]"
+
+MM1="$(curl -s -o /tmp/mm1.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKA" -H "content-type: application/json" -d "{}" || echo 000)"
+PAIR1="$(sed -nE "s/.*\"pairId\":\"([^\"]+)\".*/\1/p" /tmp/mm1.json)"
+
+seed "[ [\"DEL\",\"rtc:pair:map:${A}\"],[\"DEL\",\"rtc:pair:map:${B}\"],
+        [\"ZADD\",\"rtc:q\",\"$((now+1))\",\"${B}\"],[\"ZADD\",\"rtc:q:gender:${GB}\",\"$((now+1))\",\"${B}\"],[\"ZADD\",\"rtc:q:country:${CB}\",\"$((now+1))\",\"${B}\"] ]"
+
+P200="$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $CKA; vip=1" -H "x-ditona-prev: 1" "$BASE/api/match/next" || echo 000)"
+EXPREV="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:prev-wish:${A}\"],[\"EXISTS\",\"rtc:prev-for:${B}\"]]")"
+
+MM2="$(curl -s -o /tmp/mm2.json -w "%{http_code}" -X POST "$BASE/api/rtc/matchmake" -H "Cookie: $CKB" -H "content-type: application/json" -d "{}" || echo 000)"
+ROLE2="$(sed -nE "s/.*\"role\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"; PEER2="$(sed -nE "s/.*\"peerAnonId\":\"([^\"]+)\".*/\1/p" /tmp/mm2.json)"
+EXLAST="$(curl -sS -X POST "$URL" -H "$AUTH" -H "content-type: application/json" -d "[[\"EXISTS\",\"rtc:last:${A}\"],[\"EXISTS\",\"rtc:last:${B}\"]]")"
+
+ok_prev="$(echo "$EXPREV" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n")"
+ok_last="$(echo "$EXLAST" | grep -o "\"result\":[01]" | grep -o "[01]" | tr -d "\n")"
+echo "-- Acceptance --"
+echo "INITIAL_PAIR_OK=$([ -n "$PAIR1" ] && [ "$MM1" = 200 ] && echo 1 || echo 0)"
+echo "LAST_KEYS_SET=$([ "$ok_last" = 11 ] && echo 1 || echo 0)"
+echo "PREV_KEYS_WRITTEN=$([ "$ok_prev" = 11 ] && echo 1 || echo 0)"
+echo "RECONNECT_OK=$([ "$MM2" = 200 ] && [ "$ROLE2" = callee ] && [ "$PEER2" = "$A" ] && echo 1 || echo 0)"
+echo "VIP_PREV_ENFORCED=$([ "$P200" = 200 ] && echo 1 || echo 0)"
+'

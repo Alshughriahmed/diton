@@ -1,0 +1,94 @@
+Task: Fix build + redeploy + verify RTC on production (Minimal-Diff)
+
+Objectives:
+
+إصلاح خطأ Webpack: إزالة تكرار تعريف dynamic في مساري RTC.
+
+فرض تشغيل Node.js وعدم التخزين على المسارين.
+
+تأكيد وجود إصلاح verifySigned، ثم نشر على Vercel، ثم اختبار A/B على الإنتاج.
+
+تقرير واحد بالمفاتيح.
+
+Constraints:
+
+Minimal-Diff. لا تغييرات على VIP.
+
+لا أدوات تفاعلية، مهلات ثابتة للـcurl.
+
+تقرير واحد: _ops/reports/agent_front_rtc_<UTC>.log.
+
+Edits to apply:
+
+src/app/api/rtc/enqueue/route.ts
+ضع هذه التعريفات مرة واحدة فقط في أعلى الملف، واحذف أي مكرر لاحقًا:
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+src/app/api/rtc/matchmake/route.ts
+نفس الشيء، واحذف أي تكرار:
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
+تحقق من إصلاح التوقيع:
+
+في src/lib/rtc/auth.ts يجب أن تكون verifySigned بالشكل الذي يعيد body عند فشل base64:
+
+try { return Buffer.from(body, "base64url").toString("utf8"); }
+catch { return body; }
+
+
+Build + Deploy:
+
+شغّل pnpm -s build. إن نجح، ادفع للفرع الحالي وادمجه إلى main.
+
+نفّذ نشر Vercel مع Clear build cache.
+
+متغيرات الإنتاج يجب أن تحتوي ANON_SIGNING_SECRET, FREE_FOR_ALL=1, NEXT_PUBLIC_FREE_FOR_ALL=1.
+
+Production A/B check (www.ditonachat.com
+):
+
+جلستان مستقلتان بكعكتين مختلفتين.
+
+# A
+curl -sS -i https://www.ditonachat.com/api/rtc/env
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt https://www.ditonachat.com/api/age/allow
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt https://www.ditonachat.com/api/rtc/init
+curl -sS -i -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"XX","filterGenders":"all","filterCountries":"ALL"}' -c A.txt -b A.txt https://www.ditonachat.com/api/rtc/enqueue
+# B
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt https://www.ditonachat.com/api/age/allow
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt https://www.ditonachat.com/api/rtc/init
+curl -sS -i -X POST -H 'content-type: application/json' -d '{"gender":"u","country":"YY","filterGenders":"all","filterCountries":"ALL"}' -c B.txt -b B.txt https://www.ditonachat.com/api/rtc/enqueue
+# matchmake
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c A.txt -b A.txt https://www.ditonachat.com/api/rtc/matchmake
+curl -sS -i -X POST -H 'content-type: application/json' -d '{}' -c B.txt -b B.txt https://www.ditonachat.com/api/rtc/matchmake
+
+
+Acceptance keys to write into the report:
+
+ENV_OK, AGE_OK, ANON_OK, ENQUEUE_OK, MATCH_OK, MSG_ALLOW_OK
+Criteria: enqueue=204 لكل من A وB. matchmake=200 مع found=true وpairId واحد وrole مختلف. message/allow=200 تحت FFA.
+
+DC_OPEN_OK, CLIENT_ENV_REMOVED
+تحقق أن حدث dc-open يُبث من rtcFlow.ts وأنه لا يوجد استعمال عميل لـprocess.env.NEXT_PUBLIC_FREE_FOR_ALL.
+
+Output:
+
+اكتب تقرير _ops/reports/agent_front_rtc_<UTC>.log يتضمن:
+
+الأكواد لكل خطوة.
+
+مقتطفَي JSON من matchmake للطرفين يُظهران pairId وrole.
+
+مواقع الأسطر التي عُدِّلت في الملفين لضبط runtime/dynamic.
+
+If build still fails:
+
+اطبع أول 60 سطرًا من أخطاء Webpack وأسماء الملفات المتسببة، ثم أصلح التكرار فقط.

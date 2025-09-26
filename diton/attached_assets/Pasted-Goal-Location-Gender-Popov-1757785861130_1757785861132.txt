@@ -1,0 +1,459 @@
+Goal
+
+تطبيق مواصفات الواجهة النهائية كما اتُّفق عليها:
+
+🌍 Location و ⚧ Gender أعلى-يمين بداخل Popovers خفيفة.
+Location: عمودان + أعلام + بحث + max-h-[60vh] وتمرير. أول عنصر بلد المستخدم ثم All. يظهر عدّاد مختارات.
+
+شريط الأدوات السفلي ثابت دائمًا بأسفل الشاشة. ترتيب من اليمين لليسار: 💬, ❤, 🔊, 🎤, ⏸️, ⚙️, 🎭, 🚩.
+
+⏭️ يمين فوق 💬/❤ و**⏮️** يسار فوق 🎭/🚩. أيقونات كبيرة بلا صناديق. ثابتان. وعند فتح شريط الرسائل يُغطَّيان بالكامل.
+
+شريط الرسائل يفتح بزر 💬 فقط. بعرض كامل. يمينًا زر إرسال ➤ ويسارًا زر إيموجي 🙂 مع درج أفقي داخل نفس الحاوية. يتعامل مع لوحة المفاتيح عبر visualViewport.
+
+لا رسائل تلقائية.
+
+HUD رسائل: آخر 3 سطور نصية بلا صناديق، الوارد • والصادر ▲، نسخ بالضغط المطوّل.
+
+تجميل الوجه مفعّل على المحلي بمستويات 0–3 عبر فلاتر خفيفة.
+
+طبقات ثابتة: toolbar z-60، messaging z-65، prev/next z-70.
+
+Do
+
+نفّذ الخطوات التالية كدفعة واحدة. أي ملف مذكور “استبدال كامل” يُستبدل بمحتوى الكود المرفق.
+
+1) FilterBar: popovers خفيفة
+
+استبدال كامل src/app/chat/components/FilterBar.tsx:
+
+"use client";
+import { useEffect, useMemo, useState } from "react";
+import { emit } from "@/utils/events";
+import regionsData from "@/lib/regions"; // يُتوقّع export default [{code,name},...]
+type GenderKey = "everyone"|"female"|"male"|"couples"|"lgbt";
+
+function flagOf(cc:string){
+  if(!cc) return "🌍";
+  return cc.replace(/./g,c=>String.fromCodePoint(0x1f1e6+(c.toUpperCase().charCodeAt(0)-65)));
+}
+
+export default function FilterBar(){
+  const [openLoc,setOpenLoc]=useState(false);
+  const [openGen,setOpenGen]=useState(false);
+
+  const [userCC,setUserCC]=useState<string|undefined>(undefined);
+  const [countries,setCountries]=useState<string[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:countries")||"[]"));
+  const [genders,setGenders]=useState<GenderKey[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:genders")||'["everyone"]'));
+
+  useEffect(()=>{ // محاولة قراءة بلد المستخدم إن وُجد
+    try{
+      const g = JSON.parse(localStorage.getItem("ditona:geo")||"{}");
+      if(g?.countryCode) setUserCC(g.countryCode);
+    }catch{}
+  },[]);
+  useEffect(()=>{ localStorage.setItem("ditona:filters:countries",JSON.stringify(countries)); },[countries]);
+  useEffect(()=>{ localStorage.setItem("ditona:filters:genders",JSON.stringify(genders)); },[genders]);
+
+  const regions = useMemo(() => {
+    const base = (regionsData || []) as Array<{code:string;name:string}>;
+    const rest = base.filter(r => r.code !== userCC);
+    const all = [
+      ...(userCC ? base.filter(r=>r.code===userCC) : []),
+      {code:"ALL", name:"All Countries"},
+      ...rest.sort((a,b)=>a.name.localeCompare(b.name))
+    ];
+    return all;
+  },[userCC]);
+
+  const [q,setQ]=useState("");
+  const view = regions.filter(r=>r.name.toLowerCase().includes(q.toLowerCase()) || r.code.toLowerCase().includes(q.toLowerCase()));
+
+  const badgeCnt = countries.length>0 && !countries.includes("ALL") ? countries.length : 0;
+
+  const toggleCountry=(cc:string)=>{
+    if(cc==="ALL"){ setCountries(["ALL"]); return; }
+    setCountries(prev=>{
+      const base = (prev.includes("ALL") ? [] : prev).slice();
+      const i = base.indexOf(cc);
+      if(i>=0){ base.splice(i,1); return base; }
+      if(base.length>=15) return base; // VIP cap محفوظ لاحقًا
+      base.push(cc); return base;
+    });
+  };
+
+  const toggleGender=(g:GenderKey)=>{
+    if(g==="everyone"){ setGenders(["everyone"]); return; }
+    setGenders(prev=>{
+      let base=prev.includes("everyone")?[]:[...prev];
+      const i=base.indexOf(g);
+      if(i>=0){ base.splice(i,1); if(base.length===0) base=["everyone"]; return base; }
+      if(base.length>=2) return base;
+      base.push(g); return base;
+    });
+  };
+
+  return (
+    <div className="absolute top-1 right-1 z-[80] flex gap-2 select-none">
+      {/* Location button */}
+      <div className="relative">
+        <button data-ui="country-button"
+          onClick={()=>{setOpenLoc(v=>!v); setOpenGen(false);}}
+          className="h-9 px-3 rounded-full bg-black/40 text-white border border-white/15 backdrop-blur flex items-center gap-2">
+          <span>🌍</span><span>Location</span>
+          {badgeCnt>0 && <span className="ml-1 text-xs rounded-full bg-white/20 px-2 py-0.5">{badgeCnt}</span>}
+        </button>
+        {openLoc && (
+          <div role="dialog" aria-label="Location"
+               className="absolute mt-2 right-0 w-[min(92vw,640px)] max-h-[60vh] overflow-auto rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur p-3 shadow-xl z-[90]"
+               onKeyDown={(e)=>{ if(e.key==="Escape") setOpenLoc(false); }}>
+            <div className="flex items-center gap-2 mb-3">
+              <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search country"
+                     className="w-full h-10 px-3 rounded-xl bg-zinc-800/70 text-white outline-none border border-white/10"/>
+              <button onClick={()=>setOpenLoc(false)}
+                      className="h-10 px-4 rounded-xl bg-white/10 text-white">Done</button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {view.map(r=>{
+                const active = countries.includes("ALL") ? r.code==="ALL" : countries.includes(r.code);
+                return (
+                  <button key={r.code}
+                          onClick={()=>toggleCountry(r.code)}
+                          className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left border ${active?'bg-indigo-600/20 border-indigo-400/40':'bg-white/5 border-white/10'} hover:bg-white/10`}>
+                    <div className="flex items-center gap-3">
+                      <span className="text-lg">{r.code==="ALL"?"🌐":flagOf(r.code)}</span>
+                      <span className="text-white">{r.name}</span>
+                    </div>
+                    <span className="text-xs text-white/60">{r.code}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Gender button */}
+      <div className="relative">
+        <button data-ui="gender-button"
+          onClick={()=>{setOpenGen(v=>!v); setOpenLoc(false);}}
+          className="h-9 px-3 rounded-full bg-black/40 text-white border border-white/15 backdrop-blur flex items-center gap-2">
+          <span>⚧</span><span>Gender</span>
+        </button>
+        {openGen && (
+          <div role="dialog" aria-label="Gender"
+               className="absolute mt-2 right-0 w-[min(92vw,360px)] max-h-[60vh] overflow-auto rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur p-3 shadow-xl z-[90]"
+               onKeyDown={(e)=>{ if(e.key==="Escape") setOpenGen(false); }}>
+            {([
+              {k:"everyone",label:"Everyone",icon:"👥"},
+              {k:"female",label:"Female",icon:"♀️"},
+              {k:"male",label:"Male",icon:"♂️"},
+              {k:"couples",label:"Couples",icon:"👫"},
+              {k:"lgbt",label:"LGBT",icon:"🏳️‍🌈"},
+            ] as Array<{k:GenderKey;label:string;icon:string}>).map(it=>{
+              const active = genders.includes(it.k as GenderKey);
+              return (
+                <button key={it.k}
+                        onClick={()=>toggleGender(it.k as GenderKey)}
+                        className={`w-full flex items-center justify-between rounded-xl px-3 py-3 mb-2 border ${active?'bg-blue-600/25 border-blue-400/40':'bg-white/5 border-white/10'} hover:bg-white/10`}>
+                  <span className="flex items-center gap-3">
+                    <span className="text-lg">{it.icon}</span>
+                    <span className="text-white">{it.label}</span>
+                  </span>
+                  {active && <span className="text-xs text-white/70">Selected</span>}
+                </button>
+              );
+            })}
+            <div className="text-xs text-white/50 mt-1">VIP users can select up to two genders.</div>
+            <div className="mt-3 flex justify-end">
+              <button onClick={()=>setOpenGen(false)} className="h-10 px-4 rounded-xl bg-white/10 text-white">Done</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+ملاحظة: نتوقع @/lib/regions موجودًا (كما هو بالمشروع). إن كان اسمه مختلفًا، أعد التوجيه إلى المصدر الفعلي لقائمة الدول.
+
+2) ChatToolbar: تثبيت الشريط، زرّا ⏮️/⏭️ بلا صناديق
+
+استبدال كامل src/app/chat/components/ChatToolbar.tsx:
+
+"use client";
+import { useState, useEffect } from "react";
+import { emit } from "@/utils/events";
+
+export default function ChatToolbar(){
+  const [msgOpen,setMsgOpen]=useState(false);
+  const [micOn,setMicOn]=useState(true);
+  const [paused,setPaused]=useState(false);
+
+  useEffect(()=>{ // sync with messaging bar
+    const onOpen = ()=>setMsgOpen(true);
+    const onClose= ()=>setMsgOpen(false);
+    window.addEventListener("ui:openMessaging", onOpen as any);
+    window.addEventListener("ui:closeMessaging", onClose as any);
+    return ()=>{ window.removeEventListener("ui:openMessaging",onOpen as any); window.removeEventListener("ui:closeMessaging",onClose as any); };
+  },[]);
+
+  return (
+    <>
+      {/* Prev / Next icons large, no boxes */}
+      <button data-ui="btn-prev" onClick={()=>emit("ui:prev")}
+        className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[70] text-3xl sm:text-4xl select-none">⏮️</button>
+      <button data-ui="btn-next" onClick={()=>emit("ui:next")}
+        className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[70] text-3xl sm:text-4xl select-none">⏭️</button>
+
+      {/* Bottom toolbar fixed forever */}
+      <section className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 z-[60]"
+               style={{bottom: "calc(env(safe-area-inset-bottom) + 8px)"}}>
+        <div className="relative flex flex-row-reverse items-center gap-2 sm:gap-3 justify-center">
+          {/* 💬 messages */}
+          <button data-ui="btn-messages"
+            onClick={()=>{ const ev = msgOpen?"ui:closeMessaging":"ui:openMessaging"; setMsgOpen(!msgOpen); emit(ev); }}
+            aria-pressed={msgOpen}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg border text-white ${msgOpen?'bg-purple-600/40 border-purple-400/60':'bg-black/20 border-white/20 hover:bg-white/10'}`}>💬</button>
+
+          {/* ❤ like */}
+          <button data-ui="btn-like" onClick={()=>emit("ui:like",{isLiked:true})}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40">❤</button>
+
+          {/* 🔊 remote audio */}
+          <button data-ui="btn-remote-audio" onClick={()=>emit("ui:toggleRemoteAudio")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10">🔊</button>
+
+          {/* 🎤 mic */}
+          <button data-ui="btn-mic"
+            onClick={()=>{ setMicOn(v=>!v); emit("ui:toggleMic"); }}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${micOn?'bg-green-600/30 border-green-400/40':'bg-red-600/30 border-red-400/40'}`}>{micOn?'🎤':'🔇'}</button>
+
+          {/* ⏸️ pause */}
+          <button data-ui="btn-pause"
+            onClick={()=>{ setPaused(v=>!v); emit("ui:togglePlay"); }}
+            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${paused?'bg-orange-600/30 border-orange-400/40':'bg-green-600/30 border-green-400/40'}`}>{paused?'▶️':'⏸️'}</button>
+
+          {/* ⚙️ settings */}
+          <button data-ui="btn-settings" onClick={()=>{ try{window.location.href='/settings'}catch{} }}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10">⚙️</button>
+
+          {/* 🎭 masks */}
+          <button data-ui="btn-masks" onClick={()=>emit("ui:toggleMasks")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10">🎭</button>
+
+          {/* 🚩 report */}
+          <button data-ui="btn-report" onClick={()=>emit("ui:report")}
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-red-600/30 text-white border border-red-400/40 hover:bg-red-500/40">🚩</button>
+        </div>
+      </section>
+    </>
+  );
+}
+
+3) ChatMessagingBar: بعرض كامل، مع الإيموجي داخليًا
+
+استبدال كامل src/app/chat/components/ChatMessagingBar.tsx:
+
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { emit } from "@/utils/events";
+
+const EMOJIS = ["😊","😀","😘","🤩","☺️","😋","🤪","😜","🤗","🤔","🫣","😏","😴","🤤","💋","❤️","💔","💯","💥","💫","💬","💦","👍","🫦","👄","👅","🧖‍♀️","🔥","🥂","🍌","🌹","🩱","👙","🌨","🛀","🏞"];
+
+export default function ChatMessagingBar(){
+  const [open,setOpen]=useState(false);
+  const [text,setText]=useState("");
+  const [showEmoji,setShowEmoji]=useState(false);
+  const barRef = useRef<HTMLDivElement>(null);
+
+  // open/close by toolbar
+  useEffect(()=>{
+    const onOpen = ()=>setOpen(true);
+    const onClose= ()=>{ setOpen(false); setShowEmoji(false); };
+    window.addEventListener("ui:openMessaging", onOpen as any);
+    window.addEventListener("ui:closeMessaging", onClose as any);
+    return ()=>{ window.removeEventListener("ui:openMessaging",onOpen as any); window.removeEventListener("ui:closeMessaging",onClose as any); };
+  },[]);
+
+  // keep above keyboard using visualViewport
+  useEffect(()=>{
+    const vv:any = (window as any).visualViewport;
+    if(!vv) return;
+    const handler=()=>{
+      if(!barRef.current) return;
+      const bottom = Math.max(8, (vv.height < window.innerHeight ? (window.innerHeight - vv.height + 8) : 8));
+      barRef.current.style.bottom = `calc(env(safe-area-inset-bottom) + ${bottom}px)`;
+    };
+    vv.addEventListener("resize", handler);
+    vv.addEventListener("scroll", handler);
+    handler();
+    return ()=>{ vv.removeEventListener("resize", handler); vv.removeEventListener("scroll", handler); };
+  },[]);
+
+  const send = ()=>{
+    const t = text.trim();
+    if(!t) return;
+    emit("ui:sendMessage",{text:t});
+    // HUD hook: يبقى نصيًا بلا صناديق
+    window.dispatchEvent(new CustomEvent("ditona:chat:sent",{detail:{text:t, ts:Date.now()}}));
+    setText("");
+  };
+
+  if(!open) return null;
+
+  return (
+    <div ref={barRef} data-ui="messaging-bar"
+         className="fixed left-0 right-0 z-[65] pointer-events-auto"
+         style={{bottom:"calc(env(safe-area-inset-bottom)+8px)"}}>
+      <div className="relative mx-2 sm:mx-4 rounded-2xl bg-black/45 backdrop-blur border border-white/15 px-3 py-2">
+        {/* emoji drawer inside container */}
+        {showEmoji && (
+          <div className="absolute -top-14 left-0 right-0 mx-auto max-w-[min(92vw,640px)]">
+            <div className="rounded-2xl bg-black/60 backdrop-blur border border-white/10 px-2 py-1 overflow-x-auto whitespace-nowrap">
+              {EMOJIS.map(e=>(
+                <button key={e} className="px-1.5 py-1 text-xl" onClick={()=>setText(t=>t+e)}>{e}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          {/* emoji toggle left */}
+          <button aria-label="Emoji" onClick={()=>setShowEmoji(v=>!v)}
+                  className="w-10 h-10 rounded-xl bg-white/10">🙂</button>
+
+          {/* input */}
+          <input
+            value={text}
+            onChange={e=>setText(e.target.value)}
+            onFocus={()=>setShowEmoji(false)}
+            placeholder="Type your message here ..."
+            className="flex-1 h-10 rounded-xl bg-zinc-800/70 text-white px-3 outline-none border border-white/10"/>
+
+          {/* send on right */}
+          <button aria-label="Send" onClick={send}
+                  className="w-12 h-10 rounded-xl bg-emerald-600 text-white">➤</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+4) HUD لآخر 3 رسائل ومنع الرسائل التلقائية
+
+أضِف src/app/chat/components/MessageHud.tsx:
+
+"use client";
+import { useEffect, useState } from "react";
+
+type Line = { text:string; ts:number; dir:"out"|"in" };
+
+export default function MessageHud(){
+  const [lines,setLines]=useState<Line[]>([]);
+  useEffect(()=>{
+    const add = (dir:"out"|"in") => (e:CustomEvent)=> setLines(l=>{
+      const nxt=[...l,{text:(e.detail?.text||""), ts:Date.now(), dir}].slice(-3);
+      return nxt;
+    });
+    const sent = add("out");
+    const recv = add("in");
+    window.addEventListener("ditona:chat:sent", sent as any);
+    window.addEventListener("ditona:chat:recv", recv as any);
+    return ()=>{ window.removeEventListener("ditona:chat:sent",sent as any); window.removeEventListener("ditona:chat:recv",recv as any); };
+  },[]);
+  if(lines.length===0) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55] space-y-1">
+      {lines.map((l,i)=>(
+        <div key={i}
+             onPointerDown={(e)=>{ e.preventDefault(); navigator.clipboard?.writeText(l.text).catch(()=>{}); }}
+             className="text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm">
+          <span className={l.dir==="in"?"text-white/80":"text-emerald-300"}>{l.dir==="in"?"• ":"▲ "}</span>
+          {l.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+عدّل src/app/chat/ChatClient.tsx: أدرج المكونات وتأكد من عدم استيراد أي “MessageSystem/seed”.
+استبدل الكتلة التي تُركِّب الواجهة السفلية بحيث تشمل:
+
+import FilterBar from "@/app/chat/components/FilterBar";
+import ChatToolbar from "@/app/chat/components/ChatToolbar";
+import ChatMessagingBar from "@/app/chat/components/ChatMessagingBar";
+import MessageHud from "@/app/chat/components/MessageHud";
+...
+<div className="relative w-full h-full">
+  {/* أعلى يمين */}
+  <FilterBar />
+  {/* HUD آخر 3 رسائل */}
+  <MessageHud />
+  {/* ... بقية الفيديو/العناصر ... */}
+  {/* أدوات أسفل + شريط الرسائل */}
+  <ChatToolbar />
+  <ChatMessagingBar />
+</div>
+
+
+وأزل أي مكوّن يولّد رسائل تلقائية.
+
+إن وُجد زر “beauty” قائم، اربطه بإطلاق window.dispatchEvent(new CustomEvent("ditona:beauty",{detail:{level}})). طبقة التأثير تُضاف لاحقًا دون كسر.
+
+5) (اختياري) تفعيل “تجميل الوجه” البسيط
+
+أضِف src/app/chat/videoBeauty.ts (غير مدموج الآن إلا إن وُجد زر يطلق الحدث):
+
+"use client";
+export function mountBeauty(el: HTMLElement){
+  let level=0;
+  const apply=()=>{
+    const v = ["","contrast(1.05) brightness(1.05) saturate(1.05)",
+      "contrast(1.1) brightness(1.08) saturate(1.1) blur(0.2px)",
+      "contrast(1.15) brightness(1.1) saturate(1.15) blur(0.35px)"].at(level) as string;
+    el.style.filter = v||"";
+  };
+  apply();
+  const onEvt = (e:any)=>{ level = Math.max(0, Math.min(3, e?.detail?.level ?? 1)); apply(); };
+  window.addEventListener("ditona:beauty", onEvt as any);
+  return ()=> window.removeEventListener("ditona:beauty", onEvt as any);
+}
+
+6) إخفاء Queue badge إن عاد ظهوره
+
+تأكد في ChatClient.tsx من عدم تركيب أي مكوّن Queue أعلى-يمين. إن وُجد، علّق تركيبه.
+
+7) Build & Tests
+
+نفّذ:
+
+git checkout -b feat/ui-bottom-toolbar-final
+pnpm -s build
+
+# smoke UI markers
+grep -Rns 'data-ui="country-button"' src/app/chat/components/FilterBar.tsx
+grep -Rns 'data-ui="gender-button"'  src/app/chat/components/FilterBar.tsx
+grep -Rns 'data-ui="btn-next"'       src/app/chat/components/ChatToolbar.tsx
+grep -Rns 'data-ui="messaging-bar"'  src/app/chat/components/ChatMessagingBar.tsx
+
+# acceptance (prod endpoints)
+bash _ops/acc_rtc.sh https://www.ditonachat.com || true
+
+Acceptance
+
+الأزرار Location/Gender تعمل عبر Popovers خفيفة، Location بعمودين + بحث + max-h-[60vh] وتمرير، ويظهر عدّاد مختارات على الزر.
+
+الشريط السفلي ثابت دائمًا أسفل الشاشة.
+
+⏭️ يمين و⏮️ يسار فوق الشريط بلا صناديق وبحجم كبير.
+
+فتح شريط الرسائل يغطي ⏭️/⏮️.
+
+لا رسائل تلقائية. HUD يعرض آخر 3 رسائل فقط، ونسخ بالضغط المطوّل يعمل.
+
+البناء يمرّ بلا أخطاء.
+
+تقرير مختصر بالملفات المعدّلة وصور شاشة من /chat بعد التعديل.

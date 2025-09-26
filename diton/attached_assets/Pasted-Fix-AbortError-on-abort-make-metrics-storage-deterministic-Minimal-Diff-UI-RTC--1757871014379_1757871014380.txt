@@ -1,0 +1,119 @@
+Fix AbortError on abort + make metrics storage deterministic. Minimal-Diff. لا تغييرات UI/RTC.
+
+الهدف
+
+إزالة Overlay عبر ابتلاع AbortError فقط دون لمس المنطق.
+
+ضمان أن /api/monitoring/metrics يخزّن فعليًا إلى Upstash عندما تكون المفاتيح متاحة.
+
+إبقاء كل الميزات كما هي.
+
+الملفات المسموح تعديلها
+
+src/app/chat/rtcFlow.ts
+
+src/app/api/monitoring/metrics/route.ts فقط إن لزم (runtime + فحص مفاتيح + لوج داخلي عند الفشل).
+
+التعديلات المطلوبة (هُنكات دقيقة)
+
+1) rtcFlow.ts — حماية الإنهاء والطلبات
+
+أعلى الملف:
+
++ const isAbort = (e:any)=> e && (e.name==='AbortError' || e.code===20);
++ const swallowAbort = (e:any)=> { if(!isAbort(e)) throw e; };
+
+
+في دالة stop():
+
+- if (state.ac) {
+-   state.ac.abort();
+-   state.ac = null;
+- }
++ if (state.ac) { try { state.ac.abort(); } catch {} }
++ state.ac = null;
+
+
+عند بدء جلسة/محاولة جديدة:
+
+- state.ac = state.ac ?? new AbortController();
++ state.ac = new AbortController();  // لا نعيد استخدام إشارة مُنهية
+
+
+لكل استدعاء يستخدم signal: state.ac?.signal (enqueue/matchmake/offer/answer/ice/qlen…):
+حوّطه بـ try/catch Minimal-Diff:
+
+- const res = await fetch(url, { method:'POST', body:json, signal: state.ac?.signal });
++ let res: Response;
++ try {
++   res = await fetch(url, { method:'POST', body:json, signal: state.ac?.signal });
++ } catch(e){ swallowAbort(e); return; }
+
+
+ونفس الشيء لاستدعاءات GET. حيث يلزم إرجاع قيمة بعد fetch، أعِد undefined عند الإجهاض وتعامل معه محليًا دون رمي.
+
+2) route.ts — ضمان التخزين على Node والتحقق
+
+أعلى الملف:
+
++ export const runtime = 'nodejs';
+
+
+تأكيد قراءة مفاتيح Upstash:
+
+- const URL = process.env.UPSTASH_REDIS_REST_URL;
+- const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
++ const URL = process.env.UPSTASH_REDIS_REST_URL || '';
++ const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+
+
+أعد محاولة التخزين مع لوج داخلي عند الفشل (لا تطبع الأسرار):
+
+- const res = await fetch(URL, { ... }).catch(() => null);
+- return { stored: !!(res && res.ok) };
++ const res = await fetch(URL, { ... }).catch(err => ({ ok:false, _e:String(err&&err.name||'err') } as any));
++ return { stored: !!(res as any)?.ok };
+
+
+(إن كان لديك GET تشخيصي موجود، اتركه. لا تغييرات أخرى.)
+
+تشغيل وقبول
+
+تشغيل:
+
+pnpm install --frozen-lockfile
+pnpm exec next dev -p ${PORT:-3000} -H 0.0.0.0
+
+
+قبول Overlay:
+
+افتح /chat، نفّذ Next/Prev سريعًا. لا يجب ظهور Runtime AbortError.
+
+قبول التخزين:
+
+bash _ops/acc_metrics.sh "https://<HOST>"
+
+
+توقّع METRICS_STORED=true إذا كانت مفاتيح Upstash مفعلة للمسار.
+
+قبول كامل:
+
+bash _ops/acc_full.sh "https://<HOST>"
+
+مخرجات مطلوبة من الوكيل
+
+قائمة الأسطر المعدّلة في rtcFlow.ts. وأي موضع fetch تم تطويقه.
+
+ناتج acc_metrics.sh وacc_full.sh.
+
+تأكيد: لا تغييرات UI، لا تغييرات منطق RTC، Overlay اختفى.
+
+بلوك القبول
+-- Acceptance --
+NO_ABORT_OVERLAY=1
+NEW_AC_PER_SESSION=1
+FETCH_ABORT_IGNORED=1
+METRICS_API_OK=true
+METRICS_STORED=true
+NO_FEATURE_REMOVED=1
+-- End Acceptance --

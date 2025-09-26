@@ -1,0 +1,73 @@
+الدُفعة 1 — موبايل UI سريع (Minimal-Diff)
+
+الهدف: شريط أدوات مرِن وشفّاف، حالات ON/OFF للأزرار، إصلاح تراكب فلاتر Gender/Countries، وتثبيت QueueBadge.
+التعديلات (ملفات فقط):
+
+src/components/chat/ChatToolbar.tsx + ChatToolbar.css (جعل الأزرار بلا خلفية، أحجام/تجاوب، حالة ميوت/كاميرا/بلاي).
+
+src/app/chat/ChatClient.tsx (تثبيت مواضع الفلاتر؛ عدم تغطية بطاقة النظير؛ تأكيد <QueueBadge /> أعلى يمين).
+
+src/components/chat/QueueBadge.tsx (حافة/شفافية فقط إن لزم).
+قبول:
+
+الموبايل: كل الأزرار ظاهرة وقابلة للنقر، ويتبدّل شكلها عند الضغط (mic/cam/play).
+
+الفلاتر لا تغطي بطاقة معلومات النظير.
+
+GET https://www.ditonachat.com/api/rtc/qlen يعمل، والشارة تُظهر الرقم.
+أوامر:
+
+git checkout -b feature/mobile-ui-pass1
+pnpm i && pnpm build
+# فحص يدوي على الهاتف + curl https://www.ditonachat.com/api/rtc/qlen
+git add -A && git commit -m "mobile-ui-pass1: toolbar responsive+transparent, filters position, QueueBadge"
+git push -u origin feature/mobile-ui-pass1
+
+الدُفعة 2 — شريط الرسائل + الإيموجي
+
+الهدف: إظهار شريط رسائل سفلي دائم على الموبايل مع منتقي إيموجي وإرسال/استقبال آخر 3 رسائل.
+التعديلات:
+
+src/components/chat/ChatMessagingBar.tsx (إظهار دائم بالموبايل، زر إيموجي يفتح قائمة، إدراج الإيموجي بالنص).
+
+src/components/chat/MessageSystem.tsx (عرض آخر 3 رسائل؛ سحب رأسي لإظهار الأقدم).
+
+src/app/api/message/route.ts (قبول text|message والتقييد: ضيف 200×10 ثم 429—موجود أساسًا؛ فقط توحيد الحقل).
+قبول:
+
+يظهر الحقل + زر الإيموجي على الهاتف؛ اختيار أي إيموجي يضيفه للنص؛ إرسال يضيف رسالة للّوِح.
+
+ضيف جديد: 10 رسائل 200 ثم 429.
+أوامر:
+
+git checkout -b feature/messaging-bar
+pnpm i && pnpm build
+# اختبار: أرسل 12 رسالة (يُتوقع 200×10 ثم 429)
+git add -A && git commit -m "messaging-bar: emoji picker + last-3 messages + guest rate-limit align"
+git push -u origin feature/messaging-bar
+
+الدُفعة 3 — قياس التحويل + تنظيف البيئة + Webhook
+
+الهدف: مسار قياس الاشتراك (view→click→checkout→claim)، إزالة مفاتيح Redis القديمة، وتفعيل Webhook Stripe (توثيق VIP).
+التعديلات:
+
+src/lib/analytics.ts (دوال fire-and-forget للأحداث).
+
+نقاط حدث في: Upsell/Plans/Subscribe/Claim.
+
+بيئة Vercel: إبقاء فقط
+UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, FREE_FOR_ALL=1, NEXT_PUBLIC_FREE_FOR_ALL=1, مفاتيح Stripe الفعلية + VIP_SIGNING_SECRET.
+(حذف: REDIS_URL, REDIS_HOST, REDIS_PORT, REDIS_USERNAME, REDIS_PASSWORD, إن لم تُستخدم في الكود).
+
+src/app/api/stripe/webhook/route.ts (مُفعّل ومجرّب توقيعًا).
+قبول:
+
+أحداث سجّلت في الـlogs (أو console) عند: فتح المودال، ضغط خطة، إنشاء Checkout، نجاح Claim.
+
+/api/stripe/webhook يرفض توقيعًا خاطئًا (400) ويقبل الصحيح.
+أوامر:
+
+git checkout -b feature/analytics-webhook-clean
+pnpm i && pnpm build
+git add -A && git commit -m "analytics funnel + stripe webhook + env cleanup (upstash-only)"
+git push -u origin feature/analytics-webhook-clean

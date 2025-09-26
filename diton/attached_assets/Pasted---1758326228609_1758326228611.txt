@@ -1,0 +1,155 @@
+المطلوب باختصار:
+بعد “المهمة الشاملة” السابقة، المشروع تضرّر وظيفيًا. قمنا بالرجوع إلى نسخة ما قبل تغييرات تلك المهمة، ونريد منك:
+
+التأكد أن النسخة الحالية هي الـbaseline الصحيحة.
+
+تطبيق إصلاحات Minimal-Diff فقط لإعادة كل شيء للعمل كما كان، دون أي “تحسينات واسعة” جديدة.
+
+تسليم تقارير قبول واضحة لكل خطوة.
+
+قيود التشغيل:
+
+التنفيذ عبر الشِّل فقط، غير تفاعلي: TERM=dumb وCI=1.
+
+لا تغييرات بنيوية ولا حذف ميزات.
+
+نسخ احتياطي لكل دفعة تحت _ops/backups/… وتقرير قبول تحت _ops/reports/… يبدأ بـ -- Acceptance --.
+
+عند الشك، توقّف وقدّم تقريرًا بدل تخمين.
+
+المرحلة 0 — تثبيت الـBaseline
+
+الهدف: تأكيد أننا على نسخة ما قبل “المهمة الشاملة”، مع إضافة مسار واحد مفقود فقط.
+
+ما أتوقعه منك:
+
+تأكيد فرع العمل الحالي والتزام HEAD.
+
+تأكيد وجود هذه الملفات “الموروثة قبل مهمتك الشاملة”:
+src/app/chat/freeForAllBridge.ts, src/app/chat/dcMetaResponder.client.ts, src/app/chat/peerMetaUi.client.ts
+(هذه كانت موجودة قبل المهمة الشاملة وقد استعدناها الآن).
+
+تأكيد شجرة مسارات RTC:
+يجب أن تكون تحت src/app/api/rtc/ وليس تحت src/app/chat/api/rtc/.
+
+تأكيد وجود كل المسارات التالية:
+answer, enqueue, env, ice, matchmake, offer, ping, prev/for, qlen
+
+إضافة واحدة فقط مطلوبة وموجودة الآن:
+src/app/api/rtc/init/route.ts مع runtime="nodejs" وdynamic="force-dynamic"، وتُعيد 200 مع تعيين كوكي anon=… عند POST.
+
+معايير القبول (مرحلة 0):
+
+-- Acceptance --
+BASELINE_OK=1
+RTC_ROUTES_LAYOUT_OK=1
+INIT_ROUTE_PRESENT=1
+
+المرحلة 1 — إصلاح بناء JSX الطفيف
+
+المشكلة المؤكدة على Vercel:
+تكرار السمة نفسها في زر “التالي” داخل src/app/chat/components/ChatToolbar.tsx:
+يوجد data-ui="btn-next" مكرّرة في نفس <button>، وهذا يُسقط البناء.
+
+الإجراء: إزالة التكرار فقط. لا تغييرات أخرى في الملف.
+
+معايير القبول (مرحلة 1):
+
+-- Acceptance --
+TOOLBAR_DUP_ATTR_FIXED=1
+LOCAL_BUILD_OK=1
+
+
+(اعمل Build محلي. لا تنتقل قبل نجاحه.)
+
+المرحلة 2 — فحوص واجهة وFFA وAuto-start (بدون تغييرات وظيفية)
+
+الهدف: تأكيد أن الواجهة تقرأ FFA وقت التشغيل وأن البدء التلقائي يعمل.
+
+تحقّق:
+
+/api/rtc/env يعيد:
+
+server.FREE_FOR_ALL === "1"
+
+public.NEXT_PUBLIC_FREE_FOR_ALL === "1"
+
+أزرار: Prev / Filters / Beauty مُمكّنة منطقيًا بـ (isFFA() || isVip) دون تجميد build-time.
+
+Auto-start: ظهور حدث rtc:phase = "searching" ≤ 2s عند دخول /chat.
+
+لا Maximum call stack size exceeded في freeForAllBridge.ts (حارس الارتداد فعّال).
+
+قناة البيانات تُفتح ويُرسل meta:init تلقائيًا ويصل ditona:peer-meta.
+
+معايير القبول (مرحلة 2):
+
+-- Acceptance --
+ENV_FFA_RUNTIME_OK=1
+FFA_PREV_ENABLED=1
+FFA_FILTERS_ENABLED=1
+BEAUTY_ENABLED=1
+AUTOSTART_OK=1
+DC_META_FLOW_OK=1
+
+
+إن فشل بند، قدّم سبب الفشل ومكانه في الكود، ولا تُدخل تعديلات واسعة. الحد الأقصى المسموح: إصلاحات Minimal-Diff فقط بما يتوافق مع الـbaseline.
+
+المرحلة 3 — فحوص API على الإنتاج (بدون تعديل ENV)
+
+الهدف: تأكيد جاهزية المسارات على https://www.ditonachat.com.
+
+تحقق:
+
+POST /api/rtc/init ⇒ 200 ويضبط كوكي anon=.
+
+POST /api/rtc/matchmake ⇒ 200 أو 204.
+
+GET /api/rtc/env ⇒ يعرض قيمة FFA صحيحة.
+
+رؤوس Cache-Control: no-store لمسارات الإشارة.
+
+عند FFA=1 يجب أن يسمح /api/message/allow بالرسائل (200 {"allow":true}).
+
+معايير القبول (مرحلة 3):
+
+-- Acceptance --
+PROD_INIT_2XX=1
+PROD_MATCH_2XX=1
+PROD_ENV_FFA_OK=1
+PROD_MSG_ALLOW_2XX=1
+API_JSON_NOSTORE_OK=1
+
+المرحلة 4 — تقرير نهائي وعدم المساس بالميزات
+
+التقرير يجب أن يتضمّن:
+
+اللقطة git (الفرع، HEAD، diff إن وجد).
+
+قائمة ملفات عُدِّلت في هذه المهمة. يجب أن تكون:
+
+فقط إزالة تكرار السمة في ChatToolbar.tsx
+
+لا شيء آخر، لأن باقي الملفات صحيحة عند الـbaseline المستعاد.
+
+لقطات تحقق من الإنتاج تؤكد أرقام القبول أعلاه.
+
+معيار القبول (مرحلة 4):
+
+-- Acceptance --
+FINAL_OK=1
+CHANGED_FILES=1   # = ChatToolbar.tsx فقط
+
+تذكير مهم
+
+لا تضف/تحذف ملفات خارج النطاق المذكور.
+
+أي تعارض أو فشل قبول ⇒ أوقف العمل وقدّم تشخيصًا دقيقًا بدل تعديل واسع.
+
+الهدف: استعادة الاستقرار كما كان قبل “المهمة الشاملة”، مع إصلاحين Minimal-Diff فقط:
+
+مسار /api/rtc/init موجود وسليم.
+
+إزالة تكرار JSX في ChatToolbar.tsx.
+
+ننتظر تقارير القبول لكل مرحلة قبل الانتقال للدمج والدفع والنشر.

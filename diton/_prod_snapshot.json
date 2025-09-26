@@ -1,0 +1,23 @@
+{
+  "prod": {
+    "base": "https://www.ditonachat.com",
+    "health": 200,
+    "age_flow": {
+      "pre": "307",
+      "post": 200
+    },
+    "permissions_policy": "",
+    "css_utilities": true,
+    "vip": {
+      "pre": 200,
+      "post": 200
+    },
+    "ratelimit_burst": [
+      "200",
+      "200",
+      "200",
+      "429",
+      "429"
+    ]
+  }
+}

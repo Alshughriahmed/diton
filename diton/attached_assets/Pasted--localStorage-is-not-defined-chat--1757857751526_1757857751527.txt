@@ -1,0 +1,121 @@
+الهدف
+
+إزالة خطأ localStorage is not defined في /chat مع صفر تغيّر في الميزات والسلوك. لا تعديل لتخطيط UI ولا منطق RTC. إبقاء المشروع على حالة origin/main.
+
+الحالة الراهنة الموثّقة
+
+Dev يعمل.
+
+/api/rtc/env = memory، /api/turn = STUN فقط. مقبول للاختبار المحلي.
+
+/chat يفشل بـ 500 بسبب قراءة localStorage أثناء SSR في src/app/chat/components/FilterBar.tsx.
+
+أحيانًا 403 على enqueue عند اختلاف الأصل؛ خارج النطاق هنا.
+
+القيود
+
+Minimal-Diff فقط.
+
+ممنوع حذف أو تعطيل أي ميزة.
+
+ممنوع تعديل ملفات غير المذكورة.
+
+لا تغييرات بصرية ولا CSS.
+
+الملفات المسموح تعديلها
+
+src/app/chat/components/FilterBar.tsx فقط.
+
+التعديل المطلوب (هُنكات دقيقة)
+
+أدخل المقتطفات التالية دون غيرها:
+
+*** src/app/chat/components/FilterBar.tsx
++ 'use client';
++ 
++ // browser guards for storage reads
++ const isBrowser = typeof window !== 'undefined';
++ const safeParse = <T,>(s: string | null, d: T): T => { try { return s ? JSON.parse(s) as T : d; } catch { return d; } };
+
+@@
+- const [countries,setCountries]=useState<string[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:countries")||"[]"));
+- const [genders,setGenders]=useState<GenderKey[]>(()=>JSON.parse(localStorage.getItem("ditona:filters:genders")||'["everyone"]'));
++ const [countries,setCountries]=useState<string[]>(
++   () => isBrowser ? safeParse<string[]>(localStorage.getItem("ditona:filters:countries"), []) : []
++ );
++ const [genders,setGenders]=useState<GenderKey[]>(
++   () => isBrowser ? safeParse<GenderKey[]>(localStorage.getItem("ditona:filters:genders"), ["everyone"] as GenderKey[]) : (["everyone"] as GenderKey[])
++ );
+
+@@
+- useEffect(()=>{ // محاولة قراءة بلد المستخدم إن وُجد {
++ useEffect(()=>{ // محلي فقط؛ لا تُنفَّذ أثناء SSR
++   if(!isBrowser) return;
+   /* …ابقِ بقية المنطق كما هو… */
+ },[]);
+
+
+ملاحظات تنفيذ:
+
+لا تغيّر أسماء المفاتيح أو الافتراضات الافتراضية.
+
+أبقِ أي كتابة لاحقة للـlocalStorage داخل كتل تتحقق من isBrowser.
+
+لماذا هذا آمن
+
+يعالج سبب 500 فقط.
+
+لا يمسّ VIP، ولا RTC، ولا التخطيط.
+
+عند غياب القيم المخزنة يرجع افتراضات: countries=[], genders=["everyone"] كما كان.
+
+خطوات التنفيذ
+
+أنشئ فرعًا مؤقتًا من main.
+
+طبّق الهُنكات أعلاه فقط.
+
+pnpm install --frozen-lockfile && pnpm exec next dev -p ${PORT:-3000} -H 0.0.0.0.
+
+فحوص القبول التالية (على مضيف Replit الخارجي نفسه عبر HTTPS):
+
+صحة الصفحة
+
+GET /chat يرجع 200. لا يظهر Runtime Error Overlay.
+
+صحة الخلفية الأساسية
+
+GET /api/rtc/env يعيد {"mode":"memory","ping_ok":false|true} مقبول.
+
+GET /api/turn يعيد STUN (غياب Twilio متوقع الآن).
+
+كوكي المجهول
+
+GET /api/anon/init يعيد ok:true.
+
+الطابور
+
+GET /api/rtc/qlen يعمل ولا يعيد 404.
+
+ملاحظة: اختبار مطابقة كامل يتطلب جلستين على نفس المضيف. خارج نطاق هذه الدفعة.
+
+مخرجات مطلوبة منك
+
+أرسل تقريرًا مختصرًا يشمل:
+
+الملفات والأسطر المعدلة.
+
+لقطات سطر الأوامر لحالات HTTP أعلاه.
+
+بلوك القبول التالي مكتمل القيم:
+
+-- Acceptance --
+CHAT_200=1
+NO_RUNTIME_OVERLAY=1
+FILTERBAR_GUARDED=1
+RTC_ENV_MODE=memory
+TURN_HAS_TURNS443=0   # متوقع الآن
+ANON_INIT_OK=1
+QLEN_ENDPOINT_OK=1
+NO_FEATURE_REMOVED=1
+-- End Acceptance --

@@ -1,0 +1,76 @@
+Pre-Deploy Fix + Vercel Readiness
+
+النطاق: اعمل حصريًا داخل جذر المستودع الحالي. تحقق أولًا بـ git rev-parse --show-toplevel ثم cd إليه. لا تعمل خارج الجذر.
+
+1) حسم ترويسة Permissions-Policy
+
+أصل المشكلة: يظهر permissions-policy: camera=(), microphone=(), geolocation=() مما يعطّل getUserMedia. هذا يأتي من next.config.mjs ويتغلب على middleware.
+
+المطلوب:
+
+اضبط مصدر الحقيقة في next.config.mjs فقط بترويسة واحدة حرفيًا:
+Permissions-Policy: camera=(self), microphone=(self)
+لا تضف geolocation=() ولا أي توجيهات أخرى.
+
+احذف سطر الترويسة نفسها من middleware.ts أو اجعله مطابقًا، لكن الأفضل تركها في next.config.mjs فقط لتجنّب التعارض.
+
+أعد تشغيل dev، ثم أثبت النتيجة عبر طلب /api/age/allow ثم ترويسة /chat لتظهر القيمة أعلاه بالضبط.
+
+2) تأكيد إعدادات CSS لمنع مشكلة Vercel القديمة
+
+تأكد أن Tailwind/PostCSS ESM فقط: وجود postcss.config.js وtailwind.config.js، ولا توجد .cjs/.mjs بدائل.
+
+تأكد أن مسارات Tailwind تشمل ./src/app/**/* و./src/components/**/*.
+
+في src/app/layout.tsx يوجد سطر واحد فقط: import "./globals.css"، والملف src/app/globals.css يحتوي @tailwind base; @tailwind components; @tailwind utilities;.
+
+تأكد عدم وجود أي Build Override في Vercel (سنفحص بعد لحظات).
+
+3) بناء محلي تحقّقي
+
+نفّذ بناءً محليًا. إن فشل لأي سبب، أصلِح الاستيرادات فقط ثم أعد البناء حتى يمر.
+
+4) فحص تشغيل شامل محلي
+
+/api/health = 200.
+
+/ و/plans = 200.
+
+تدفق العمر: /chat → 307 بدون كوكي → POST /api/age/allow → /chat = 200.
+
+الصفحة الرئيسية تُظهر CSS: استخراج رابط /_next/static/css/... وContent-Type=text/css، وتواجد Utilities مثل min-h-screen أو bg-gradient-to-b.
+
+VIP قبل وبعد كوكي vip=1 → 200 في الحالتين وتتغير via.
+
+Permissions-Policy على /chat بعد الكوكي = حرفيًا: camera=(self), microphone=(self).
+
+5) تحضير Vercel والتأكيد
+
+🔶 أرسل لقطة “Build & Development Settings” من Vercel:
+Install=الافتراضي، Build=pnpm run build, Node=20، لا Build Overrides.
+ثم نفّذ Clear build cache.
+
+بعد النشر على الدومين الحي:
+
+/api/health = 200.
+
+ترويسة /chat = camera=(self), microphone=(self) حرفيًا.
+
+الصفحة الرئيسية: CSS link موجود وContent-Type=text/css، وتظهر الـUtilities في الـDOM.
+
+تدفق العمر وVIP يعملان كما في المحلي.
+
+6) قبول نهائي يرجى طباعته
+
+-- Acceptance --
+ROOT_MATCH=yes
+BUILD=ok
+HTTP=/:200 /plans:200 /api/health:200 /chat:307->200
+CSS_LINK=1 CONTENT_TYPE=text/css utilities:found
+AGE_FLOW=ok VIP=pre:200 post:200
+PERMISSIONS_POLICY=camera=(self), microphone=(self)
+VERCEL=defaults_ok cache_cleared live_headers_ok
+-- End Acceptance --
+
+
+ملاحظة ضمان الواجهة على Vercel: ظهور CSS يتوقف على شرطين تم فحصهما هنا: (1) ESM فقط + استيراد globals.css في layout.tsx مرة واحدة، (2) عدم وجود Build Overrides. إذا التزمنا بهما فالصفحات ستظهر بتصميمها الصحيح على Vercel كما في المحلي.

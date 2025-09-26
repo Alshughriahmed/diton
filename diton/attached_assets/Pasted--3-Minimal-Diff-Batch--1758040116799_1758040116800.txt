@@ -1,0 +1,175 @@
+هذا تفويض واحد للوكيل، يشمل 3 بنود حسّاسة. Minimal-Diff. لا حذف ولا تعديل ميزات خارج النطاق.
+
+Batch — Agent (Dual-Prev + Import fix + Msg cap + DC Like)
+قيود عامة
+
+فرع عمل: hotfix/prev-msg-like.
+
+أي ملف تُعدّله انسخه قبلًا إلى /_ops/backups/<datetime>/….
+
+أبقِ FREE_FOR_ALL, VIP, Stripe, Age, Like API كما هي.
+
+بعد كل تعديل: pnpm -s build ثم فحوص القبول أدناه.
+
+A) إصلاح import لـ extractAnonId ومسار prev-for
+الهدف
+
+بناء ناجح مع مسار استيراد صحيح لـ extractAnonId في src/app/api/rtc/prev/for/route.ts، وتأكيد عمل prev-for.
+
+ما تفعل
+
+افتح:
+
+src/app/api/rtc/matchmake/route.ts
+
+src/app/api/rtc/prev/for/route.ts
+
+انسخ حرفيًا سطر الاستيراد من matchmake لِـ extractAnonId وألصقه في أعلى prev/for. يجب أن يصبح مثل سطر matchmake بالضبط، مثلًا:
+
+import { extractAnonId } from "@/lib/api/anon"; // أو المسار الموجود فعليًا في matchmake
+
+
+ثبّت بقيّة الاستيرادات:
+
+import { NextRequest, NextResponse } from "next/server";
+import { setPx } from "@/lib/rtc/upstash";
+
+
+تأكد من جسم الـ route:
+
+export async function POST(req: NextRequest) {
+  const anon = extractAnonId(req);
+  if (!anon) return NextResponse.json({ error:"anon-required" }, { status:401 });
+  const body = await req.json().catch(()=>null) as any;
+  const peer = String(body?.peer || "");
+  if(!peer) return NextResponse.json({ ok:false }, { status:400 });
+  const base = 8500, jitter = Math.floor(Math.random()*500) - 250;
+  await setPx(`rtc:prev-for:${anon}`, peer, base + jitter);
+  return NextResponse.json({ ok:true });
+}
+
+
+ابنِ.
+
+قبول
+pnpm -s build
+grep -n 'extractAnonId' src/app/api/rtc/prev/for/route.ts
+
+
+البناء ناجح.
+
+يظهر سطر الاستيراد الصحيح.
+
+B) Dual-Prev: دمج prev:wish + prev:for في mm.ts والتحقّق من العميل
+الهدف
+
+إن كان prev:wish:self==X وprev:for:X==self و X متاح → مطابقة فورية.
+
+إن وُجد wish فقط → محاولة أحادية الطرف.
+
+العميل يرسل /api/rtc/prev/for عند إنهاء الجلسة.
+
+ما تفعل
+
+في src/lib/rtc/mm.ts داخل كتلة prev-wish التي أضفناها سابقًا:
+
+تأكد من قراءة:
+
+const ready = await get(`rtc:prev-for:${String(wish)}`);
+
+
+عند نجاح التطابق الثنائي، احذف المفاتيح:
+
+await Promise.all([ del(`rtc:prev-wish:${self}`), del(`rtc:prev-for:${cand}`) ]);
+
+
+في src/app/chat/rtcFlow.ts داخل stop() في البداية:
+
+تأكّد من وجود الاستدعاء:
+
+try{
+  const peer = (state && (state.lastPeer||null)) as any;
+  if(peer){
+    fetch('/api/rtc/prev/for', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({ peer })
+    }).catch(()=>{});
+  }
+}catch{}
+
+
+ابنِ.
+
+قبول
+
+pnpm -s build ينجح.
+
+اختبار يدوي: طرف يضغط Prev خلال 7s والطرف الآخر خرج لتوّه → عودة مطابقة لنفس الشريك.
+
+C) سقف رسائل غير-VIP + لايك عبر DataChannel (Sync فوري)
+الهدف
+
+غير-VIP: تحقق قبل الإرسال عبر /api/message/allow ثم Upsell عند الرفض.
+
+❤️: إرسال وتلقّي عبر DataChannel لتحديث فوري للطرفين، مع POST للحفظ.
+
+ما تفعل
+
+في src/app/chat/ChatClient.tsx أو ملف إرسال الرسالة:
+
+قبل إرسال أي رسالة ولغير VIP فقط:
+
+const ok = await fetch('/api/message/allow', {
+  method:'POST',
+  headers:{ 'content-type':'application/json' },
+  body: JSON.stringify({ pairId: currentPairId })
+}).then(r => r.ok).catch(()=>false);
+if(!ok){ openUpsell('messages'); return; }
+
+
+لايك عبر DataChannel:
+
+عند الضغط على زر ❤️:
+
+setLiked(v => !v); // optimistic
+dc?.send(JSON.stringify({ t:"like", pairId: currentPairId, liked: !liked }));
+fetch(`/api/like?pairId=${encodeURIComponent(currentPairId)}&op=toggle`, { method:'POST' }).catch(()=>{});
+
+
+مستمع DC:
+
+if(msg.t==="like" && msg.pairId===currentPairId){
+  setPeerLiked(!!msg.liked);
+}
+
+
+حماية غياب pairId:
+
+عطّل زر ❤️ والإرسال حتى وصول currentPairId.
+
+ابنِ.
+
+قبول
+
+بناء ناجح.
+
+غير-VIP: الرسالة 16 تُمنع ويفتح Upsell.
+
+❤️: عند toggle، الطرفان يريان التغيير فورًا، ولا “قفز” بعد ثوانٍ.
+
+تقرير نهائي مطلوب
+
+الملفات المعدلة وقائمة النسخ الاحتياطية.
+
+نتائج:
+
+pnpm -s build
+
+لقطات/نصوص تحقق للأكواد أعلاه.
+
+توضيح أي انحراف Minimal-Diff اضطررت له ولماذا.
+
+تأكيد أن باقي الميزات لم تُمس.
+
+نفّذ وارجِع بالتقرير.

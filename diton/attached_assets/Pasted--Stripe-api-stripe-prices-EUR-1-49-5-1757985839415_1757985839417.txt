@@ -1,0 +1,158 @@
+نفّذه حرفيًا
+
+الهدف
+
+تثبيت تدفّق Stripe بالكامل:
+
+/api/stripe/prices يَعرض الخطط بالقيم EUR: 1.49 و5.99 و16.99 و99.99.
+
+/api/stripe/subscribe يقبل priceId مباشرة ويُنشئ Checkout Session.
+
+بدون جلسة مستخدم: يرجع 401 {"error":"unauthorized"}.
+
+مع جلسة مستخدم: يرجع 200 {"url":"https://checkout.stripe.com/..."}
+
+رؤوس منع التخزين مضبوطة: cache-control: no-store, no-cache, must-revalidate.
+
+لا تعدّل أي ميزة خارج Stripe. لا تغيّر الأسعار. اعمل Minimal-Diff فقط.
+
+الوضع الحالي المختصر
+
+GET /api/stripe/prices يعمل ويعيد price_*.
+
+POST /api/stripe/subscribe يرجع 400 بدون url رغم تمرير priceId.
+
+الملفات المسموح تعديلها
+
+src/app/api/stripe/subscribe/route.ts (أساسي)
+
+عند الحاجة فقط: src/app/api/stripe/prices/route.ts أو src/lib/plans.ts لضمان بقاء القيم 149/599/1699/9999. لا تغيّر المبالغ.
+
+المطلوب تنفيذه
+
+تقوية subscribe/route.ts:
+
+أعلى الملف: export const runtime = "nodejs";
+
+Parsing متحمّل:
+
+جرّب await req.json()، وعند الفشل خذ await req.text() ثم JSON.parse، ثم fallback إلى new URL(req.url).searchParams.get("priceId").
+
+قبول priceId إذا بدأ بـ price_، وإلا استخدم plan (إن وجد) لاشتقاق priceId من خريطة الأسعار الحالية.
+
+التحقق من الجلسة:
+
+استخدم آلية المشروع الحالية لاستخراج جلسة المستخدم (NextAuth في App Router). إن لا توجد جلسة: return NextResponse.json({error:"unauthorized"}, {status:401, headers: NO_STORE_HEADERS})
+
+إنشاء Checkout Session مع Stripe:
+
+لا تغيّر مفاتيح أو أسعار. استخدم المعرّف القادم من /api/stripe/prices.
+
+أعِد: return NextResponse.json({ url: session.url }, { status: 200, headers: NO_STORE_HEADERS })
+
+رؤوس منع التخزين: no-store, no-cache, must-revalidate وأبقِ referrer-policy: no-referrer.
+
+عدم إدخال تبعيات جديدة. لا تغيّر apiVersion إن كانت محذوفة سلفًا. لا تعدّل middleware.
+
+طريقة التنفيذ
+
+خُذ نسخًا احتياطية قبل أي تعديل في _ops/backups/.
+
+التزم بفروق Minimal-Diff (Patch صغير).
+
+نفّذ البناء والتحقق عبر سكربت حماية كي لا “تختفي الشاشة”.
+
+سكربت التنفيذ المقترح (انسخه وشغّله كما هو)
+#!/usr/bin/env bash
+set -euo pipefail
+
+NAME="stripe_subscribe_fix"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+RPT="_ops/reports/${NAME}_${TS}.log"
+BK="_ops/backups/${NAME}_${TS}"
+mkdir -p "${RPT%/*}" "$BK"
+
+exec > >(tee -a "$RPT") 2>&1
+
+T="src/app/api/stripe/subscribe/route.ts"
+[ -f "$T" ] || { echo "missing $T"; exit 1; }
+cp -a "$T" "$BK/route.ts.bak"
+
+# 1) تأكيد runtime=nodejs + مسار parsing متحمّل + 401 عند غياب الجلسة + no-store
+perl -0777 -i -pe '
+  $_ =~ s/^\s*export\s+const\s+runtime\s*=\s*["\x27][^"\x27]+["\x27];\s*\n//mg;
+  $_ = qq{export const runtime = "nodejs";\n} . $_;
+
+  # غلاف JSON helper
+  if ($_ !~ /const\s+NO_STORE_HEADERS\s*=/) {
+    $_ =~ s/(from\s+"next\/server";\s*\n)/$1\nconst NO_STORE_HEADERS = {"cache-control":"no-store, no-cache, must-revalidate","referrer-policy":"no-referrer","content-type":"application\/json"};\n/s;
+  }
+
+  # حقن parsing متحمّل قبل إنشاء جلسة Stripe
+  $_ =~ s/
+    (async\s+function\s+POST\s*\(\s*req\s*:\s*Request\s*\)\s*\{\s*)  #1
+  /$1\n  let priceId = "";\n  let plan = "";\n  try {\n    const ct = req.headers.get("content-type")||"";\n    if (ct.includes("application\/json")) {\n      const b:any = await req.json();\n      priceId = (b?.priceId||\"\").trim();\n      plan = (b?.plan||\"\").trim();\n    } else {\n      const txt = await req.text();\n      try { const b:any = JSON.parse(txt||\"{}\"); priceId=(b?.priceId||\"\").trim(); plan=(b?.plan||\"\").trim(); } catch {}\n    }\n  } catch {}\n  if (!priceId) { try { const u=new URL(req.url); priceId=(u.searchParams.get(\"priceId\")||\"\").trim(); plan=(plan||u.searchParams.get(\"plan\")||\"\").trim(); } catch {}\n  }\n\n/sx;
+
+  # قبول priceId أو map من plan
+  if ($_ !~ /function\s+resolvePriceId/) {
+    $_ .= qq{\nfunction resolvePriceId(inputId:string, plan:string, env:any){\n  if (inputId && /^price_/.test(inputId)) return inputId;\n  const mp:Record<string,string>={\n    day: String(env.STRIPE_PRICE_ID_EUR_149||env.STRIPE_PRICE_EUR_DAILY||""),\n    week:String(env.STRIPE_PRICE_ID_EUR_599||env.STRIPE_PRICE_EUR_WEEKLY||""),\n    month:String(env.STRIPE_PRICE_ID_EUR_1699||env.STRIPE_PRICE_EUR_MONTHLY||""),\n    year:String(env.STRIPE_PRICE_ID_EUR_9999||env.STRIPE_PRICE_EUR_YEARLY||""),\n  };\n  return mp[(plan||\"\").toLowerCase()]||\"\";\n}\n};
+  }
+
+  # حقن فحص الجلسة (Minimal-Diff: ابحث عن موضع مبكر يعيد 400 عند عدم السعر واستبدله بـ401 عند غياب الجلسة)
+  $_ =~ s/
+    (if\s*\(\s*!priceId\s*&&\s*!plan\s*\)\s*return\s+new\s+Response\([^\)]*\);\s*)
+  /$1\n  const getSession = (globalThis as any).auth || (globalThis as any).getServerSession || null;\n  let isAuthed = false;\n  try { if (getSession) { const s = await getSession(); isAuthed = !!s; } } catch {}\n  if (!isAuthed) { return new Response(JSON.stringify({error:\"unauthorized\"}), {status:401, headers: NO_STORE_HEADERS}); }\n/sx;
+
+  # بعد تحديد priceId النهائي
+  $_ =~ s/
+    (const\s+session\s*=\s*await\s+stripe\.checkout\.sessions\.create\()
+  /priceId = resolvePriceId(priceId, plan, process.env);\n  if(!priceId){ return new Response(JSON.stringify({error:\"invalid priceId or plan\"}), {status:400, headers:NO_STORE_HEADERS}); }\n  $1/sx;
+
+  # استجابات no-store موحدة
+  $_ =~ s/NextResponse\.json\((\{[^\}]*\})\)/NextResponse.json($1, {status:200, headers:NO_STORE_HEADERS})/g;
+' "$T"
+
+# 2) بناء
+pnpm -s build
+
+# 3) فحوص قبول (بدون جلسة)
+BASE="${BASE:-https://www.ditonachat.com}"
+echo "BASE=$BASE"
+PRICES="$(curl -sS "$BASE/api/stripe/prices" || true)"
+PID="$(node -e 'const j=JSON.parse(process.argv[1]); const p=(j.plans||[]).find(x=>String(x.currency).toLowerCase()==="eur"); console.log(p? p.priceId || p.id : "")' "$PRICES" || true)"
+echo "PRICE_ID=$PID"
+
+SUB_HTTP=$(curl -sS -o /tmp/sub.json -w "%{http_code}" -H "content-type: application/json" -d "{\"priceId\":\"$PID\"}" "$BASE/api/stripe/subscribe" || echo "")
+SUB_BODY="$(cat /tmp/sub.json || true)"
+HAS_URL=$(node -e 'try{const j=require("fs").readFileSync("/tmp/sub.json","utf8"); const o=JSON.parse(j); console.log(o.url && /^https:\/\/checkout\.stripe\.com\//.test(o.url)?1:0)}catch(e){console.log(0)}')
+
+echo "-- Acceptance --"
+echo "BUILD_RC=0"
+echo "PRICE_ID_PRESENT=$([ -n "$PID" ] && echo 1 || echo 0)"
+echo "SUB_HTTP_NOAUTH=$SUB_HTTP"
+echo "HAS_URL_NOAUTH=$HAS_URL"
+echo "REPORT=$RPT"
+
+ما الذي ستثبته قبل التسليم
+
+pnpm -s build ناجح.
+
+GET /api/stripe/prices = 200 ويحتوي priceId بقيم EUR الصحيحة.
+
+POST /api/stripe/subscribe بدون جلسة = 401 + رؤوس no-store.
+
+الكود جاهز ليرجع 200 {url} عند وجود جلسة NextAuth (أنت لست مطالبًا بتسجيل دخول فعلي هنا، فقط تأكد أن الفرع موجود وسليم).
+
+لا تغييرات خارج نطاق الملفات المذكورة.
+
+التقرير المطلوب بعد الإنهاء
+
+ملف Markdown في _ops/reports/stripe_fix_report_<TS>.md يتضمن:
+
+الملفات المعدّلة مع فروقات مختصرة.
+
+لقطات من الاستجابات: رأس/جسم prices، ورأس/جسم subscribe لحالة اللا جلسة.
+
+شرح كيف يفترض أن يعمل الفرع الموثّق عند وجود جلسة، وأين يتم استخراج الجلسة.
+
+قائمة تحقق نهائية بالبنود أعلاه.

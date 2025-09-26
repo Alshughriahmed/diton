@@ -1,0 +1,133 @@
+Task: Fix build in rtcFlow.ts + FFA gating in FilterBar + cleanup freeForAllBridge (file-only, idempotent)
+
+Repo root (must match): /home/runner/workspace/diton
+تحقق أولًا:
+
+pwd && git rev-parse --show-toplevel
+
+
+يجب أن يطابقا المسار أعلاه. إن لم يكن كذلك: cd /home/runner/workspace/diton.
+
+A) Fix TypeScript build error in rtcFlow.ts
+
+File: src/app/chat/rtcFlow.ts
+الخطأ الحالي: “Expected 1–2 arguments, but got 4” بسبب استدعاءات safeFetch(...) بعد أن صار توقيعها مثل fetch(url, init) فقط.
+
+اعثر على جميع الاستدعاءات التي تمرّر أكثر من وسيطين:
+
+grep -n "safeFetch(" src/app/chat/rtcFlow.ts
+
+
+عالج الموضع حول السطر ~335 الذي يشبه:
+
+const offerResponse = await safeFetch("/api/rtc/offer", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
+}, "post-offer", sessionId);
+
+
+هذا غير صالح الآن. أبقِ وسيطين فقط. انقل الوسيطات الزائدة إلى ترويسات مخصّصة حتى لا يتغير السلوك المنطقي:
+
+استبدله بـ:
+
+const offerResponse = await safeFetch("/api/rtc/offer", {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    "x-ditona-step": "post-offer",
+    "x-ditona-session": String(sessionId ?? "")
+  },
+  body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
+});
+
+
+إن وجدت أي استدعاء آخر لـ safeFetch بثلاثة+ وسيطات في نفس الملف، وحّده لنفس النمط: ادمج الوسيطات الزائدة داخل init.headers كـ
+"x-ditona-meta": JSON.stringify({ ... }) أو مفاتيح واضحة (x-ditona-*). لا تغيّر المنطق.
+
+لا تضف/تحذف أي import. أبْقِ:
+
+import { safeFetch } from "./safeFetch";
+
+B) Enable filters under FFA in FilterBar.tsx
+
+File: src/app/chat/components/FilterBar.tsx
+
+أضِف، بعد تعاريف الحالة مباشرة، كتلة FFA ومرجع الـDC مثل ChatToolbar:
+
+const ffa =
+  typeof window !== "undefined" &&
+  (globalThis as any).__vip &&
+  ((((globalThis as any).__vip).FREE_FOR_ALL === 1) ||
+   (((globalThis as any).__vip).FREE_FOR_ALL === "1"));
+
+const dc = (globalThis as any).__ditonaDataChannel as RTCDataChannel | null;
+
+
+عرّف متغير التحكم:
+
+const filtersEnabled = ffa || (dc?.readyState === "open");
+
+
+طبّق filtersEnabled على الـprops/الأزرار/القوائم التي كانت معطلة. لا تغيّر الـonClick. لا تضف imports جديدة.
+
+قبول: يظهر filtersEnabled ويُستخدم، ولا توجد إشارات إلى NEXT_PUBLIC_* في هذا الملف.
+
+C) Cleanup freeForAllBridge.ts
+
+File: src/app/chat/freeForAllBridge.ts
+
+في حساب ffa أزِل الاعتماد على j.public.NEXT_PUBLIC_FREE_FOR_ALL.
+اجعل الحساب:
+
+const ffa =
+  (j?.server?.FREE_FOR_ALL === "1") ||
+  (typeof window !== "undefined" &&
+   (globalThis as any).__vip &&
+   ((((globalThis as any).__vip).FREE_FOR_ALL === 1) ||
+    (((globalThis as any).__vip).FREE_FOR_ALL === "1")));
+
+
+اترك باقي المنطق كما هو.
+
+قبول:
+
+grep -n "NEXT_PUBLIC_FREE_FOR_ALL" src/app/chat/freeForAllBridge.ts || echo OK
+
+
+يجب أن لا يعثر على شيء.
+
+Build + Verification (return outputs)
+
+شغّل وارجع بهذه النتائج:
+
+echo '--- markers: rtcFlow ---'
+grep -n "x-ditona-step" src/app/chat/rtcFlow.ts || true
+grep -n "safeFetch(" src/app/chat/rtcFlow.ts
+
+echo '--- markers: FilterBar ---'
+grep -n "filtersEnabled" src/app/chat/components/FilterBar.tsx
+grep -n "__ditonaDataChannel" src/app/chat/components/FilterBar.tsx
+
+echo '--- markers: FFA bridge ---'
+grep -n "NEXT_PUBLIC_FREE_FOR_ALL" src/app/chat/freeForAllBridge.ts || true
+grep -n "FREE_FOR_ALL" src/app/chat/freeForAllBridge.ts | head -n 3
+
+echo '--- build ---'
+(if command -v pnpm >/dev/null 2>&1; then pnpm -s build; elif command -v npm >/dev/null 2>&1; then npm run -s build; else echo "build tool not found"; fi)
+
+echo '--- manifest ---'
+sha256sum src/app/chat/rtcFlow.ts 2>/dev/null || shasum -a 256 src/app/chat/rtcFlow.ts
+sha256sum src/app/chat/components/FilterBar.tsx 2>/dev/null || shasum -a 256 src/app/chat/components/FilterBar.tsx
+sha256sum src/app/chat/freeForAllBridge.ts 2>/dev/null || shasum -a 256 src/app/chat/freeForAllBridge.ts
+
+
+نجاح المهمة إذا:
+
+لا توجد استدعاءات safeFetch بأكثر من وسيطين في rtcFlow.ts.
+
+filtersEnabled مُعرّف ويُستخدم.
+
+لا أثر لـ NEXT_PUBLIC_FREE_FOR_ALL في freeForAllBridge.ts.
+
+البناء يمرّ دون خطأ. إذا ظهر خطأ جديد مرتبط بهذه التعديلات، أصلحه مباشرةً بدون حذف ميزات وبنفس القيود، ثم أعد البناء وارجع بالنتيجة.

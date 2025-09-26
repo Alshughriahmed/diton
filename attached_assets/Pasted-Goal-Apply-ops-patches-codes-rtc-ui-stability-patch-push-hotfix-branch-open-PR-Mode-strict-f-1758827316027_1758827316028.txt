@@ -1,0 +1,63 @@
+Goal: Apply _ops/patches/codes-rtc-ui-stability.patch, push hotfix branch, open PR.
+Mode: strict, fail-fast, auto-fix CRLF if needed.
+
+bash -lc '
+set -Eeuo pipefail
+t(){ printf "[%s] %s\n" "$(date -u +%H:%M:%S)" "$*"; }
+
+PATCH="_ops/patches/codes-rtc-ui-stability.patch"
+
+t "Sanity: branch + patch size/header"
+git rev-parse --abbrev-ref HEAD
+SZ=$(wc -c < "$PATCH" || true); t "PATCH_SIZE_BYTES=$SZ"
+H1=$(head -n1 "$PATCH" || true); t "H1=$H1"
+
+# Must be >= 50KB and start with diff --git
+if [[ "${H1}" != diff\ --git* || "${SZ:-0}" -lt 50000 ]]; then
+  t "Patch header/size not OK. Trying CRLF→LF fix..."
+  perl -pi -e "s/\r$//" "$PATCH"
+  SZ=$(wc -c < "$PATCH"); H1=$(head -n1 "$PATCH")
+  t "After fix: PATCH_SIZE_BYTES=$SZ ; H1=$H1"
+fi
+if [[ "${H1}" != diff\ --git* || "${SZ:-0}" -lt 50000 ]]; then
+  t "ERROR: Patch still invalid."; exit 2
+fi
+
+t "Fetch and create hotfix branch + safepoint tag"
+git fetch origin --prune
+git switch -c hotfix/rtc-ui-stability
+git tag -a "safepoint-$(date -u +%Y%m%d-%H%M%S)" -m safepoint
+
+t "Dry-run check"
+git -c core.autocrlf=false apply --check "$PATCH"
+
+t "Apply with index and 3-way"
+git -c core.autocrlf=false apply --index --3way --whitespace=nowarn "$PATCH"
+
+t "Install deps and build"
+pnpm i --frozen-lockfile || pnpm i
+pnpm -s build
+
+t "Markers"
+grep -R "AUTO_NEXT: fired" -n || true
+grep -R "phase:\x27dc-open\x27" -n src/app/chat/rtcFlow.ts || true
+test -f src/app/chat/safeFetch.ts
+test -f src/components/chat/PeerBadge.tsx
+
+t "Commit and push"
+git add -A
+git commit -m "RTC/UI stability: autostart, dc-open, FFA gating, messages reset, badges, safeFetch"
+git push -u origin hotfix/rtc-ui-stability
+
+t "Open PR (if gh configured); otherwise print URL"
+if gh auth status >/dev/null 2>&1; then
+  gh pr create --title "RTC/UI stability: autostart, dc-open, FFA gating, messages reset, badges, safeFetch" \
+    --body "Apply codes-rtc-ui-stability.patch; includes safeFetch, dc-open dispatch, FFA/VIP gating, message reset, PeerBadge, gender persistence." \
+    --base main --head hotfix/rtc-ui-stability
+else
+  REMOTE=$(git remote get-url origin | sed "s/\.git$//")
+  echo "PR_URL_HINT: ${REMOTE}/compare/main...hotfix/rtc-ui-stability?expand=1"
+fi
+
+t "Done"
+'
