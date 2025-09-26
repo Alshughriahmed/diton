@@ -1,0 +1,168 @@
+مهمة الوكيل النهائية — داخل الجذر فقط وبقبول صارم
+قيود غير قابلة للتفاوض
+
+اعمل حصريًا في: /home/runner/workspace/diton وعلى فرع يبدأ بـ hotfix/rtc-ui-stability.
+
+Minimal-Diff. LF + UTF-8.
+
+لا تعديلات على السيرفر أو مسارات API.
+
+إذا خالف أي تحقق مسبق ⇒ توقّف ولا تعلن نجاحًا.
+
+إثبات مسبق قبل أي تعديل
+
+اطبع بالترتيب ثم سطر حكم:
+
+pwd
+git rev-parse --show-toplevel
+git branch --show-current
+git remote -v
+echo "ROOT_OK=$([ "$(pwd)" = "/home/runner/workspace/diton" ] && echo 1 || echo 0)"
+
+
+إذا ROOT_OK≠1 أو الفرع لا يبدأ بـ hotfix/rtc-ui-stability ⇒ توقّف.
+
+حارس مؤقت يمنع الأخطاء (pre-commit مؤقت)
+
+أنشئ allowlist للمرحلة A:
+
+echo -e "src/app/chat/dcMetaResponder.client.ts\nsrc/app/chat/components/MessageHud.tsx" > _ops/allowlist.txt
+
+
+ثبت hook يمنع أي commit خارج allowlist ويتحقق من الماركرات عند الحاجة:
+
+.git/hooks/pre-commit يتحقق من:
+
+الجذر يطابق /home/runner/workspace/diton
+
+الفرع يبدأ بـ hotfix/rtc-ui-stability
+
+الملفات staged ⊆ _ops/allowlist.txt
+
+إذا كان staged يحتوي dcMetaResponder.client.ts فوجود P8_META_1200
+
+إذا كان staged يحتوي MessageHud.tsx فوجود P3_MSG_RESET وP3_AUTO_SCROLL
+
+إذا فشل أي بند ⇒ exit 1 برسالة واضحة. اطبع محتوى الهوك الذي كتبتَه.
+
+المرحلة A — إقفال P8 وP3
+P8 (+1200ms meta:init)
+
+ملف واحد: src/app/chat/dcMetaResponder.client.ts.
+
+بعد نبضة 300ms القائمة للإرسال meta:init أضِف مرة واحدة:
+
+/* P8_META_1200 */
+setTimeout(() => {
+  try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+}, 1200);
+
+
+أنشئ نسخة احتياطية قبل التعديل في: _ops/backups/p8_meta_<UTC>/.
+
+P3 (reset + تغذية سفلية)
+
+ملف واحد: src/app/chat/components/MessageHud.tsx.
+
+اجعل الاستيراد:
+
+"use client";
+import { useEffect, useState, useRef } from "react";
+
+
+داخل جسم المكوّن أضف:
+
+const endRef = useRef<HTMLDivElement>(null);
+/* P3_MSG_RESET */
+useEffect(() => {
+  const onPair = () => setLines([]);
+  window.addEventListener("rtc:pair", onPair);
+  return () => window.removeEventListener("rtc:pair", onPair);
+}, []);
+/* P3_AUTO_SCROLL */
+useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [lines]);
+
+
+ضع في نهاية قائمة الرسائل: <div ref={endRef} />.
+
+نسخة احتياطية قبل التعديل: _ops/backups/p3_msgs_<UTC>/.
+
+بناء + أدلة المرحلة A
+
+شغّل: pnpm -s build واطبع آخر 200 سطر عند الفشل.
+
+أدلة نصية إلزامية:
+
+grep -n "P8_META_1200" src/app/chat/dcMetaResponder.client.ts
+grep -n "P3_MSG_RESET\|P3_AUTO_SCROLL" src/app/chat/components/MessageHud.tsx
+sha256sum src/app/chat/dcMetaResponder.client.ts src/app/chat/components/MessageHud.tsx
+git add -A && git commit -m "lock: P8 + P3 (minimal-diff)"
+
+المرحلة B — P6 تحقق فقط
+
+اطبع من الملفات الفعلية:
+
+في ChatToolbar.tsx: سطر يثبت const canPrev = ffa || (dc?.readyState === "open" && !!pairId); ويُستخدم disabled={!canPrev}.
+
+في FilterBar.tsx: سطر يثبت const filtersEnabled = ffa || dc?.readyState === "open";.
+
+لا تعدّل شيئًا. اطبع أرقام الأسطر.
+
+المرحلة C — P7 (safeFetch لِـ /like و/stripe على العميل)
+
+مسح ملفات العميل فقط:
+
+git ls-files "src/**/*.{ts,tsx,js,jsx}" | while read -r f; do
+  head -n1 "$f" | grep -q '^"use client"\|^'\''use client'\''' || continue
+  grep -nE "fetch\(['\"]/api/(like|stripe)" "$f" && echo "---- $f"
+done
+
+
+ابنِ allowlist للمرحلة C من الملفات التي ظهرت فقط، واستبدل fetch بـ safeFetch مع إضافة:
+
+import { safeFetch } from "@/app/chat/safeFetch";
+
+
+لا تغيّر أي وسيطات أخرى. لا تمس السيرفر.
+3) حدّث _ops/allowlist.txt بهذه الملفات، وعدّل pre-commit ليتحقق فقط من “لا fetch('/api/(like|stripe)” بعد الاستبدال.
+
+بناء + أدلة المرحلة C
+
+pnpm -s build
+
+git diff -U3 -- <all_changed_files>
+
+تحقق نظافة العميل:
+
+git ls-files "src/**/*.{ts,tsx,js,jsx}" | while read -r f; do
+  head -n1 "$f" | grep -q '^"use client"\|^'\''use client'\''' || continue
+  grep -nE "fetch\(['\"]/api/(like|stripe)" "$f" && echo "FOUND:$f" && exit 1
+done; echo "P7_LIKE_STRIPE_OK=1"
+
+
+git add -A && git commit -m "net: safeFetch for like/stripe (client-only, minimal-diff)"
+
+قبول نهائي موحّد
+
+اطبع:
+
+-- Acceptance FINAL --
+BUILD_OK=1
+ROOT_OK=<0|1>
+P8_META_1200_OK=<0|1>
+P3_RESET_OK=<0|1>
+P3_AUTO_SCROLL_OK=<0|1>
+P6_PREV_OK=<0|1>
+P6_FILTERS_OK=<0|1>
+P7_LIKE_STRIPE_OK=<0|1>
+CLIENT_ENV_REMOVED=1
+FILES_CHANGED=<comma-separated list>
+BACKUPS_P8=_ops/backups/p8_meta_<UTC>
+BACKUPS_P3=_ops/backups/p3_msgs_<UTC>
+ROOT=/home/runner/workspace/diton
+BRANCH=<branch>
+-- /Acceptance FINAL --
+
+شرط إيقاف صارم
+
+إذا لم يطابق الجذر/الفرع القيود، أو فشلت أي خطوة بناء/grep، توقف واطبع السبب دون إعلان نجاح.
