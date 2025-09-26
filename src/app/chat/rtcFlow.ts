@@ -657,6 +657,16 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     const iceServers = await getIceServers();
     state.pc = new RTCPeerConnection({ iceServers });
     
+    /* P2_AUTO_NEXT_START */
+    state.pc.addEventListener('connectionstatechange', () => {
+      const st = state.pc?.connectionState;
+      if (st === 'disconnected' || st === 'failed') {
+        console.log('AUTO_NEXT: fired');
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event('ui:next'));
+      }
+    });
+    /* P2_AUTO_NEXT_END */
+    
     // Setup DataChannel for real-time communication
     if (state.role === 'caller') {
       const dc = state.pc.createDataChannel('likes');

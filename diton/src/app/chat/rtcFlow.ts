@@ -931,3 +931,4 @@ function scheduleRestartIce() {
     }, 700);
   } catch {}
 }
+
