@@ -1,0 +1,185 @@
+مهمة الوكيل — إقفال P8 وP3 + تدقيق P6/P7 + ضمانات نهائية
+سياق ثابت
+
+الجذر: /home/runner/workspace/diton
+
+الفرع: يبدأ بـ hotfix/rtc-ui-stability
+
+الريبو: https://github.com/Alshughriahmed/diton.git
+
+البناء: pnpm -s build
+
+لا High Power إلا عند الحاجة القصوى.
+
+لا تعمل خارج الجذر. لا تعدّل أي ملفات خارج المسارات المذكورة.
+
+قيود صارمة
+
+Minimal-Diff. LF + UTF-8.
+
+ممنوع تعديل السيرفر أو مسارات API.
+
+ملفات العميل فقط عند الحاجة.
+
+Idempotent: إن وُجد التعديل سابقًا لا تُكرر.
+
+لا استخدام لـNEXT_PUBLIC_* على العميل.
+
+إثبات مسبق مطلوب قبل أي تعديل
+
+اطبع بالترتيب:
+
+pwd
+git rev-parse --show-toplevel
+git branch --show-current
+git remote -v
+
+
+وتحقق أن الجذر يساوي /home/runner/workspace/diton والفرع يبدأ بـ hotfix/rtc-ui-stability.
+
+P8 — نبضة ثالثة meta:init عند +1200ms
+
+الملف الهدف: src/app/chat/dcMetaResponder.client.ts
+
+منطق التطبيق
+ابحث عن كتلة الفتح:
+
+if (dc.readyState === "open") {
+  try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+  setTimeout(() => { try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
+  // هنا بالضبط أدرج السطور التالية إن لم تكن موجودة
+}
+
+
+أدرج بعد نبضة 300ms مباشرة (مرة واحدة فقط):
+
+/* P8_META_1200 */
+setTimeout(() => {
+  try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+}, 1200);
+
+
+إن لم تجد نبضة 300ms لكن وجدت الإرسال الفوري، أضِف كتلة 1200ms داخل نفس if. إن لم تجد الكتلة أصلًا اطبع السبب ولا تُخَمِّن.
+
+نسخة احتياطية قبل التعديل تحت _ops/backups/p8_meta_<UTC>/.
+
+أدلة بعد التطبيق
+
+grep -n "P8_META_1200" src/app/chat/dcMetaResponder.client.ts
+
+sed -n '1,160p' src/app/chat/dcMetaResponder.client.ts | nl | sed -n '/P8_META_1200/+-6p'
+
+sha256sum src/app/chat/dcMetaResponder.client.ts
+
+P3 — Reset عند rtc:pair + تغذية سفلية ثابتة
+
+الملف الهدف: src/app/chat/components/MessageHud.tsx
+
+منطق التطبيق Minimal-Diff
+
+أكّد الاستيراد:
+
+"use client";
+import { useEffect, useState, useRef } from "react";
+
+
+داخل جسم المكوّن أضف:
+
+const endRef = useRef<HTMLDivElement>(null);
+/* P3_MSG_RESET */
+useEffect(() => {
+  const onPair = () => setLines([]);
+  window.addEventListener("rtc:pair", onPair);
+  return () => window.removeEventListener("rtc:pair", onPair);
+}, []);
+/* P3_AUTO_SCROLL */
+useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [lines]);
+
+
+قبل إغلاق الحاوية التي ترسم الرسائل أضف:
+
+<div ref={endRef} />
+
+
+إن كان الملف يستخدم هوكًا جاهزًا useAutoScroll(containerRef) فقط أضف تعليق العلامة بجانبه:
+
+/* P3_AUTO_SCROLL */ useAutoScroll(containerRef)
+
+
+مع إبقاء منطق الـreset كما أعلاه. لا تغيّر أسماء الحالة القائمة؛ إن اختلفت (messages/setMessages) طبّق نفس المبدأ.
+
+نسخة احتياطية تحت _ops/backups/p3_msgs_<UTC>/.
+
+أدلة بعد التطبيق
+
+grep -n "P3_MSG_RESET\|P3_AUTO_SCROLL" src/app/chat/components/MessageHud.tsx
+
+sed -n '1,160p' src/app/chat/components/MessageHud.tsx | nl | sed -n '/P3_MSG_RESET/,+25p'
+
+sha256sum src/app/chat/components/MessageHud.tsx
+
+P6 — تحقق فقط
+
+لا تعدّل شيئًا. أثبت أن:
+
+src/app/chat/components/ChatToolbar.tsx يحوي:
+const canPrev = ffa || (dc?.readyState === "open" && !!pairId); ويُستخدم في disabled={!canPrev}.
+
+src/app/chat/components/FilterBar.tsx يحوي:
+const filtersEnabled = ffa || dc?.readyState === "open";.
+
+أطبع الأسطر المطابقة بأرقامها.
+
+P7 — استبدال fetch بـ safeFetch لِـ /like و/stripe على العميل
+
+مسح محدد لملفات العميل فقط (تبدأ بـ "use client"):
+أطبع كل المواقع التي تستخدم fetch('/api/like' أو fetch('/api/stripe).
+
+استبدال Minimal-Diff في تلك الملفات فقط:
+
+أضف عند الحاجة:
+
+import { safeFetch } from "@/app/chat/safeFetch";
+
+
+استبدل:
+
+await fetch("/api/like", init)
+
+
+بـ:
+
+await safeFetch("/api/like", init)
+
+
+ونفس الشيء لـ/api/stripe/.... لا تغيّر البارامترات الأخرى.
+
+أدلة بعد التطبيق
+
+git diff -U3 -- <files> يظهر الاستبدالات.
+
+grep -RIn "fetch('/api/like"\|"fetch('/api/stripe" src | cat يجب أن يُظهر لا شيئًا داخل ملفات العميل.
+
+بناء وقبول نهائي
+
+شغّل البناء. ثم اطبع:
+
+-- Acceptance FINAL --
+BUILD_OK=1
+P8_META_1200_OK=<0|1>     # وجود وسم P8_META_1200
+P3_RESET_OK=<0|1>         # وجود P3_MSG_RESET
+P3_AUTO_SCROLL_OK=<0|1>   # وجود P3_AUTO_SCROLL أو التعليق بجوار useAutoScroll
+P6_PREV_OK=<0|1>          # إثبات canPrev كما وُصف
+P6_FILTERS_OK=<0|1>       # إثبات filtersEnabled كما وُصف
+P7_LIKE_STRIPE_OK=<0|1>   # عدم وجود fetch مباشر في عميل لـ /like و/stripe
+CLIENT_ENV_REMOVED=1      # لا NEXT_PUBLIC_* في ملفات العميل
+FILES_CHANGED=<قائمة الملفات المعدّلة>
+BACKUPS_P8=_ops/backups/p8_meta_<UTC>
+BACKUPS_P3=_ops/backups/p3_msgs_<UTC>
+ROOT=/home/runner/workspace/diton
+BRANCH=<اسم الفرع>
+-- /Acceptance FINAL --
+
+إن تعذّر تطبيق جزء
+
+لا تُعلن نجاحًا. اطبع السبب الدقيق وأسطر السياق، واقترح أصغر فرق مكافئ. العمل يقتصر على المسارات المذكورة.
