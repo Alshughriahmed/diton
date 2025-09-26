@@ -1,0 +1,111 @@
+عمل حصريًا في: /home/runner/workspace/diton وعلى فرع يبدأ بـ hotfix/rtc-ui-stability. أي اختلاف ⇒ توقف فورًا.
+
+إثبات مسبق
+
+اطبع ثم احكم:
+
+pwd
+git rev-parse --show-toplevel
+git branch --show-current
+git remote -v
+echo ROOT_OK=$([ "$(pwd)" = "/home/runner/workspace/diton" ] && echo 1 || echo 0)
+
+
+إذا ROOT_OK≠1 أو الفرع لا يبدأ بـ hotfix/rtc-ui-stability ⇒ توقف ولا تعلن نجاحًا.
+
+نطاق التعديل المسموح
+
+ملفان فقط:
+
+src/app/chat/dcMetaResponder.client.ts ← P8
+
+src/app/chat/components/MessageHud.tsx ← P3
+
+قبل التعديل خذ نسخًا احتياطية في:
+
+_ops/backups/p8_meta_<UTC>/dcMetaResponder.client.ts
+
+_ops/backups/p3_msgs_<UTC>/MessageHud.tsx
+
+P8 — نبضة +1200ms
+
+ابحث عن كتلة الـopen التي تحوي الإرسال الفوري ونبضة 300ms:
+
+if (dc.readyState === "open") {
+  try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+  setTimeout(() => { try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
+  // هنا الإضافة مرة واحدة فقط:
+}
+
+
+أضف تحت 300ms مباشرة:
+
+/* P8_META_1200 */
+setTimeout(() => {
+  try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+}, 1200);
+
+
+إن لم تجد 300ms لكن وجدت الإرسال الفوري داخل if(open) فضع 1200ms داخلها مرة واحدة. لا تضف شيئًا إن وُجد الوسم مسبقًا.
+
+P3 — Reset + تغذية سفلية
+
+في src/app/chat/components/MessageHud.tsx:
+
+الاستيراد:
+
+"use client";
+import { useEffect, useState, useRef } from "react";
+
+
+داخل المكوّن أضف في الأعلى:
+
+const endRef = useRef<HTMLDivElement>(null);
+/* P3_MSG_RESET */
+useEffect(() => {
+  const onPair = () => setLines([]);
+  window.addEventListener("rtc:pair", onPair);
+  return () => window.removeEventListener("rtc:pair", onPair);
+}, []);
+/* P3_AUTO_SCROLL */
+useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [lines]);
+
+
+في نهاية قائمة الرسائل أضف:
+
+<div ref={endRef} />
+
+
+لا تغيّر أسماء الحالة إن كانت مختلفة؛ استخدم الحالة الموجودة التي تعرض الرسائل.
+
+بناء + أدلة إلزامية
+
+شغّل: pnpm -s build، وإذا فشل اطبع آخر 200 سطر وتوقف.
+
+اطبع أدلة نصية:
+
+grep -n "P8_META_1200" src/app/chat/dcMetaResponder.client.ts
+sed -n '1,160p' src/app/chat/dcMetaResponder.client.ts | nl | sed -n '/P8_META_1200/+-6p'
+grep -n "P3_MSG_RESET\|P3_AUTO_SCROLL" src/app/chat/components/MessageHud.tsx
+sed -n '1,200p' src/app/chat/components/MessageHud.tsx | nl | sed -n '/P3_MSG_RESET/,+25p'
+sha256sum src/app/chat/dcMetaResponder.client.ts src/app/chat/components/MessageHud.tsx
+
+قبول نهائي
+
+اطبع فقط هذا البلوك إذا نجح كل ما سبق:
+
+-- Acceptance FINAL --
+BUILD_OK=1
+ROOT_OK=1
+P8_META_1200_OK=1
+P3_RESET_OK=1
+P3_AUTO_SCROLL_OK=1
+FILES_CHANGED=src/app/chat/dcMetaResponder.client.ts,src/app/chat/components/MessageHud.tsx
+BACKUPS_P8=_ops/backups/p8_meta_<UTC>
+BACKUPS_P3=_ops/backups/p3_msgs_<UTC>
+ROOT=/home/runner/workspace/diton
+BRANCH=<branch>
+-- /Acceptance FINAL --
+
+
+إذا تعذر إدراج أي كتلة، اطبع الأسطر المحيطة وسبب التعذر وتوقف دون ادعاء نجاح.
