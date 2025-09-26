@@ -33,6 +33,10 @@ function wireDC(dc: RTCDataChannel) {
   if (dc.readyState === "open") {
     try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
     setTimeout(() => { try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
+    /* P8_META_1200 */
+    setTimeout(() => {
+      try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+    }, 1200);
   }
 }
 

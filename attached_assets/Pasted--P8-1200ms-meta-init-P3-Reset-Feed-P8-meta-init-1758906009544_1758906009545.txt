@@ -1,0 +1,125 @@
+مهمة الوكيل — P8 (+1200ms meta:init) ثم P3 (Reset + Feed سفلي)
+الهدف
+
+P8: إضافة نبضة ثالثة meta:init عند +1200ms في عميل الـDC لضمان وصول الـpeer-meta بعد كل rematch. Idempotent.
+
+P3: تصفير الرسائل عند حدث rtc:pair وجعل الخلاصة سفلية مع auto-scroll. Minimal-Diff.
+
+السياق الثابت
+
+الجذر: /home/runner/workspace/diton
+
+الفرع: يبدأ بـ hotfix/rtc-ui-stability
+
+البناء: pnpm -s build
+
+لا تغييرات على مسارات API. لا استخدام لـ NEXT_PUBLIC_* على العميل. لا حذف ميزات.
+
+P8 — المطلوب بالتحديد
+
+حدّد الملف النهائي: src/app/chat/dcMetaResponder.client.ts
+إن لم يوجد، ابحث عن الملف الذي يرسل dc.send(JSON.stringify({ type: "meta:init" })).
+
+أضف نبضة +1200ms بعد الفوري و+300ms داخل نفس كتلة الـwire:
+أدرج مرة واحدة فقط السطور التالية بعد نبضة 300ms:
+
+/* P8_META_1200 */
+setTimeout(() => {
+  try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
+}, 1200);
+
+
+شرط الإدراج: إذا وُجدت عبارة P8_META_1200 أو تايمر 1200 موجود مسبقًا فلا تعدّل شيئًا.
+
+نسخة احتياطية قبل التعديل تحت: _ops/backups/p8_meta_<UTCSTAMP>/.
+
+بناء وقبول:
+
+تشغيل pnpm -s build بنجاح.
+
+إثبات ببحث:
+
+وجود P8_META_1200 و1200 وmeta:init في الملف المعدّل.
+
+مخرجات P8:
+
+-- Acceptance P8 --
+BUILD_OK=1
+META_1200_OK=1
+FILE=<path>
+BACKUP_DIR=_ops/backups/p8_meta_<UTCSTAMP>
+-- /Acceptance P8 --
+
+
+ملاحظة تكلفة: استخدم ASCII فقط داخل التعديلات وتعليقات قصيرة لتفادي مشاكل الاقتباس. لا تُدخل نصوص غير إنجليزية داخل الكود.
+
+P3 — المطلوب بالتحديد
+
+نقطة الاستماع للتطابق: في طبقة الكلاينت التي تُدير الرسائل
+ابحث أولًا عن أيٍ من:
+
+src/app/chat/msgSendClient.ts
+
+src/components/chat/ChatMessagingBar.tsx
+
+أو الملف الذي يستقبل/يعرض رسائل المحادثة فعليًا.
+
+Reset عند rtc:pair:
+
+استمع لحدث المطابقة rtc:pair أو الحدث الذي تعلن به طبقة الـRTC تغيّر pairId.
+
+عنده: امسح قائمة الرسائل في الحالة المحلية للمكوّن أو الـstore المستخدم.
+مثال Minimal-Diff داخل المكوّن العارض:
+
+/* P3_MSG_RESET */
+useEffect(() => {
+  function onPair() { setMessages([]); }
+  window.addEventListener('rtc:pair', onPair);
+  return () => window.removeEventListener('rtc:pair', onPair);
+}, []);
+
+
+Feed سفلي + Auto-scroll:
+
+أضف هوكًا بسيطًا محليًا أو داخل نفس الملف:
+
+/* P3_AUTO_SCROLL */
+const endRef = useRef<HTMLDivElement>(null);
+useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [messages]);
+
+
+ضع ref={endRef} في آخر عنصر قائمة الرسائل.
+
+عدم المساس بالمنطق الشبكي. لا تغييرات على الإرسال/الاستقبال سوى تصفير العرض.
+
+نسخة احتياطية لملف/ملفات الرسائل المعدّلة تحت: _ops/backups/p3_msgs_<UTCSTAMP>/.
+
+بناء وقبول P3:
+
+pnpm -s build أخضر.
+
+grep يُثبت:
+
+وجود علامات P3_MSG_RESET وP3_AUTO_SCROLL في الملف العارض للرسائل.
+
+لا أي NEXT_PUBLIC_ في الملفات المعدّلة.
+
+مخرجات P3:
+
+-- Acceptance P3 --
+BUILD_OK=1
+MSG_RESET_OK=1
+AUTO_SCROLL_OK=1
+FILES=<list>
+BACKUP_DIR=_ops/backups/p3_msgs_<UTCSTAMP>
+-- /Acceptance P3 --
+
+تسليم متوقع من الوكيل
+
+مسار الملف المعدَّل في P8 + diff صغير يوضح سطور P8_META_1200.
+
+قائمة ملفات الرسائل المعدّلة في P3 + diff مقتضب لكتل P3_MSG_RESET وP3_AUTO_SCROLL.
+
+بلوكي قبول P8 وP3 كما أعلاه.
+
+لوج بناء مختصر.
