@@ -1,10 +1,21 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 type Line = { text:string; ts:number; dir:"out"|"in" };
 
 export default function MessageHud(){
   const [lines,setLines]=useState<Line[]>([]);
+
+  const endRef = useRef<HTMLDivElement>(null);
+  /* P3_MSG_RESET */
+  useEffect(()=>{
+    const onPair = () => setLines([]);
+    window.addEventListener("rtc:pair", onPair);
+    return ()=> window.removeEventListener("rtc:pair", onPair);
+  },[]);
+  /* P3_AUTO_SCROLL */
+  useEffect(()=>{ endRef.current?.scrollIntoView({ block: "end" }); }, [lines]);
+
   useEffect(()=>{
     const add = (dir:"out"|"in") => (e:CustomEvent)=> setLines(l=>{
       const nxt=[...l,{text:(e.detail?.text||""), ts:Date.now(), dir}].slice(-3);
@@ -27,6 +38,7 @@ export default function MessageHud(){
           {l.text}
         </div>
       ))}
+      <div ref={endRef} />
     </div>
   );
 }
