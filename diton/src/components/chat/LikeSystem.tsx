@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { emit, on } from "@/utils/events";
+import { safeFetch } from "@/app/chat/safeFetch";
 
 interface LikeData {
   myLikes: number;
@@ -28,7 +29,7 @@ export default function LikeSystem() {
     if (!pairId || isPollingRef.current) return;
     
     try {
-      const response = await fetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, {
+      const response = await safeFetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, {
         method: 'GET',
         cache: 'no-cache'
       });
@@ -165,7 +166,7 @@ setShowHeart(true);
 
     try {
       // Send to server
-      const response = await fetch('/api/like', {
+      const response = await safeFetch('/api/like', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
