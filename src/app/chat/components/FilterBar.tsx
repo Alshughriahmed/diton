@@ -10,14 +10,16 @@ const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 
 export default function FilterBar() {
   const freeForAll = useFFA();
-  
-  // FFA runtime detection
-  const ffa = (typeof window !== "undefined" && (window as any).__vip?.FREE_FOR_ALL == 1);
-  if (ffa) console.log("FFA_FORCE: enabled");
-  
-  // DataChannel state for button guards  
-  const dc = (globalThis as any).__ditonaDataChannel;
-  const filtersEnabled = ffa || dc?.readyState === "open";
+
+const ffa =
+  typeof window !== "undefined" &&
+  (globalThis as any).__vip &&
+  ((((globalThis as any).__vip).FREE_FOR_ALL === 1) ||
+   (((globalThis as any).__vip).FREE_FOR_ALL === "1"));
+
+const dc = (globalThis as any).__ditonaDataChannel as RTCDataChannel | null;
+
+const filtersEnabled = ffa || (dc?.readyState === "open");
   
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);

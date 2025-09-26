@@ -334,7 +334,7 @@ async function callerFlow(sessionId: number) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
-  }, 'post-offer', sessionId);
+  });
 
   if (!offerResponse || !checkSession(sessionId)) return;
 
@@ -537,7 +537,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
       
       matchmakeOptions.body = JSON.stringify(payload);
       
-      const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions, 'matchmake', currentSession);
+            const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions);
       
       if (!response || !checkSession(currentSession)) return;
       
