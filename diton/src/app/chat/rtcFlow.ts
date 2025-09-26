@@ -343,8 +343,6 @@ async function callerFlow(sessionId: number) {
     const answerResponse = await safeFetch(
       `/api/rtc/answer?pairId=${encodeURIComponent(String(state.pairId))}`,
       { cache: "no-store" },
-      'poll-answer',
-      sessionId
     );
     
     if (!answerResponse || !checkSession(sessionId)) return;
@@ -375,8 +373,6 @@ async function calleeFlow(sessionId: number) {
     const offerResponse = await safeFetch(
       `/api/rtc/offer?pairId=${encodeURIComponent(String(state.pairId))}`,
       { cache: "no-store" },
-      'poll-offer',
-      sessionId
     );
     
     if (!offerResponse || !checkSession(sessionId)) return;
@@ -394,9 +390,9 @@ async function calleeFlow(sessionId: number) {
           // POST answer
           await safeFetch("/api/rtc/answer", {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", "x-ditona-step": "post-answer", "x-ditona-session": String(sessionId ?? "") },
             body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(answer) }),
-          }, 'post-answer', sessionId);
+          });
           
           logRtc('offer-answered', 200);
           break;
@@ -418,9 +414,9 @@ async function iceExchange(sessionId: number) {
     
     await safeFetch("/api/rtc/ice", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-ditona-step": "post-ice", "x-ditona-session": String(sessionId ?? "") },
       body: JSON.stringify({ pairId: state.pairId, candidate: e.candidate }),
-    }, 'post-ice', sessionId);
+    });
   };
 
   // Poll for remote ICE candidates
@@ -429,8 +425,6 @@ async function iceExchange(sessionId: number) {
       const response = await safeFetch(
         `/api/rtc/ice?pairId=${encodeURIComponent(String(state.pairId))}`,
         { cache: "no-store" },
-        'poll-ice',
-        sessionId
       );
       
       if (!response || !checkSession(sessionId)) break;
@@ -500,9 +494,9 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     __kpi.reconnectStart = 0; __kpi.reconnectDone = 0; __kpi.iceTries = 0;
     const enqueueResponse = await safeFetch("/api/rtc/enqueue", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-ditona-step": "enqueue", "x-ditona-session": String(currentSession ?? "") },
       body: JSON.stringify({}),
-    }, 'enqueue', currentSession);
+    });
 
     if (!enqueueResponse || !checkSession(currentSession)) return;
 

@@ -1,0 +1,89 @@
+Task: normalize safeFetch calls in rtcFlow.ts (file-only, idempotent)
+
+Repo root (must match): /home/runner/workspace/diton
+تحقّق أولًا:
+
+pwd && git rev-parse --show-toplevel
+
+
+النتيجتان يجب أن تكونا /home/runner/workspace/diton.
+
+نطاق العمل
+
+ملف واحد فقط: src/app/chat/rtcFlow.ts.
+
+لا Git. لا إنشاء/حذف ملفات. ترميز UTF-8 و LF.
+
+الهدف: كل استدعاءات safeFetch تستخدم وسيطين فقط (input, init).
+
+القاعدة الموحدة لنقل الوسائط الزائدة
+
+لأي نداء يحتوي 3–4 وسائط مثل:
+
+safeFetch(url, init, step?, sessionId?)
+
+
+حوّلها إلى:
+
+ضع اسم الخطوة في الترويسة: x-ditona-step: "<step>"
+
+ضع sessionId في الترويسة: x-ditona-session: String(sessionId ?? "")
+
+أي وسيط إضافي آخر → x-ditona-meta: JSON.stringify({ extra: ... })
+وأبقِ url وinit كما هما، مع دمج الترويسات داخل init.headers.
+
+مثال تحويل
+
+قبل:
+
+await safeFetch("/api/rtc/offer", { method:"POST", headers:{...}, body:... }, "post-offer", sessionId);
+
+
+بعد:
+
+await safeFetch("/api/rtc/offer", {
+  method: "POST",
+  headers: { ...,
+    "x-ditona-step": "post-offer",
+    "x-ditona-session": String(sessionId ?? "")
+  },
+  body: ...
+});
+
+ما يجب فعله
+
+اعثر على جميع مواضع safeFetch( في هذا الملف التي تمرّر أكثر من وسيطين، وعدّلها وفق القاعدة أعلاه.
+
+لا تغيّر الاستيراد:
+
+import { safeFetch } from "./safeFetch";
+
+
+لا تغيّر المنطق خارج الترويسات.
+
+تحقق ونتائج مطلوبة
+
+نفّذ وارجع بالمخرجات التالية:
+
+echo '--- rtcFlow markers ---'
+grep -n "safeFetch(" src/app/chat/rtcFlow.ts
+grep -n "x-ditona-step" src/app/chat/rtcFlow.ts || true
+grep -n "x-ditona-session" src/app/chat/rtcFlow.ts || true
+
+echo '--- build ---'
+(if command -v pnpm >/dev/null 2>&1; then pnpm -s build; elif command -v npm >/dev/null 2>&1; then npm run -s build; else echo "build tool not found"; fi)
+
+echo '--- typecheck ---'
+grep -n "Expected 1-2 arguments, but got" -R . || echo OK
+
+echo '--- manifest ---'
+sha256sum src/app/chat/rtcFlow.ts 2>/dev/null || shasum -a 256 src/app/chat/rtcFlow.ts
+
+
+نجاح المهمة عندما:
+
+لا يبقى أي استدعاء safeFetch بأكثر من وسيطين في rtcFlow.ts.
+
+تظهر ترويسات x-ditona-step وx-ditona-session في المواضع المحوّلة.
+
+البناء وتمرير فحص الأنواع بدون أخطاء.
