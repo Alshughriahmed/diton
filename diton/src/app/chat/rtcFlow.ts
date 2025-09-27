@@ -1,4 +1,3 @@
-import { safeFetch } from "./safeFetch";
 /* Anti-leak WebRTC flow with session stamping and phase tracking */
 function safeAbort(ac?: AbortController|null){ try{ if(ac && !ac.signal?.aborted) ac.abort("stop"); }catch{} }
 if (typeof window!=="undefined" && process.env.NODE_ENV!=="production"){
@@ -202,7 +201,7 @@ try{ __ditonaSetPair(null as any, (state as any).role); }catch{};
     try{
       const peer = (state && (state.lastPeer||null)) as any;
       if(peer){
-        safeFetch("/api/rtc/prev/for", {
+        fetch("/api/rtc/prev/for", {
           method:"POST",
           headers:{ "content-type":"application/json" },
           body: JSON.stringify({ peer })
@@ -303,8 +302,32 @@ function ensureCalleeOnly(operation: string) {
 }
 
 // Safe fetch with session checking and telemetry
+async function safeFetch(url: string, options: RequestInit = {}, operation: string, sessionId: number) {
+  if (!checkSession(sessionId)) {
+    logRtc(operation, 499, { reason: 'session-mismatch' });
+    return null;
+  }
 
   const signal = state.ac?.signal;
+  let response: Response;
+  try {
+    response = await fetch(url, { credentials: 'include', cache: 'no-store', ...options, signal });
+  } catch(e){ swallowAbort(e); return null; }
+  
+  logRtc(operation, response.status);
+  
+  if (response.status === 403) {
+    console.warn('[rtc]', state.role, '403 at', operation);
+    // Don't call stop() immediately to prevent recursion
+    state.phase = 'idle';
+    if (onPhaseCallback) onPhaseCallback('idle');
+    return null;
+  }
+  
+  return response;
+}
+
+// Get ICE servers from API or fallback, reordered by priority
 async function getIceServers() {
   try {
     const response = await fetch('/api/turn', { cache: 'no-store' });
@@ -332,7 +355,11 @@ async function callerFlow(sessionId: number) {
   // POST offer
   const offerResponse = await safeFetch("/api/rtc/offer", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-ditona-step": "post-offer",
+      "x-ditona-session": String(sessionId ?? "")
+    },
     body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
   });
 
@@ -342,7 +369,13 @@ async function callerFlow(sessionId: number) {
   while (checkSession(sessionId) && !state.ac?.signal.aborted) {
     const answerResponse = await safeFetch(
       `/api/rtc/answer?pairId=${encodeURIComponent(String(state.pairId))}`,
-      { cache: "no-store" },
+      {
+        cache: "no-store",
+        headers: {
+          "x-ditona-step": "poll-answer",
+          "x-ditona-session": String(sessionId ?? "")
+        }
+      }
     );
     
     if (!answerResponse || !checkSession(sessionId)) return;
@@ -372,7 +405,13 @@ async function calleeFlow(sessionId: number) {
   while (checkSession(sessionId) && !state.ac?.signal.aborted) {
     const offerResponse = await safeFetch(
       `/api/rtc/offer?pairId=${encodeURIComponent(String(state.pairId))}`,
-      { cache: "no-store" },
+      {
+        cache: "no-store",
+        headers: {
+          "x-ditona-step": "poll-offer",
+          "x-ditona-session": String(sessionId ?? "")
+        }
+      }
     );
     
     if (!offerResponse || !checkSession(sessionId)) return;
@@ -390,7 +429,11 @@ async function calleeFlow(sessionId: number) {
           // POST answer
           await safeFetch("/api/rtc/answer", {
             method: "POST",
-            headers: { "content-type": "application/json", "x-ditona-step": "post-answer", "x-ditona-session": String(sessionId ?? "") },
+            headers: {
+              "content-type": "application/json",
+              "x-ditona-step": "post-answer",
+              "x-ditona-session": String(sessionId ?? "")
+            },
             body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(answer) }),
           });
           
@@ -414,7 +457,11 @@ async function iceExchange(sessionId: number) {
     
     await safeFetch("/api/rtc/ice", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-ditona-step": "post-ice", "x-ditona-session": String(sessionId ?? "") },
+      headers: {
+        "content-type": "application/json",
+        "x-ditona-step": "post-ice",
+        "x-ditona-session": String(sessionId ?? "")
+      },
       body: JSON.stringify({ pairId: state.pairId, candidate: e.candidate }),
     });
   };
@@ -424,7 +471,13 @@ async function iceExchange(sessionId: number) {
     while (checkSession(sessionId) && !state.ac?.signal.aborted) {
       const response = await safeFetch(
         `/api/rtc/ice?pairId=${encodeURIComponent(String(state.pairId))}`,
-        { cache: "no-store" },
+        {
+          cache: "no-store",
+          headers: {
+            "x-ditona-step": "poll-ice",
+            "x-ditona-session": String(sessionId ?? "")
+          }
+        }
       );
       
       if (!response || !checkSession(sessionId)) break;
@@ -481,7 +534,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
 
     // Initialize anon cookie
     try {
-      await safeFetch("/api/anon/init", { 
+      await fetch("/api/anon/init", { 
         method: "GET", 
         cache: "no-store",
         signal: state.ac.signal 
@@ -494,7 +547,11 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     __kpi.reconnectStart = 0; __kpi.reconnectDone = 0; __kpi.iceTries = 0;
     const enqueueResponse = await safeFetch("/api/rtc/enqueue", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-ditona-step": "enqueue", "x-ditona-session": String(currentSession ?? "") },
+      headers: {
+        "content-type": "application/json",
+        "x-ditona-step": "enqueue",
+        "x-ditona-session": String(currentSession ?? "")
+      },
       body: JSON.stringify({}),
     });
 
@@ -531,7 +588,13 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
       
       matchmakeOptions.body = JSON.stringify(payload);
       
-            const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions);
+      matchmakeOptions.headers = {
+        ...matchmakeOptions.headers,
+        "x-ditona-step": "matchmake",
+        "x-ditona-session": String(currentSession ?? "")
+      };
+      
+      const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions);
       
       if (!response || !checkSession(currentSession)) return;
       
@@ -593,6 +656,16 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     // Create RTCPeerConnection with ICE servers
     const iceServers = await getIceServers();
     state.pc = new RTCPeerConnection({ iceServers });
+    
+    /* P2_AUTO_NEXT_START */
+    state.pc.addEventListener('connectionstatechange', () => {
+      const st = state.pc?.connectionState;
+      if (st === 'disconnected' || st === 'failed') {
+        console.log('AUTO_NEXT: fired');
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event('ui:next'));
+      }
+    });
+    /* P2_AUTO_NEXT_END */
     
     // Setup DataChannel for real-time communication
     if (state.role === 'caller') {
@@ -931,4 +1004,3 @@ function scheduleRestartIce() {
     }, 700);
   } catch {}
 }
-
