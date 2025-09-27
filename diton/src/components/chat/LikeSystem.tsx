@@ -30,9 +30,10 @@ export default function LikeSystem() {
     
     try {
 
-      const response = await safeFetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, {
-        method: 'GET','
-      });
+      const response = await safeFetch(
+  `/api/like?pairId=${encodeURIComponent(pairId)}`,
+  { method: 'GET', cache: 'no-cache' }
+);
 
       
       if (response.ok) {
