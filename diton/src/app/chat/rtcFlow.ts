@@ -353,7 +353,9 @@ async function callerFlow(sessionId: number) {
   await state.pc.setLocalDescription(offer);
   
   // POST offer
-  const offerResponse = await safeFetch("/api/rtc/offer", { ... }, undefined, 0);
+const offerResponse = await safeFetch(
+  "/api/rtc/offer",
+  {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -361,22 +363,29 @@ async function callerFlow(sessionId: number) {
       "x-ditona-session": String(sessionId ?? "")
     },
     body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
-  });
+  },
+  "post-offer",
+  sessionId
+);
+
 
   if (!offerResponse || !checkSession(sessionId)) return;
 
   // Poll for answer
   while (checkSession(sessionId) && !state.ac?.signal.aborted) {
-    const answerResponse = await safeFetch(
-      `/api/rtc/answer?pairId=${encodeURIComponent(String(state.pairId))}`,
-      {
-        cache: "no-store",
-        headers: {
-          "x-ditona-step": "poll-answer",
-          "x-ditona-session": String(sessionId ?? "")
-        }
-      }
-    );
+  const answerResponse = await safeFetch(
+  `/api/rtc/answer?pairId=${encodeURIComponent(String(state.pairId))}`,
+  {
+    cache: "no-store",
+    headers: {
+      "x-ditona-step": "poll-answer",
+      "x-ditona-session": String(sessionId ?? "")
+    }
+  },
+  "poll-answer",
+  sessionId
+);
+ 
     
     if (!answerResponse || !checkSession(sessionId)) return;
     
@@ -403,17 +412,19 @@ async function calleeFlow(sessionId: number) {
 
   // Poll for offer
   while (checkSession(sessionId) && !state.ac?.signal.aborted) {
-    const offerResponse = await safeFetch(
-      `/api/rtc/offer?pairId=${encodeURIComponent(String(state.pairId))}`,
-      {
-        cache: "no-store",
-        headers: {
-          "x-ditona-step": "poll-offer",
-          "x-ditona-session": String(sessionId ?? "")
-        }
-      }
-    );
-    
+   const offerResponse = await safeFetch(
+  `/api/rtc/offer?pairId=${encodeURIComponent(String(state.pairId))}`,
+  {
+    cache: "no-store",
+    headers: {
+      "x-ditona-step": "poll-offer",
+      "x-ditona-session": String(sessionId ?? "")
+    }
+  },
+  "poll-offer",
+  sessionId
+);
+   
     if (!offerResponse || !checkSession(sessionId)) return;
     
     if (offerResponse.status === 200) {
@@ -427,16 +438,21 @@ async function calleeFlow(sessionId: number) {
           await state.pc?.setLocalDescription(answer);
           
           // POST answer
-          await safeFetch("/api/rtc/answer", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-ditona-step": "post-answer",
-              "x-ditona-session": String(sessionId ?? "")
-            },
-            body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(answer) }),
-          });
-          
+          await safeFetch(
+  "/api/rtc/answer",
+  {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ditona-step": "post-answer",
+      "x-ditona-session": String(sessionId ?? "")
+    },
+    body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(answer) }),
+  },
+  "post-answer",
+  sessionId
+);
+    
           logRtc('offer-answered', 200);
           break;
         }
@@ -455,30 +471,39 @@ async function iceExchange(sessionId: number) {
   state.pc.onicecandidate = async (e) => {
     if (!e.candidate || !checkSession(sessionId) || state.ac?.signal.aborted) return;
     
-    await safeFetch("/api/rtc/ice", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-ditona-step": "post-ice",
-        "x-ditona-session": String(sessionId ?? "")
-      },
-      body: JSON.stringify({ pairId: state.pairId, candidate: e.candidate }),
-    });
+  await safeFetch(
+  "/api/rtc/ice",
+  {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ditona-step": "post-ice",
+      "x-ditona-session": String(sessionId ?? "")
+    },
+    body: JSON.stringify({ pairId: state.pairId, candidate: e.candidate }),
+  },
+  "post-ice",
+  sessionId
+);
+
   };
 
   // Poll for remote ICE candidates
   const pollIce = async () => {
     while (checkSession(sessionId) && !state.ac?.signal.aborted) {
       const response = await safeFetch(
-        `/api/rtc/ice?pairId=${encodeURIComponent(String(state.pairId))}`,
-        {
-          cache: "no-store",
-          headers: {
-            "x-ditona-step": "poll-ice",
-            "x-ditona-session": String(sessionId ?? "")
-          }
-        }
-      );
+  `/api/rtc/ice?pairId=${encodeURIComponent(String(state.pairId))}`,
+  {
+    cache: "no-store",
+    headers: {
+      "x-ditona-step": "poll-ice",
+      "x-ditona-session": String(sessionId ?? "")
+    }
+  },
+  "poll-ice",
+  sessionId
+);
+
       
       if (!response || !checkSession(sessionId)) break;
       
@@ -545,15 +570,21 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     __kpi.tEnq = (typeof performance!=='undefined' ? performance.now() : Date.now());
     __kpi.tMatched = 0; __kpi.tFirstRemote = 0;
     __kpi.reconnectStart = 0; __kpi.reconnectDone = 0; __kpi.iceTries = 0;
-    const enqueueResponse = await safeFetch("/api/rtc/enqueue", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-ditona-step": "enqueue",
-        "x-ditona-session": String(currentSession ?? "")
-      },
-      body: JSON.stringify({}),
-    });
+    const enqueueResponse = await safeFetch(
+  "/api/rtc/enqueue",
+  {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ditona-step": "enqueue",
+      "x-ditona-session": String(currentSession ?? "")
+    },
+    body: JSON.stringify({}),
+  },
+  "enqueue",
+  currentSession
+);
+
 
     if (!enqueueResponse || !checkSession(currentSession)) return;
 
@@ -594,8 +625,13 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
         "x-ditona-session": String(currentSession ?? "")
       };
       
-      const response = await safeFetch("/api/rtc/matchmake", matchmakeOptions);
-      
+      const response = await safeFetch(
+  "/api/rtc/matchmake",
+  matchmakeOptions,
+  "matchmake",
+  currentSession
+);
+
       if (!response || !checkSession(currentSession)) return;
       
       if (response.status === 200) {
