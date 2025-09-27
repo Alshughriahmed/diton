@@ -29,10 +29,7 @@ export default function LikeSystem() {
     if (!pairId || isPollingRef.current) return;
     
     try {
-      const response = await safeFetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, {
-        method: 'GET',
-        cache: 'no-cache'
-      });
+      const response = await safeFetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, { method: "GET" });
       
       if (response.ok) {
         const data = await response.json();
@@ -166,13 +163,10 @@ setShowHeart(true);
 
     try {
       // Send to server
-      const response = await safeFetch('/api/like', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          pairId: currentPairId,
-          action: action
-        })
+           const response = await safeFetch("/api/like", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pairId: currentPairId, action })
       });
 
       if (response.ok) {
@@ -310,4 +304,5 @@ if (typeof window !== 'undefined') {
   const styleSheet = document.createElement("style");
   styleSheet.innerText = animationStyles;
   document.head.appendChild(styleSheet);
+}
 }
