@@ -353,7 +353,7 @@ async function callerFlow(sessionId: number) {
   await state.pc.setLocalDescription(offer);
   
   // POST offer
-  const offerResponse = await safeFetch("/api/rtc/offer", {
+  const offerResponse = await safeFetch("/api/rtc/offer", { ... }, undefined, 0);
     method: "POST",
     headers: {
       "content-type": "application/json",
