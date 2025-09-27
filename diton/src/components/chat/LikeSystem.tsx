@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { emit, on } from "@/utils/events";
-import { safeFetch } from "@/app/chat/safeFetch";
+import { safeFetch } from "../../app/chat/safeFetch";
 
 interface LikeData {
   myLikes: number;
@@ -305,4 +305,4 @@ if (typeof window !== 'undefined') {
   styleSheet.innerText = animationStyles;
   document.head.appendChild(styleSheet);
 }
-}
+
