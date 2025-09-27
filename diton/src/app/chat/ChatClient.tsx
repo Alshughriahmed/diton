@@ -1,5 +1,4 @@
 "use client";
-import { safeFetch } from "./safeFetch";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 // startRtcFlowOnce guard marker
@@ -165,8 +164,8 @@ export default function ChatClient(){
         // Required sequence: age/allow ⇒ anon/init ⇒ emit("ui:next")
         try {
           const opts = { method: "POST", credentials: "include" as RequestCredentials, cache: "no-store" as RequestCache };
-          await safeFetch("/api/age/allow", opts);
-          await safeFetch("/api/anon/init", opts);
+          await fetch("/api/age/allow", opts);
+          await fetch("/api/anon/init", opts);
         } catch (e) { 
           console.warn("age/allow or anon/init failed", e); 
         }
@@ -525,7 +524,7 @@ try{
       }
       setReady(true);
     }).catch(()=>{});
-    safeFetch("/api/user/vip-status").then(r=>r.json()).then(j=> { 
+    fetch("/api/user/vip-status").then(r=>r.json()).then(j=> { 
       setVip(!!j.isVip); 
       setIsGuest(!j.user); 
     }).catch(()=>{
@@ -565,7 +564,7 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
     const qp=new URLSearchParams(); qp.set("gender",gender); if(countries.length) qp.set("countries", countries.join(","));
       const __mg = (typeof window!=="undefined" && window.localStorage) ? window.localStorage.getItem("ditona_myGender") : null;
       const __geo = (typeof window!=="undefined" && window.localStorage) ? (window.localStorage.getItem("ditona_geo") || window.localStorage.getItem("ditona_geo_hint")) : null;
-    const j:MatchEcho=await safeFetch("/api/match/next?"+qp.toString(), { cache:"no-store", headers: { "x-ditona-my-gender": (__mg||""), "x-ditona-geo": (__geo||"") } }).then(r=>r.json()).catch(()=>null as any);
+    const j:MatchEcho=await fetch("/api/match/next?"+qp.toString(), { cache:"no-store", headers: { "x-ditona-my-gender": (__mg||""), "x-ditona-geo": (__geo||"") } }).then(r=>r.json()).catch(()=>null as any);
     if(j) setMatch(j);
     busyRef.current = false;
   }
