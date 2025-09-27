@@ -1,6 +1,7 @@
 "use client";
 
 import { on, emit } from "@/utils/events";
+import { safeFetch } from "@/app/chat/safeFetch";
 
 let pairId: string | null = null;
 let timer: any = null;
@@ -13,11 +14,11 @@ let count = 0;
 async function pull() {
   if (!pairId) return;
   try {
-    const r = await fetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-    });
+    const r = await safeFetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, {
+  method: "GET",
+  cache: "no-cache",
+});
+
     if (!r.ok) return;
     const j = await r.json();
     count = Number(j?.count ?? 0);
@@ -35,10 +36,11 @@ async function toggle() {
   emit("ui:likeUpdate" as any, { pairId, count, you });
 
   try {
-    const r = await fetch(
-      `/api/like?pairId=${encodeURIComponent(pairId)}&op=${wantInc ? "inc" : "dec"}`,
-      { method: "POST", credentials: "include", cache: "no-store" }
-    );
+    await safeFetch(
+  `/api/like?pairId=${encodeURIComponent(pairId)}&op=${wantInc ? "inc" : "dec"}`,
+  { method: "POST", headers: { "content-type": "application/json" } }
+);
+
     // بعد الاستجابة، نسحب الحقيقة
     setTimeout(pull, 100);
   } catch {
