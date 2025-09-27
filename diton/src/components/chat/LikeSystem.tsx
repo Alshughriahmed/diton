@@ -305,4 +305,3 @@ if (typeof window !== 'undefined') {
   styleSheet.innerText = animationStyles;
   document.head.appendChild(styleSheet);
 }
-
