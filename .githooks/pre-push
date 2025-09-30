@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export TERM=dumb
+ROOT="/home/runner/workspace"; cd "$ROOT" || exit 2
+echo "[pre-push] QA_LOCAL..."
+if bash scripts/qa_local.sh >/dev/null; then
+  echo "[pre-push] OK"
+else
+  echo "[pre-push] FAIL — راجع scripts/qa_local.sh القبول"
+  bash scripts/qa_local.sh
+  exit 1
+fi

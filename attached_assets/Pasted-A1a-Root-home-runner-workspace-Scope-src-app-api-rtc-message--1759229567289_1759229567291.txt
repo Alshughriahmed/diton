@@ -1,0 +1,114 @@
+A1a (رخيص): إزالة التكرارات فقط
+
+Root: /home/runner/workspace
+Scope: src/app/api/{rtc/**,message/**,like/**,user/**}/route.ts
+Exclude: _archive/** .next/** node_modules/** exports/**
+Backups: قبل كل تعديل إلى _ops/backups/<UTC>/…
+Goal: بناء ينجح بإزالة الازدواج فقط. لا تغيّر منطق الإرجاع.
+
+Do
+
+في كل route.ts: أبقِ أول ظهور فقط واحذف الباقي لكل من:
+
+export const dynamic = 'force-dynamic'
+
+export const revalidate = 0
+
+export const runtime = ... إن وُجد
+
+طيّ أي تغليف مزدوج: __noStore(__noStore( أو __withNoStore(__withNoStore( إلى تغليف واحد بنفس الاسم.
+
+لا تُضيف util جديد. لا تغيّر استدعاءات NextResponse.json أو new Response. لا تلمس imports. Minimal-diff.
+
+بناء واحد في النهاية.
+
+Acceptance
+
+-- Acceptance --
+STEP=A1a_DEDUP_EXPORTS
+FILES_CHANGED=<n>
+ROUTES_PROCESSED=<n_total>
+DUP_EXPORTS=ZERO
+DOUBLE_WRAPS_COLLAPSED=<count>
+BUILD=<OK|FAIL>
+SMOKE=<PASS|FAIL>
+NOTES=<1-2 lines>
+-- /Acceptance --
+
+أرسل للوكيل — A1b (رخيص): ترحيل JSON فقط إلى util
+
+Root: /home/runner/workspace
+Scope: نفس مجموعة route.ts
+Exclude: نفسها
+Backups: نفسها
+Goal: إدخال util مركزي لإرجاعات JSON فقط. اترك new Response(...) كما هي الآن لتقليل المخاطر.
+
+Create إذا لم يوجد: src/lib/http.ts
+
+import { NextResponse } from "next/server";
+export function noStore<T extends Response>(r: T): T { try { r.headers?.set("Cache-Control","no-store"); } catch {} return r; }
+export function json(data: any, init: ResponseInit = {}) {
+  return noStore(NextResponse.json(data, { ...init, headers: { ...(init.headers||{}), "Cache-Control":"no-store" } }));
+}
+export function text(s: string, init: ResponseInit = {}) {
+  return noStore(new Response(s, { ...init, headers: { ...(init.headers||{}), "Cache-Control":"no-store" } }));
+}
+
+
+Migrate (JSON-only)
+
+في كل route.ts:
+
+أضف إن لم يوجد: import * as http from "@/lib/http";
+
+بدّل فقط العبارات التي تطابق return NextResponse.json( إلى return http.json(.
+
+وبدّل الأنماط المغلّفة مباشرة:
+return __noStore(NextResponse.json( → return http.json(
+return __withNoStore(NextResponse.json( → return http.json(
+
+اترك أي new Response(...) كما هو. اترك أي helpers محليّة كما هي الآن إن كانت لازالت مستخدمة في فروع أخرى.
+
+لا تغيّر dynamic/revalidate. لا تغيّر المنطق.
+
+بناء واحد في النهاية.
+
+Acceptance
+
+-- Acceptance --
+STEP=A1b_HTTP_UTIL_JSON_ONLY
+FILES_CHANGED=<n>
+JSON_RETURNS_MIGRATED=<lines_moved>
+ROUTES_TOUCHED=<n>/<total>
+BUILD=<OK|FAIL>
+SMOKE=<PASS|FAIL>
+NOTES=<1-2 lines>
+-- /Acceptance --
+
+فحوص شِل سريعة بين المرحلتين وبعدهما
+
+انسخ وشغّل من الجذر لفحص الحالة وتقليل كلفة الوكيل.
+
+bash -lc '
+set -Eeuo pipefail; set +H; export TERM=dumb
+cd /home/runner/workspace
+
+echo "[SCAN] duplicate exports"
+find src/app/api -type f -path "*/route.ts" | grep -E "/(rtc|message|like|user)/" | while read -r f; do
+  d=$(grep -cE "^[[:space:]]*export[[:space:]]+const[[:space:]]+dynamic[[:space:]]*=" "$f" || true)
+  r=$(grep -cE "^[[:space:]]*export[[:space:]]+const[[:space:]]+revalidate[[:space:]]*=" "$f" || true)
+  rt=$(grep -cE "^[[:space:]]*export[[:space:]]+const[[:space:]]+runtime[[:space:]]*=" "$f" || true)
+  if [ "${d:-0}" -gt 1 ] || [ "${r:-0}" -gt 1 ] || [ "${rt:-0}" -gt 1 ]; then
+    echo "DUP: $f dyn=$d rev=$r run=$rt"
+  fi
+done
+
+echo "[SCAN] JSON returns not yet migrated"
+grep -RIl --include="route.ts" -E "return[[:space:]]+NextResponse\.json\(" src/app/api | grep -E "/(rtc|message|like|user)/" || true
+
+echo "[SCAN] http util usage"
+grep -RIl --include="route.ts" -E "http\.(json|text|noStore)\(" src/app/api | grep -E "/(rtc|message|like|user)/" || true
+'
+
+
+نتائجك من A1a ثم A1b ارسلها لي ببلوكات القبول.

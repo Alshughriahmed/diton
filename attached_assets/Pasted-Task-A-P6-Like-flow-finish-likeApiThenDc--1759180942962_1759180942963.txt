@@ -1,0 +1,230 @@
+Task A — P6 Like flow finish (أولوية)
+الهدف
+
+كل استدعاءات الإعجاب في الواجهة تمر عبر likeApiThenDc().
+
+الخادم يفرض idempotency عبر Upstash (TTL=600s) مع fallback ذاكرة.
+
+صفر استدعاء مباشر إلى /api/like في العميل.
+
+النطاق
+
+يشمل:
+src/app/chat/likeSyncClient.ts،
+جميع المستدعين الذين يلمسون /api/like داخل src/**،
+src/app/api/like/route.ts.
+
+يستثنى: _archive/** .next/** node_modules/** exports/**
+
+مدخلات لازمة
+
+متغيرات البيئة إن توفرت:
+UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+غيابها لا يفشل التنفيذ. يُفعّل fallback in-memory.
+
+خطوات الوكيل
+
+إنشاء/تحديث المساعد العميل src/app/chat/likeSyncClient.ts بالمحتوى التالي:
+
+// Auto-generated: P6. API-first Like, then DC notify. Sends x-idempotency.
+"use client";
+type DC = RTCDataChannel | null | undefined;
+
+async function sha256Hex(input: string): Promise<string> {
+  if (typeof crypto !== "undefined" && (crypto as any).subtle) {
+    const enc = new TextEncoder().encode(input);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+  }
+  let h = 0; for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) | 0;
+  return "faux-" + (h >>> 0).toString(16); // fallback مقبول للمفاتيح فقط
+}
+
+function globals(): { pairId?: string; dc?: DC } {
+  const w = globalThis as any;
+  return { pairId: w?.__ditonaPairId ?? w?.__pairId ?? w?.pairId, dc: w?.__ditonaDataChannel ?? w?.__dataChannel };
+}
+
+async function apiToggleLike(idempKey: string) {
+  const res = await fetch("/api/like", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-idempotency": idempKey },
+    body: JSON.stringify({ op: "toggle" }),
+    cache: "no-store",
+    credentials: "include",
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error("Like API failed: " + res.status);
+  return json as { ok?: boolean; duplicate?: boolean };
+}
+
+/** API-first then DC notify. Falls back to globals if args omitted. */
+export async function likeApiThenDc(pairId?: string, dc?: DC) {
+  const g = globals();
+  pairId = pairId ?? g.pairId ?? "unknown";
+  dc = dc ?? g.dc;
+  const key = await sha256Hex(`pair:${pairId}:op:toggle`);
+  const r = await apiToggleLike(key);
+  try { if (dc && dc.readyState === "open") dc.send(JSON.stringify({ type: "like:toggled", payload: { pairId } })); } catch {}
+  return r;
+}
+
+
+استبدال المستدعين: عبر codemod (TS AST أو Regex حذر):
+
+ابحث عن أي fetch(...) أو safeFetch(...) تُستدعى بأول وسيط يشير إلى /api/like (سلسلة أو template).
+
+استبدل جسم النداء بـ: await likeApiThenDc().
+
+أضف عند الحاجة:
+import { likeApiThenDc } from "@/app/chat/likeSyncClient";
+
+لا تعدّل ملفات خارج src/**. لا تلمس likeSyncClient.ts.
+
+تفعيل idempotency على الخادم في src/app/api/like/route.ts:
+
+إن كان هناك export async function POST(...) → أعد تسميته POST_IMPL.
+
+أو إن كان export const POST = async (...) → أعد تسميته POST_IMPL.
+
+أضِف أعلى الملف كتلة أدوات idempotency:
+
+/* LIKE_IDEMP_ENABLED */
+const __like_mem = new Map<string, number>();
+const IDEMP_TTL_SEC = 600;
+
+async function idempCheckAndSet(req: Request, userScope: string) {
+  const hdr = req.headers.get("x-idempotency") || "";
+  const key = hdr ? `like:idemp:${userScope}:${hdr}` : "";
+  if (!key) return { duplicate:false, key:"" };
+
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const tok = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  try {
+    if (url && tok) {
+      const getRes = await fetch(`${url}/get/${encodeURIComponent(key)}`, { headers: { Authorization: `Bearer ${tok}` }, cache: "no-store" });
+      const getJson: any = await getRes.json().catch(()=>({}));
+      if (getJson?.result) return { duplicate:true, key };
+      await fetch(`${url}/set/${encodeURIComponent(key)}/1?EX=${IDEMP_TTL_SEC}`, { headers: { Authorization: `Bearer ${tok}` }, cache: "no-store" });
+      return { duplicate:false, key };
+    }
+  } catch {}
+
+  const now = Date.now();
+  const exp = __like_mem.get(key) || 0;
+  if (exp > now) return { duplicate:true, key };
+  __like_mem.set(key, now + IDEMP_TTL_SEC*1000);
+  return { duplicate:false, key };
+}
+
+async function userScopeFromReq(req: Request) {
+  try {
+    const cookie = req.headers.get("cookie") || "";
+    const m = cookie.match(/(anon|aid|__did|sessionId)=([^;]+)/);
+    if (m) return m[2];
+  } catch {}
+  return "anon";
+}
+
+
+لف دالة POST الجديدة بحيث:
+
+export async function POST(req: Request, ctx: any) {
+  const scope = await userScopeFromReq(req);
+  const r = await idempCheckAndSet(req, scope);
+  if (r.duplicate) {
+    return new Response(JSON.stringify({ ok:true, duplicate:true }), { status:200, headers:{ "Content-Type":"application/json", "Cache-Control":"no-store" } });
+  }
+  const res: any = await (POST_IMPL as any)(req, ctx);
+  try { res.headers?.set?.("Cache-Control","no-store"); } catch {}
+  return res;
+}
+
+
+ملاحظة: إن لم توجد POST أصلًا، أنشئ POST أعلاه لتعيد { ok:true } مؤقتًا.
+
+بناء واحد: pnpm -s build
+
+تحققات:
+
+grep -R "\blikeApiThenDc(" src | wc -l > 0
+
+grep -R "fetch(.*\/api\/like" src | wc -l = 0
+
+إعادة نداء مفتاح idempotency نفسه مرتين تعيد 200 وduplicate:true في الثانية دون مضاعفة الحالة.
+
+لا تغييرات خارج النطاق.
+
+معايير القبول (يطبعها الوكيل نصًا)
+-- Acceptance --
+STEP=P6_LIKE_API_THEN_DC
+FILES_CHANGED=<n>
+CLIENT_CALLERS_FIXED=<count>
+SERVER_IDEMPENCY=ENFORCED
+REMAINING_DIRECT_FETCH=0
+BUILD=<OK|FAIL>
+SMOKE=<PASS|FAIL>
+NOTES=<سطرين>
+-- /Acceptance --
+
+Task B — FFA Unify (يشغّل مباشرة بعد Task A إذا كان P6=OK)
+الهدف
+
+مصدر وحيد: src/lib/useFFA.ts.
+
+حذف src/hooks/useFFA.ts بعد تحويل كل الاستيرادات.
+
+النطاق
+
+جميع الملفات التي تستورد من @/hooks/useFFA داخل src/**.
+
+خطوات الوكيل
+
+بحث الاستيرادات: جميع الأسطر التي تطابق:
+
+from "@/hooks/useFFA" أو from "../hooks/useFFA" أو أي مسار ينتهي /hooks/useFFA.
+
+استبدالها بـ:
+
+from "@/lib/useFFA"
+
+تأكد أن التوقيع متطابق. إن وُجد فرق طفيف، أضف re-export داخل src/lib/useFFA.ts بدون كسر API.
+
+بعد صفر استيراد إلى /hooks/useFFA، احذف src/hooks/useFFA.ts.
+
+بناء واحد: pnpm -s build.
+
+معايير القبول
+-- Acceptance --
+STEP=P2_FFA_UNIFY
+FILES_CHANGED=<n>
+IMPORTS_SWITCHED=<count>
+DUP_HOOK_REMOVED=YES
+BUILD=<OK|FAIL>
+NOTES=<سطرين>
+-- /Acceptance --
+
+حواجز الأمان العامة للوكيل
+
+الجذر: /home/runner/workspace.
+
+ممنوع: _archive/** .next/** node_modules/** exports/**.
+
+قبل أي تعديل: انسخ الملفات المتأثرة إلى _ops/backups/<UTC>/....
+
+التزم Minimal-Diff.
+
+حدّ أقصى نقاط/تكلفة: خطوتان (Task A ثم B). توقف إذا فشل أي بناء.
+
+اطبع بلوك القبول لكل خطوة كما هو.
+
+أوامر تحقق مقترحة للوكيل
+
+grep -R "\blikeApiThenDc(" src | wc -l
+
+grep -R "fetch(.*\/api\/like" src | wc -l
+
+pnpm -s build
+
+إذا احتاج الوكيل سكربتات مساعدة صغيره، استخدم Node CJS (بدون علامات تعجب في Bash) وعالج الملفات عبر AST أو Regex، مع كتابة نسخ احتياطية قبل الحفظ.

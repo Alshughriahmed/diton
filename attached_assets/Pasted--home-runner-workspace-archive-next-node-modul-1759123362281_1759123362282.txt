@@ -1,0 +1,94 @@
+نطاق العمل لهذا الريبل فقط
+
+الجذر: /home/runner/workspace. لا تلمس _archive/**, .next/**, node_modules/**, exports/**.
+
+عدّل ملفًا واحدًا أساسيًا: src/components/chat/MyControls.tsx.
+
+مسموح تعديل مستمع upsell إن وُجد فقط. لا تغييرات أخرى.
+
+المشكلة
+زر التجميل العلوي في الشريط السفلي يأتي من MyControls.tsx ويطلق ui:upsell دائمًا، فيحوّل إلى /plans. نريد توحيد السلوك مع FFA/VIP:
+
+إذا FFA=1 أو المستخدم VIP ⇒ فعّل/أطفئ الجمال محليًا، بلا تحويل.
+
+غير ذلك ⇒ نفّذ upsell فقط عند محاولة التفعيل.
+
+المطلوب بدقة
+
+في أعلى src/components/chat/MyControls.tsx:
+
+تأكد أن أول سطر هو "use client"; (واحد فقط).
+
+أضف استيرادًا واحدًا:
+
+import { useFFA } from '@/lib/useFFA';
+
+
+داخل المكوّن، عرّف:
+
+const ffa = useFFA();
+
+
+استبدل دالة onBeauty بالكامل بالكود التالي، واحرص على صحّة الاقتباسات:
+
+const onBeauty = useCallback(() => {
+  if (ffa || isVip) {
+    const newState = !beauty;
+    setBeauty(newState);
+    emit('ui:toggleBeauty', { enabled: newState });
+    return;
+  }
+  emit('ui:upsell', { feature: 'beauty', ref: 'beauty' });
+}, [ffa, isVip, beauty]);
+
+
+ملاحظات: لا تترك أي سطور مثل emit(ui:toggleBeauty …) بدون اقتباسات.
+
+ابحث إن كان هناك مستمع عام لـ ui:upsell يقوم بـ router.push('/plans...'). إن وُجد، اجعله يحترم FFA:
+
+const ffa = useFFA();
+on('ui:upsell' as any, (d:any) => {
+  if (ffa) return; // لا تحويل في وضع FFA
+  router.push(`/plans?ref=${d?.ref || d?.feature || 'generic'}`);
+});
+
+
+لا تضف مستمعًا جديدًا إن لم يكن موجودًا، عدّل الموجود فقط.
+
+تدقيق سريع:
+
+أزل أي تكرار لعبارة "use client" داخل الملف.
+
+لا تبقِ أي router.push("/plans?ref=beauty") داخل MyControls.tsx.
+
+صحّح كل الاستدعاءات لتكون:
+
+emit('ui:toggleBeauty', {...})
+
+emit('ui:upsell', {...})
+
+بناء وتشغيل
+
+انسخ نسخة احتياطية إلى _ops/backups/<timestamp>/src/components/chat/MyControls.tsx قبل التعديل.
+
+نفّذ pnpm -s build وتأكد أنه أخضر.
+
+شغّل زر Run (dev على 5000)، ثم:
+
+مع FREE_FOR_ALL=1 في .env.local: زر التجميل يفعّل/يعطّل التأثير فورًا بلا تحويل.
+
+غيّر مؤقتًا FREE_FOR_ALL=0 وبدون VIP: الزر يفتح، وعند محاولة التفعيل فقط يتم الانتقال إلى /plans?ref=beauty.
+
+كتلة القبول المطلوبة
+
+-- Acceptance --
+STEP=MYCONTROLS_BEAUTY_GATING
+FILES_TOUCHED=src/components/chat/MyControls.tsx[,<upsell-listener-file-if-any>]
+BACKUPS_DIR=_ops/backups/<timestamp>
+BUILD=OK
+SMOKE=/chat FFA=1 -> beauty toggles; FFA=0 non-VIP -> upsell on toggle
+DIFF_SNIPPET=<3-5 أسطر من onBeauty بعد التعديل>
+-- /Acceptance --
+
+
+الهدف: إنهاء سلوك زر التجميل بما يطابق توحيد FFA الذي طُبّق على FilterBar وChatToolbar، وبناء أخضر.

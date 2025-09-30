@@ -1,0 +1,4 @@
+dumb-safe|dumb terminal completely safe,
+    am, bw,
+    cols#80, lines#24,
+    bel=^G, cr=^M, cud1=^J, ind=^J,

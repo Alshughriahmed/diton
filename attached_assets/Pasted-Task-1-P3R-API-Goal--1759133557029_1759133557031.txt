@@ -1,0 +1,128 @@
+Task 1 — P3R: إصلاح مسارات API بعد الالتفاف وضمان البناء
+
+Goal
+تصحيح كل أخطاء الصياغة الناتجة عن التفاف الردود بـ__withNoStore(...) وإرجاع بناء ناجح.
+
+Scope
+
+src/app/api/{rtc,message,like*,user}/**/route.ts كلّها.
+
+ركّز خصوصًا على:
+rtc/answer/route.ts, rtc/ice/route.ts, rtc/offer/route.ts, rtc/prev/for/route.ts, rtc/qlen/route.ts, وراجع rtc/enqueue/route.ts.
+
+Constraints
+
+الجذر الوحيد: /home/runner/workspace.
+
+ممنوع: _archive/**, .next/**, node_modules/**, exports/**.
+
+أقل Diff ممكن. نسخة احتياطية إلى _ops/backups/<UTC> قبل أي تعديل.
+
+Fix Rules
+
+أبقِ أعلى كل ملف:
+export const dynamic = 'force-dynamic', export const revalidate = 0, ودالّة const __withNoStore = <T extends Response>(r:T):T => { (r as any).headers?.set?.('cache-control','no-store'); return r; }.
+
+صِحّح الأنماط التالية فقط حيث تظهر:
+
+String(...));.slice(..) ← تصبح String(...).slice(..).
+
+NextResponse.json({ ... }); داخل __withNoStore(...) يجب أن تكون:
+return __withNoStore(NextResponse.json(payload, { status: N }));
+
+أزل return return __withNoStore(...).
+
+قلّل ));; إلى ));.
+
+في الفروع التي تُعيد 204، الصيغة الوحيدة المسموحة:
+return __withNoStore(new NextResponse(null, { status: 204 }));
+
+لا تُعدّل المنطق أو أسماء الحقول.
+
+أمثلة تصحيح من الأخطاء الحالية:
+
+String(e?.message || e));.slice(0, 140) ← String(e?.message || e).slice(0, 140)
+
+NextResponse.json({ sdp:String(sdp)); },{status:200}) ← NextResponse.json({ sdp: String(sdp) }, { status: 200 })
+
+Deliverables
+
+Patch موحّد واحد يطال الملفات المعدّلة فقط.
+
+قائمة الملفات المصححة.
+
+بناء واحد: pnpm -s build ونتيجته.
+
+Acceptance
+
+-- Acceptance --
+STEP=P3R_API_REPAIR
+FILES_FIXED=<n>
+BUILD=<OK|FAIL>
+DIFF=SHOWN
+-- /Acceptance --
+
+
+Cost Guards
+
+زمن أقصى 8 دقائق.
+
+بناء واحد فقط في النهاية.
+
+Task 2 — P4A: Reset + Auto-Scroll للرسائل عند rtc:pair
+
+Goal
+تصفير الرسائل والتمرير للأسفل تلقائيًا عند كل rtc:pair وتغيّر pairId.
+
+Scope
+
+src/app/chat/ChatClient.tsx
+
+src/app/chat/components/ChatMessagingBar.tsx
+
+إضافة هوك جديد: src/hooks/useAutoScroll.ts إن لم يوجد.
+
+Constraints
+
+أقل Diff ممكن. لا حزم خارجية. "use client" أول سطر لكل مكوّن عميل.
+
+لا تغييرات UI كبيرة، منطق فقط.
+
+Implementation
+
+على حدث rtc:pair وتغيّر pairId:
+
+صفّر قائمة الرسائل المعروضة.
+
+أطلق emit('ui:msg:reset', { pairId }) قبل الاشتراك في الرسائل الجديدة.
+
+أضف hook بسيط useAutoScroll(ref) يدفع التمرير لأسفل عند كل إضافة رسالة إذا لم يتدخل المستخدم.
+
+احمِ العرض بـ guard على pairId لمنع “أشباح” رسائل من الزوج السابق.
+
+Deliverables
+
+Patch موحّد.
+
+وصف قصير لنقطة الربط في ChatClient.tsx وChatMessagingBar.tsx.
+
+بناء واحد وسموك يدوي مختصر:
+
+فتح /chat، بدء جلسة، التبديل إلى زوج جديد، التحقق من تصفير الرسائل والتمرير للأسفل.
+
+Acceptance
+
+-- Acceptance --
+STEP=P4A_MSG_RESET_AUTOSCROLL
+FILES_CHANGED=<list>
+BUILD=<OK|FAIL>
+SMOKE=<PASS|FAIL>
+DIFF=SHOWN
+-- /Acceptance --
+
+
+Cost Guards
+
+زمن أقصى 8 دقائق.
+
+بناء واحد فقط.

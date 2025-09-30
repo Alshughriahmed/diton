@@ -1,0 +1,220 @@
+Context
+
+Next.js + TS على Replit. البيئة محلية. .env.local فيها:
+
+FREE_FOR_ALL=1
+NEXT_PUBLIC_FREE_FOR_ALL=1
+NEXTAUTH_URL=http://localhost:5000
+NEXTAUTH_SECRET=dev-secret
+
+
+المطلوب: توحيد gating للفلاتر و"السابق" و"تجميل الوجه" وفق سياسة واحدة:
+
+عند FFA=1: كل شيء مُمكَّن للجميع.
+
+عند FFA=0: العناصر تظهر وتُفتح، لكن الاختيار/التطبيق فقط هو الذي يعمل للمشتركين أو يوجّه إلى /plans مع معلمة ref.
+
+لا نريد أي إعادة توجيه فورية عند فتح اللوحة. الـredirect فقط عند محاولة التطبيق أو اختيار قيمة.
+
+Goal
+إصلاح gating في ثلاثة مكوّنات وجعل المصدر الوحيد للحالة هو هوك واحد runtime. تنفيذ أقل Diff ممكن مع نسخ احتياطية إلى _ops/backups/.
+
+Files to touch
+
+src/lib/useFFA.ts (أضفه أو وحّده)
+
+src/app/chat/components/FilterBar.tsx
+
+src/app/chat/components/ChatToolbar.tsx
+
+src/components/chat/BeautyControls.tsx
+
+Task 1 — unify hook
+
+أنشئ/وحِّد src/lib/useFFA.ts ليُرجع boolean فقط ويقرأ runtime من /api/rtc/env. الكود المقترح:
+
+// src/lib/useFFA.ts
+"use client";
+import { useEffect, useState } from "react";
+
+function readBuildTime(): boolean {
+  try { return process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1"; } catch { return false; }
+}
+
+export function useFFA(): boolean {
+  const [ffa, setFFA] = useState<boolean>(readBuildTime());
+  useEffect(() => {
+    let stop = false;
+    const probe = async () => {
+      try {
+        const r = await fetch("/api/rtc/env", { cache: "no-store", credentials: "include" });
+        const j = await r.json().catch(()=>({}));
+        setFFA(j?.public?.NEXT_PUBLIC_FREE_FOR_ALL === "1");
+      } catch {}
+    };
+    probe();
+    const id = setInterval(probe, 15000);
+    return () => { stop = true; clearInterval(id); };
+  }, []);
+  return ffa;
+}
+
+
+في الملفات الثلاثة: اجعل أول سطر "use client"; ثم استيراد واحد:
+
+import { useFFA } from '@/lib/useFFA';
+
+
+وحّد الاستخدام إلى:
+
+const ffa = useFFA();
+
+
+احذف أي تعريفات قديمة مثل:
+
+const { ffa } = useFFA();
+
+const ffa = (window as any).__vip?.FREE_FOR_ALL == 1 أو أي استخدام لـ globalThis.__vip.
+
+Task 2 — FilterBar gating
+
+منطق التفعيل:
+
+const ffa = useFFA();
+const { vip } = (useVip?.() ?? { vip:false });
+const dc: RTCDataChannel | null = (globalThis as any).__ditonaDataChannel ?? null;
+const connected = !!dc && dc.readyState === "open";
+const buttonEnabled = ffa || connected;
+
+// زر فتح اللوحة:
+<button disabled={!buttonEnabled} onClick={()=>setOpen(true)} ... />
+
+// عند اختيار فلتر:
+const canApply = ffa || vip;
+if (canApply) applyFilter(...);
+else router.push("/plans?ref=filters");
+
+
+لا Redirect عند فتح اللوحة. الـRedirect فقط عند اختيار فلتر مع canApply=false.
+
+Task 3 — ChatToolbar (زر Prev)
+
+التفعيل:
+
+const ffa = useFFA();
+const canPrev = ffa || (dc?.readyState === "open" && pairId);
+<button disabled={!canPrev} title={!canPrev ? "Available during active connection or FFA" : "Previous match"} ... />
+
+
+تأكد من إزالة أي قراءات قديمة لـ window.__vip.
+
+Task 4 — BeautyControls gating
+
+فتح اللوحة دائمًا إذا ffa || connected مثل FilterBar.
+
+عند محاولة تطبيق مرشح التجميل:
+
+const canApply = ffa || vip;
+if (canApply) applyBeauty(...);
+else router.push("/plans?ref=beauty");
+
+
+أوقف أي Redirect فوري عند الضغط على أيقونة التجميل.
+
+Task 5 — consistency
+
+لا تبقِ أي import من @/hooks/useFFA.
+
+احرص أن "use client" تكون أول سطر في كل مكوّن.
+
+لا تغيّر أي CSS أو UI إلا ما يلزم لتمكين الأزرار.
+
+أنشئ نسخًا احتياطية للملفات المعدلة إلى _ops/backups/<timestamp>/.
+
+Build and run
+
+استخدم زر Run (الذي يشغّل pnpm dev على 5000) بعد التعديلات.
+
+البيئة: .env.local تحتوي FFA=1 كما أعلاه.
+
+Acceptance
+أرسل لي:
+
+قائمة الملفات المعدلة مع diff مختصر للأسطر التي تغيرت.
+
+لقطات شاشة من /chat تُظهر:
+
+زر Prev فعّال في وضع FFA.
+
+فتح FilterBar، وعند اختيار فلتر مع FFA=0 & vip=false ينتقل إلى /plans?ref=filters.
+
+فتح BeautyControls، وعند تطبيق مرشح مع FFA=0 & vip=false ينتقل إلى /plans?ref=beauty.
+
+نتائج:
+
+GET /api/rtc/env ⇒ 200 ويحتوي public.NEXT_PUBLIC_FREE_FOR_ALL.
+
+GET /api/message/allow ⇒ 200.
+
+تأكيد أن لا وجود لأي استعمال لـ globalThis.__vip أو window.__vip في الملفات الثلاثة.
+
+Cost control
+
+عدّل الملفات المحددة فقط.
+
+بناء واحد نهائي بعد اكتمال التعديلات.
+
+لا تغييرات في البنية أو الحزم.
+
+نطاق العمل الإجباري لهذا الريبل
+
+اعمل فقط داخل الجذر: /home/runner/workspace. هذا هو مشروعنا الفعلي.
+
+ممنوع لمس أو القراءة/التعديل من المسارات التالية: _archive/**, exports/**, .next/**, node_modules/**, .cache/**, attached_assets/**.
+
+لا تغيّر ملفات التشغيل: .replit, replit.nix, package.json، إلا إذا طلبتُ ذلك صراحة.
+
+أي تعديل على ملف يجب أن يُسبق بنسخة احتياطية إلى: _ops/backups/<timestamp>/<relative-path>.
+
+الملفات المسموح تعديلها لهذه المهمة فقط
+
+src/lib/useFFA.ts
+
+src/app/chat/components/FilterBar.tsx
+
+src/app/chat/components/ChatToolbar.tsx
+
+src/components/chat/BeautyControls.tsx
+
+بيئة التشغيل الثابتة
+
+FREE_FOR_ALL=1
+NEXT_PUBLIC_FREE_FOR_ALL=1
+NEXTAUTH_URL=http://localhost:5000
+NEXTAUTH_SECRET=dev-secret
+
+
+لا تغيّر القيم أعلاه. شغّل المعاينة عبر زر Run (المنفذ 5000). لا تشغّل خوادم بالخلفية.
+
+قواعد التنفيذ
+
+قبل أي تعديل اطبع المسار الحالي ووجود الملف المستهدف: pwd && ls -l <file>.
+
+عند اللصق/التحرير استخدم مسارات مطلقة من الجذر المذكور.
+
+استخدم أقل Diff ممكن. لا تضف حزمًا.
+
+لا تعتمد على أي شيء داخل _archive/ إلا للمقارنة فقط.
+
+كتلة القبول المطلوبة بعد الانتهاء
+
+-- Acceptance --
+STEP=<name>
+FILES_TOUCHED=<comma-separated>
+BACKUPS_DIR=_ops/backups/<timestamp>
+BUILD=<OK|FAIL>
+NOTES=<optional>
+-- /Acceptance --
+
+
+الهدف من هذه المهمة: تعديل الملفات المصرّح بها فقط داخل هذا الجذر، وعدم لمس أي محتوى مؤرشف أو نواتج بناء أو أدلة خارج المشروع.

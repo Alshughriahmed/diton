@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+dist/
+coverage/
+.env*
+exports/
+_archive/
+_ops/backups/
+_ops/reports/
+.DS_Store
+*.log

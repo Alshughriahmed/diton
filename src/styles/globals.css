@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Z-index layering system */
+:root {
+  --z-toolbar: 60;    /* Main toolbar buttons */
+  --z-msgbar: 70;     /* Message bar (covers toolbar when open) */
+}
+
+/* Z-index hierarchy:
+ * 50: Navigation buttons (prev/next)
+ * 60: Main toolbar 
+ * 70: Message bar (highest priority)
+ */
+
+/* Hide legacy camera button without breaking logic */
+[data-ui="btn-camera"] { 
+  display: none !important; 
+}
+
+/* Safe-area padding for toolbar */
+@supports (bottom: env(safe-area-inset-bottom)) {
+  [data-toolbar] { 
+    padding-bottom: max(.25rem, env(safe-area-inset-bottom)); 
+  }
+}
+
+/* Ensure messaging bar doesn't interfere with video */
+@media (max-height: 600px) {
+  [data-ui="btn-messages"][aria-pressed="true"] ~ * {
+    transition: transform 0.2s ease;
+  }
+}

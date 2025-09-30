@@ -1,0 +1,77 @@
+Goal
+Fix P4 build by removing duplicate exports and duplicate helpers that the previous hardening step introduced.
+
+Scope
+Only files matching: src/app/api/**/route.ts under these groups: rtc, message, like, user.
+Do not touch: _archive/** .next/** node_modules/** exports/**.
+
+What to do (single idempotent shell script)
+
+Start with: set -Eeuo pipefail; set +H; export TERM=dumb.
+
+Backup every file you change to _ops/backups/<UTC>/....
+
+For each target route.ts:
+
+De-dupe exports: keep the first occurrence of each and delete the rest:
+
+export const dynamic = ...
+
+export const revalidate = ...
+
+export const runtime = ... ← do not add new ones, just ensure at most one.
+
+De-dupe helpers:
+
+If both __withNoStore( and __noStore( exist, keep only __noStore and rewrite calls __withNoStore( → __noStore(.
+
+Collapse nested wraps: __noStore(__noStore( → __noStore(.
+
+No other edits. Do not insert new exports or imports.
+
+After patching, run a single build: pnpm -s build.
+
+Compute stats:
+
+TOTAL routes processed.
+
+HARDENED routes where each of the three exports appears ≤1 time and no __withNoStore( remains.
+
+Print the Acceptance Block exactly.
+
+Implementation constraints
+
+One shell script. Use only find, grep, awk, and sed.
+
+Use quoted heredocs <<'EOF' if you must embed snippets.
+
+No Node/Perl inline. No screen clearing.
+
+Smoke checks inside the script
+
+For each file:
+grep -cE "^[[:space:]]*export[[:space:]]+const[[:space:]]+dynamic[[:space:]]*=" ≤ 1
+grep -cE "^[[:space:]]*export[[:space:]]+const[[:space:]]+revalidate[[:space:]]*=" ≤ 1
+grep -cE "^[[:space:]]*export[[:space:]]+const[[:space:]]+runtime[[:space:]]*=" ≤ 1
+and grep -q "__withNoStore\(" must be false.
+
+If any fail, mark SMOKE=FAIL.
+
+Acceptance Block to print
+
+-- Acceptance --
+STEP=P4_API_POLICY_DEDUPE
+FILES_CHANGED=<n>
+ROUTES_HARDENED=<n>/<total>
+MIDDLEWARE_API_EXCLUDED=<YES|NO>
+BUILD=<OK|FAIL>
+SMOKE=<PASS|FAIL>
+NOTES=<1-2 lines>
+-- /Acceptance --
+
+
+Notes for Assistant
+
+The earlier hardening already added dynamic/revalidate and __noStore. The build error shows duplicate dynamic. Your job is to remove duplicates only and normalize helper names.
+
+Middleware status: set MIDDLEWARE_API_EXCLUDED=YES unless src/middleware.ts contains a matcher that explicitly matches /api; otherwise NO.

@@ -1,0 +1,116 @@
+Task A1 — HTTP util consolidation (Minimal-Diff)
+
+Root: /home/runner/workspace
+Touch only: src/lib/http.ts, وكل src/app/api/{rtc/**,message/**,like/**,user/**}/route.ts
+Exclude: _archive/** .next/** node_modules/** exports/**
+Backups: قبل أي تعديل إلى _ops/backups/<UTC>/…
+Stop on failure: إذا فشل build، توقّف واطبع القبول.
+
+Goal
+
+توحيد ردود الـAPI لمنع التخزين عبر util مركزي، مع ضمان وجود بالضبط مرّة واحدة لكل من:
+export const dynamic = 'force-dynamic' وexport const revalidate = 0 داخل كل route.ts. إزالة المساعدات المحلية المكررة (__noStore/__withNoStore) واستبدال الاستدعاءات بـ util.
+
+ملاحظة مهمة: لا تنقل dynamic/revalidate إلى util. يجب أن تبقى exports ثابتة داخل كل ملف route.
+
+Steps
+
+Create src/lib/http.ts بالمحتوى التالي:
+
+// Central HTTP helpers for API routes (A1)
+import { NextResponse } from "next/server";
+
+export function noStore<T extends Response>(r: T): T {
+  try { r.headers?.set("Cache-Control","no-store"); } catch {}
+  return r;
+}
+
+export function json(data: any, init: ResponseInit = {}) {
+  return noStore(
+    NextResponse.json(data, {
+      ...init,
+      headers: { ...(init.headers || {}), "Cache-Control": "no-store" }
+    })
+  );
+}
+
+export function text(s: string, init: ResponseInit = {}) {
+  return noStore(
+    new Response(s, {
+      ...init,
+      headers: { ...(init.headers || {}), "Cache-Control": "no-store" }
+    })
+  );
+}
+
+
+Migrate كل ملف مطابق للنمط src/app/api/{rtc/**,message/**,like/**,user/**}/route.ts:
+
+أضف أعلى الملف (بعد import/"use ...") إن لم يوجد:
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+
+وإذا وُجدتا عدة مرات، أبقِ الأول فقط واحذف المكرر.
+
+أضف الاستيراد:
+
+import * as http from "@/lib/http";
+
+
+إذا لم يكن موجودًا.
+
+استبدل الإرجاعات:
+
+return NextResponse.json( → return http.json(
+
+return new Response( → إن كانت نصًا واضحًا فاستعمل http.text(، وإلا لفّها بـ http.noStore(new Response( مع نفس الوسائط.
+
+احذف أي تعريف محلي لـ __noStore أو __withNoStore واستبدل الاستدعاءات إلى:
+
+__withNoStore( → http.noStore(
+
+__noStore( → http.noStore(
+
+اطوِ أي تغليف مزدوج مثل:
+
+http.noStore(http.noStore( → http.noStore(
+
+One Build: نفّذ بناءًا واحدًا بعد الهجرة.
+
+Smoke:
+
+عدّ الملفات المرحّلة.
+
+تحقق في كل route:
+
+dynamic وrevalidate يظهران ≤ 1 مرّة لكل واحد.
+
+لا توجد بقايا __noStore/__withNoStore محلية (يُسمح فقط باستدعاءات http.*).
+
+عيّنة grep تؤكد وجود http.json( أو http.noStore( أو http.text( في كل ملف تمسّه.
+
+Guardrails
+
+Minimal-diff. لا تغيّر أي منطق أعمال.
+
+لا تلمس ملفات خارج النطاق.
+
+نسخ احتياطي لكل ملف تغيّره تحت _ops/backups/<UTC>/….
+
+اطبع القبول أدناه بدقة.
+
+Acceptance Block
+-- Acceptance --
+STEP=A1_HTTP_UTIL
+FILES_CHANGED=<n>
+ROUTES_MIGRATED=<n>/<total>
+LOCAL_HELPERS_REMOVED=YES
+BUILD=<OK|FAIL>
+SMOKE=<PASS|FAIL>
+NOTES=<1-2 lines>
+-- /Acceptance --
+
+
+After you finish: أعِد عدد الملفات المرحّلة، وأي ملف تعذر ترحيله مع السبب في NOTES.

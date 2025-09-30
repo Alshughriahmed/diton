@@ -1,0 +1,106 @@
+Goal
+Harden API caching policy across our Next app. For every file matching src/app/api/{rtc/**,message/**,like/**,user/**}/route.ts:
+
+Ensure export const dynamic = 'force-dynamic' and export const revalidate = 0 exist once near the top.
+
+Ensure every return NextResponse.json( and return new Response( is wrapped with __noStore(...).
+
+If __noStore helper is missing, insert:
+
+function __noStore(res){ try{ res.headers?.set?.('Cache-Control','no-store'); }catch{} return res; }
+
+
+Root and guards
+
+Workspace root: /home/runner/workspace.
+
+Do not touch: _archive/** .next/** node_modules/** exports/**.
+
+Back up any file you change to _ops/backups/<UTC>/....
+
+One build at the end.
+
+Print the Acceptance Block exactly.
+
+Why previous attempts failed
+Bash history expansion and unquoted heredocs caused event not found on characters like ! inside inline Node code. Avoid ! in the shell stream or disable history expansion.
+
+Deliverable
+Produce a single idempotent shell script that:
+
+Starts with: set -Eeuo pipefail; set +H (disable history expansion).
+
+Uses only quoted heredocs <<'EOF'.
+
+Uses sed and awk only. No inline Node/JS to avoid !.
+
+Is minimal-diff and re-runnable.
+
+Backs up, patches, builds once with pnpm -s build, then prints this block:
+
+-- Acceptance --
+STEP=P4_API_POLICY_AUDIT
+FILES_CHANGED=<n>
+ROUTES_HARDENED=<n>/<total>
+MIDDLEWARE_API_EXCLUDED=<YES|NO>
+BUILD=<OK|FAIL>
+SMOKE=<PASS|FAIL>
+NOTES=<1-2 lines>
+-- /Acceptance --
+
+
+Exact patch logic to implement
+For each target route.ts:
+
+If the file lacks the line export const dynamic = 'force-dynamic', insert it after the last top-level import or "use ...".
+
+If the file lacks the line export const revalidate = 0, insert it right after the dynamic line.
+
+If the file lacks the helper function __noStore(, insert the helper after the last top-level import or "use ...".
+
+Wrap returns:
+
+Replace all occurrences of return NextResponse.json( with return __noStore(NextResponse.json(.
+
+Replace all occurrences of return new Response( with return __noStore(new Response(.
+
+Idempotency: before replacing, collapse any double-wrapping to single:
+
+Turn return __noStore(__noStore(NextResponse.json( into return __noStore(NextResponse.json(.
+
+Turn return __noStore(__noStore(new Response( into return __noStore(new Response(.
+
+Script constraints
+
+Use this glob: find src/app/api -type f -path "*/route.ts" | grep -E "/(rtc|message|like|user)/"
+
+For inserting near the top, compute the first non-import/non-"use " line and splice there with awk:
+
+Strategy: print lines into a temp file while tracking the insertion index; then write back.
+
+Verify middleware exclusion:
+
+If src/middleware.ts exists and contains a matcher that mentions /api, set MIDDLEWARE_API_EXCLUDED=NO, else YES.
+
+Smoke checks
+
+Count hardened routes.
+
+Grep each hardened file for __noStore(.
+
+Build once. If build fails, set BUILD=FAIL and SMOKE=FAIL.
+
+Acceptance
+Print the block with actual counts at the end.
+
+Important
+
+All strings must be single-quoted heredocs.
+
+No node -e, no perl, no ! in the shell stream.
+
+Do not clear the screen.
+
+Keep logs in _ops/reports/p4_api_policy_<UTC>.log.
+
+If anything is ambiguous in my spec, choose the safest no-op behavior and report it in NOTES.

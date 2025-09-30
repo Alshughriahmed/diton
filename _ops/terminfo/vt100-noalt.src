@@ -1,0 +1,3 @@
+vt100-noalt|vt100 with no alternate screen,
+    smcup@, rmcup@,
+    use=vt100,

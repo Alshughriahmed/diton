@@ -1,0 +1,5 @@
+   ▲ Next.js 15.5.2
+   - Local:        http://a78dd269de77:5000
+   - Network:      http://a78dd269de77:5000
+ ✓ Starting...
+ ✓ Ready in 600ms
