@@ -67,7 +67,7 @@ const JSON_NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" }
 function j(body:any, init?: number | { status?: number }) {
   const status = typeof init === "number" ? init : (init?.status ?? 200);
   
-    const res = NextResponse.json(body, { status });
+    const res = __noStore(NextResponse.json(body, { status }));
     res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     return res;
 

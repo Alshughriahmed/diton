@@ -7,7 +7,7 @@ function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"
 export const dynamic = 'force-dynamic';
 
 export async function POST() {
-  const res = NextResponse.json({ ok: true, isVip: false }, { status: 200 });
+  const res = __noStore(NextResponse.json({ ok: true, isVip: false }, { status: 200 }));
   res.cookies.set("vip", "", { path: "/", maxAge: 0, sameSite: "lax", httpOnly: false });
   return __noStore(res);
 }
