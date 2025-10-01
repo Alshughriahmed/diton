@@ -1,9 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
 import HeaderLite from "@/components/HeaderLite";
+import JsonLd from "@/components/seo/JsonLd";
 
 type Price = { id: string; unit_amount: number; currency: string; label?: string };
 const eur = (n:number) => (n/100).toFixed(2);
+const ORIGIN = typeof window !== 'undefined' ? window.location.origin : 'https://www.ditonachat.com';
 
 export default function PlansPage(){
   const [prices,setPrices]=useState<Price[]>([]);
@@ -30,10 +32,23 @@ export default function PlansPage(){
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white">
-      <HeaderLite />
-      <div className="max-w-3xl mx-auto px-4 py-10">
-        <h1 className="text-3xl font-bold mb-6">Choose your VIP plan</h1>
+    <>
+      <JsonLd data={{
+        "@context": "https://schema.org",
+        "@type": "CollectionPage",
+        "name": "Plans",
+        "url": `${ORIGIN}/plans`,
+        "hasPart": [
+          { "@type": "Offer", "name": "Daily" },
+          { "@type": "Offer", "name": "Weekly" },
+          { "@type": "Offer", "name": "Monthly" },
+          { "@type": "Offer", "name": "Yearly" }
+        ]
+      }} />
+      <div className="min-h-screen bg-neutral-950 text-white">
+        <HeaderLite />
+        <div className="max-w-3xl mx-auto px-4 py-10">
+          <h1 className="text-3xl font-bold mb-6">Choose your VIP plan</h1>
         {loading && <div className="opacity-80">Loading…</div>}
         {err && <div className="text-red-400">{err}</div>}
         <div className="grid md:grid-cols-2 gap-4">
@@ -45,10 +60,11 @@ export default function PlansPage(){
             </div>
           ))}
         </div>
-        {!loading && prices.length===0 && (
-          <div className="opacity-80">No prices found. (Fallback: 1.49 / 5.99 / 16.99 / 99.99 EUR)</div>
-        )}
+          {!loading && prices.length===0 && (
+            <div className="opacity-80">No prices found. (Fallback: 1.49 / 5.99 / 16.99 / 99.99 EUR)</div>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }

@@ -1,0 +1,58 @@
+Task: K_SEO_JSONLD_APPLY
+
+Goal
+- إضافة JSON-LD منظّم للصفحات القانونية دون لمس المنطق أو الأنماط.
+
+Allowlist
+- src/components/seo/JsonLd.tsx
+- src/app/layout.tsx
+- src/app/2257/page.tsx
+- src/app/terms/page.tsx
+- src/app/privacy/page.tsx
+- src/app/plans/page.tsx
+
+Blocklist
+- أي ملف خارج allowlist. لا package.json. لا prisma. لا ترقية تبعيات.
+
+Constraints
+- TypeScript strict OK. لا client component. لا side effects.
+- استخدم ORIGIN = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.ditonachat.com'.
+- Idempotent: لا تضف JSON-LD إذا كان موجودًا وظيفيًا.
+- Build فقط إذا لزم للتحقق.
+
+Edits
+1) جديد: src/components/seo/JsonLd.tsx
+   ---
+   export default function JsonLd({data}:{data:unknown}) {
+     return <script type="application/ld+json" suppressHydrationWarning
+       dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }} />;
+   }
+   ---
+
+2) layout.tsx
+   - import JsonLd from '@/components/seo/JsonLd'
+   - const ORIGIN = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.ditonachat.com'
+   - حقن 3 كتل:
+     Organization { "@context":"https://schema.org","@type":"Organization","name":"DitonaChat","url":ORIGIN,"logo":ORIGIN+"/icon.png" }
+     WebSite     { "@context":"https://schema.org","@type":"WebSite","url":ORIGIN,"name":"DitonaChat" }
+     WebApplication { "@context":"https://schema.org","@type":"WebApplication","name":"DitonaChat","applicationCategory":"Communication","operatingSystem":"Web" }
+
+3) الصفحات:
+   - /2257 → AboutPage { "@context":"https://schema.org","@type":"AboutPage","name":"2257 Compliance","url":ORIGIN+"/2257" }
+   - /terms → TermsOfService { "@context":"https://schema.org","@type":"TermsOfService","name":"Terms of Service","url":ORIGIN+"/terms" }
+   - /privacy → PrivacyPolicy { "@context":"https://schema.org","@type":"PrivacyPolicy","name":"Privacy Policy","url":ORIGIN+"/privacy" }
+   - /plans → CollectionPage { "@context":"https://schema.org","@type":"CollectionPage","name":"Plans","url":ORIGIN+"/plans",
+       "hasPart":[{"@type":"Offer","name":"Daily"},{"@type":"Offer","name":"Weekly"},{"@type":"Offer","name":"Monthly"},{"@type":"Offer","name":"Yearly"}] }
+
+Verification
+- على Preview: تحقق بوجود <script type="application/ld+json"> مرة واحدة على كل صفحة من الأربع.
+- لا تغيّر canonical.
+
+Acceptance
+-- Acceptance --
+STEP=K_SEO_JSONLD_APPLY
+FILES_CHANGED=<n>
+BUILD=<OK|FAIL>
+CHECKS=canonical=OK,ldjson=OK(4/4)
+NOTES=<report path>
+-- /Acceptance --

@@ -1,12 +1,22 @@
 // DitonaChat: BEGIN legal-page 2257
 import Link from 'next/link';
+import JsonLd from '@/components/seo/JsonLd';
+
+const ORIGIN = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.ditonachat.com';
 
 export default function Section2257Page() {
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-4xl font-bold mb-8">18 U.S.C. Section 2257 Compliance</h1>
+    <>
+      <JsonLd data={{
+        "@context": "https://schema.org",
+        "@type": "AboutPage",
+        "name": "2257 Compliance",
+        "url": `${ORIGIN}/2257`
+      }} />
+      <div className="min-h-screen bg-gray-900 text-white">
+        <div className="container mx-auto px-4 py-8">
+          <div className="max-w-4xl mx-auto">
+            <h1 className="text-4xl font-bold mb-8">18 U.S.C. Section 2257 Compliance</h1>
           
           <div className="bg-white/10 backdrop-blur-md rounded-lg p-8 mb-8">
             <h2 className="text-2xl font-semibold mb-4">1. Age Verification</h2>
@@ -20,9 +30,10 @@ export default function Section2257Page() {
               Back to Home
             </Link>
           </div>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 // DitonaChat: END legal-page 2257
