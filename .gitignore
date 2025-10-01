@@ -1,5 +1,9 @@
 node_modules/
 .next/
 dist/
-_ops/backups/
+_ops/
+_archive/
 .vercel/
+exports/
+*.tgz
+.env*.local
