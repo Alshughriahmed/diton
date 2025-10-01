@@ -1,14 +1,14 @@
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 export async function GET() {
-  // dev cookie fallback (still supported)
-  const c = (await cookies()).get("vip");
-  if (c?.value === "1") return NextResponse.json({ isVip: true, via: "cookie" }, { status: 200 });
-  
-  // For now, return anon until Prisma client is properly configured
-  return NextResponse.json({ isVip: false, via: "anon" }, { status: 200 });
+  const c = await cookies();
+  const cookieVip = c.get("vip")?.value === "1";
+  const session = await getServerSession(authOptions as any);
+  const sessionVip = Boolean((session as any)?.vip || (session as any)?.isVip);
+  const vipExp = Number((session as any)?.vipExp || 0);
+  return Response.json({ cookieVip, sessionVip, vipExp });
 }
-
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
+export const runtime="nodejs";
+export const dynamic="force-dynamic";
