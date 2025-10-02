@@ -19,6 +19,12 @@
     "paths": {
       "@/*": [
         "src/*"
+      ],
+      "@app/*": [
+        "src/app/*"
+      ],
+      "@utils/*": [
+        "src/utils/*"
       ]
     },
     "allowJs": true,
