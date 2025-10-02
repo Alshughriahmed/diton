@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import crypto from "crypto";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+
 
 export async function requireVip(): Promise<boolean> {
   if (process.env.NEXT_PUBLIC_FREE_FOR_ALL === "1") return true;
@@ -10,7 +10,7 @@ export async function requireVip(): Promise<boolean> {
     if (verifySignedVip(c)) return true;     // signed cookie
     if (c === "1") return true;              // legacy fallback
   } catch {}
-  const session:any = await getServerSession(authOptions as any);
+  const session:any = await getServerSession();
   const exp = session?.vipExp as number | undefined;
   if (session?.vip && typeof exp === "number" && exp > Math.floor(Date.now()/1000)) return true;
   return Boolean(session?.isVip);
