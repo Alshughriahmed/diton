@@ -34,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           "operatingSystem": "Web"
         }} />
       </head>
-      <body className="bg-gray-950 text-white antialiased bg-neutral-950">{children}</body>
+      <body className="bg-neutral-950 text-white antialiased">{children}</body>
     </html>
   );
 }
