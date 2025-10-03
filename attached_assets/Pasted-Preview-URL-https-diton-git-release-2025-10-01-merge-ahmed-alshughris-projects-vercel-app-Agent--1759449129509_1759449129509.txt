@@ -1,0 +1,122 @@
+Preview URL: https://diton-git-release-2025-10-01-merge-ahmed-alshughris-projects.vercel.app
+
+Agent Batch — Fix Tailwind Layout on Preview
+
+Branch to work on: release/2025-10-01-merge
+Remote: diton (GitHub: Alshughriahmed/diton)
+
+Objective
+
+استعادة تخطيط الواجهة كما كان (Tailwind) على الـPreview أعلاه؛ معالجة أي مشكلة Purge/Content/Safelist/حقن CSS، مع عدم تغيير الشكل أو النصوص.
+
+Allowlist (تعديل فقط داخل هذه الملفات)
+
+tailwind.config.js
+
+postcss.config.js
+
+src/app/globals.css
+
+src/app/layout.tsx
+
+src/components/** (عند الضرورة فقط، بدون تغييرات شكلية؛ إصلاحات طفيفة للـclassName إن لزم)
+
+package.json (إن احتجنا سكربت CI بسيط للفحص فقط)
+
+Blocklist: أي ملفات خارج ما سبق (خاصة: Prisma، schema، .next، node_modules، exports، .vercel).
+
+Plan → Diff → Apply
+
+Plan / Diagnose
+
+اسحب الـHTML من الـPreview، واستخرج روابط CSS: /_next/static/css/*.css.
+
+تأكد أن أحد ملفات CSS يحتوي بصمة Tailwind (tailwindcss أو --tw-) — إن لم توجد، انتقل إلى فحص PostCSS/Tailwind pipeline.
+
+قارن قائمة الـclasses الموجودة في DOM مع CSS (grep) لاكتشاف مشكلة Purge (خاصة classes المركبة مثل bg-*, from-*, to-*, via-*, max-w-*, rounded-*, shadow-*, md:*, lg:*).
+
+Diff / Fix
+
+tailwind.config.js
+
+تأكد أن content يغطي:
+["./src/**/*.{js,ts,jsx,tsx,mdx}"]
+
+أضف safelist ذكي يحمي الطبقات الشائعة المولَّدة ديناميكيًا:
+
+safelist: [
+  { pattern: /^(bg|from|to|via)-(slate|gray|zinc|neutral|stone|red|rose|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink)-(\d{1,3})$/ },
+  { pattern: /^(text|border|ring|shadow|rounded|max-w|w|h|p|px|py|m|mx|my)-.+$/ },
+  { pattern: /^(sm:|md:|lg:|xl:|2xl:).+$/ },
+  { pattern: /^container$/ },
+  { pattern: /^prose(-.+)?$/ },
+]
+
+
+postcss.config.js
+
+تأكد من ترتيب: require('tailwindcss'), require('autoprefixer').
+
+src/app/globals.css
+
+تأكد من وجود:
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+src/app/layout.tsx
+
+التأكد من import "./globals.css"; في أعلى الملف (موجود بالفعل؛ لا تغيّر المحتوى).
+
+إصلاحات طفيفة فقط إن وُجدت class بدل className في أي Server/Client Component ضمن الـHero/الصفحة الرئيسية.
+
+Apply / Build
+
+نفّذ Build على Preview لهذا الفرع ثم تحقّق آليًا من بقاء التخطيط.
+
+Checks (سيُنفِّذها الوكيل)
+
+CSS presence:
+curl -fsSL "$PREVIEW" | grep -o "/_next/static/css/[^\"]\+\.css" | head -n1 ⇒ موجود.
+
+Tailwind fingerprint:
+curl -fsSL "$PREVIEW$CSS" | grep -qi -e tailwindcss -e --tw- ⇒ true.
+
+Class match (عينة):
+اسحب HTML للصفحة الرئيسية وتحقق أن أمثلة مثل container, mx-auto, text-, bg-, rounded-, shadow-, md: تظهر داخل CSS (grep تقاطعي).
+
+Visual heuristic:
+إن أمكن، تأكد من وجود <link rel="stylesheet" .../_next/static/css/*.css> داخل <head> في الصفحة الرئيسية.
+
+No regressions: لا تغيّر JSON-LD/SEO، ولا الـAPI.
+
+Acceptance
+-- Acceptance --
+STEP=FIX_TAILWIND_PREVIEW
+BRANCH=release/2025-10-01-merge
+CSS_LINKED=<true|false>
+TAILWIND_PRESENT=<true|false>
+CLASS_MATCH_RATE=>(=)<threshold%>
+FILES_CHANGED=<n>
+BUILD=OK
+NOTES=log:_ops/reports/tw_fix_<UTC>.log; base:https://diton-git-release-2025-10-01-merge-ahmed-alshughris-projects.vercel.app
+-- /Acceptance --
+
+
+CSS_LINKED=true وTAILWIND_PRESENT=true إلزاميّان.
+
+CLASS_MATCH_RATE≥80% (مطابقة بين classes الشائعة في DOM وما هو متوفر في CSS بعد الإصلاح).
+
+لا تغييرات شكلية خارج إصلاح التخطيط.
+
+Constraints
+
+لا تعديل خارج الـAllowlist.
+
+لا مساس بالبيانات/Prisma/Stripe/TURN.
+
+لا تغييرات على النصوص/المحتوى العام.
+
+الهدف الوحيد: إعادة التخطيط كما كان (Tailwind يعمل في Preview).
