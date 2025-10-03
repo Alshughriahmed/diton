@@ -14,8 +14,8 @@ export default function HomeClient({ age }: Props) {
   const handleStartChatting = async () => {
     try {
       const res = await fetch("/api/age/allow", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
       });
       if (res.ok) window.location.href = "/chat";
     } catch (e) {
@@ -53,13 +53,13 @@ export default function HomeClient({ age }: Props) {
           >
             Start chatting
           </button>
-          <a href="/plans" className="rounded-lg px-6 py-3 font-semibold text-slate-200 border border-slate-700 hover:border-slate-500">
+            <a href="/plans" className="rounded-lg px-6 py-3 font-semibold text-slate-200 border border-slate-700 hover:border-slate-500">
             See plans
           </a>
         </div>
       </main>
 
-      {/* Age prompt (simple) */}
+      {/* Age prompt */}
       {showAgePrompt && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full">
