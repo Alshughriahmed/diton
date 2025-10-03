@@ -22,14 +22,14 @@ export function middleware(req: NextRequest) {
 
 function applySecurityHeaders(res: NextResponse) {
   const csp = [
-    "default-src self",
-    "script-src self unsafe-inline unsafe-eval blob:",
-    "style-src self unsafe-inline",
-    "img-src self data: blob: https:",
-    "font-src self data:",
-    "media-src self blob:",
-    "connect-src self https: wss:",
-    "frame-ancestors none",
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "media-src 'self' blob:",
+    "connect-src 'self' https: wss:",
+    "frame-ancestors 'none'",
     "upgrade-insecure-requests"
   ].join("; ");
 
@@ -40,4 +40,6 @@ function applySecurityHeaders(res: NextResponse) {
   res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 }
 
-export const config = { matcher: ["/(.*)"] };
+export const config = {
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+};

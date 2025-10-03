@@ -1,13 +1,14 @@
 import HomeClient from "@/components/home/HomeClient";
 
-export default function HomePage({
+export default async function HomePage({
   searchParams,
 }: {
-  searchParams?: Record<string, string | string[] | undefined>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  const params = await searchParams;
   const age =
-    typeof searchParams?.age === "string"
-      ? (searchParams.age as string)
+    typeof params?.age === "string"
+      ? (params.age as string)
       : undefined;
 
   return <HomeClient age={age} />;
