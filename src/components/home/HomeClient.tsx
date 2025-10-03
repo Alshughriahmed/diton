@@ -1,84 +1,130 @@
 "use client";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import HeaderLite from "@/components/HeaderLite";
+import safeFetch from '@/app/chat/safeFetch';
 
-import { useEffect, useState } from "react";
+type MyGender = "male" | "female" | "couple" | "lgbt";
+const genderOptions = [
+  { key: "male",   label: "Male",   symbol: "♂" },
+  { key: "female", label: "Female", symbol: "♀" },
+  { key: "couple", label: "Couple", symbol: "⚥" },
+  { key: "lgbt",   label: "LGBT",   symbol: "🏳️‍🌈 ⚧" },
+] as const;
 
-type Props = { age?: string };
+function classesFor(g: MyGender){
+  switch(g){
+    case "male":   return { text:"text-blue-600",  border:"border-blue-600",  rainbow:false };
+    case "female": return { text:"text-red-600",   border:"border-red-600",   rainbow:false };
+    case "couple": return { text:"text-red-400",   border:"border-red-400",   rainbow:false };
+    case "lgbt":   return { text:"",               border:"border-purple-600", rainbow:true };
+  }
+}
 
-export default function HomeClient({ age }: Props) {
-  const [showAgePrompt, setShowAgePrompt] = useState(false);
+const rainbowText = "bg-gradient-to-r from-red-500 via-orange-400 via-yellow-400 via-green-500 via-blue-500 to-purple-600 bg-clip-text text-transparent";
+
+export default function HomeClient(){
+  const router = useRouter();
+  const [gender, setGender] = useState<MyGender | null>(null);
+  const [ageOk, setAgeOk] = useState(false);
+  const [geo, setGeo] = useState<any>(null);
 
   useEffect(() => {
-    if (age === "required") setShowAgePrompt(true);
-  }, [age]);
+    let timedOut = false;
+    const done = (d:any)=>{ try{localStorage.setItem("ditona_geo", JSON.stringify(d));}catch{}; setGeo(d); };
+    try{
+      const g = navigator?.geolocation;
+      if (g){
+        const t = setTimeout(()=>{ timedOut = true; }, 3000);
+        g.getCurrentPosition(
+          (pos)=>{ if(!timedOut){ clearTimeout(t); done({ lat:pos.coords.latitude, lon:pos.coords.longitude, src:"geolocation" }); } },
+          ()=>{},
+          { enableHighAccuracy:false, maximumAge:60_000, timeout:2500 }
+        );
+      }
+    }catch{}
+    safeFetch("/api/geo").then(r=>r.json()).then(d=>{ if(!geo) done(d); }).catch(()=>{});
+  }, []);
 
-  const handleStartChatting = async () => {
-    try {
-      const res = await fetch("/api/age/allow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (res.ok) window.location.href = "/chat";
-    } catch (e) {
-      console.error(e);
+  const canStart = useMemo(()=> Boolean(gender) && ageOk, [gender, ageOk]);
+
+  async function onStart(){
+    if(!canStart) return;
+    try{
+      try{ localStorage.setItem("ditona_myGender", String(gender)); }catch{}
+      if (geo){ try{ localStorage.setItem("ditona_geo_hint", JSON.stringify(geo)); }catch{} }
+      await safeFetch("/api/age/allow", { method:"POST" }).catch(()=>{});
+    } finally {
+      router.push("/chat");
     }
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 text-white">
-      {/* Header */}
-      <header className="border-b border-slate-800">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="text-2xl font-bold">DitonaChat</div>
-          <nav className="hidden md:flex gap-6">
-            <a href="/2257" className="text-slate-300 hover:text-white">2257</a>
-            <a href="/terms" className="text-slate-300 hover:text-white">Terms</a>
-            <a href="/privacy" className="text-slate-300 hover:text-white">Privacy</a>
-            <a href="/plans" className="text-slate-300 hover:text-white">Plans</a>
-          </nav>
-        </div>
-      </header>
+    <div className="relative min-h-screen text-white">
+      <div className="absolute inset-0 -z-10">
+        <div className="absolute inset-0 bg-[url('/hero.webp')] bg-cover bg-center" />
+        <div className="absolute inset-0 bg-black/50" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/40 to-black/60" />
+      </div>
 
-      {/* Hero */}
-      <main className="max-w-6xl mx-auto px-4 py-20">
-        <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight">
-          Meet. Chat. <span className="bg-gradient-to-r from-pink-500 via-fuchsia-500 to-violet-500 bg-clip-text text-transparent">Ditona</span>
+      <HeaderLite />
+
+      <main className="mx-auto max-w-4xl px-4 pt-28 pb-12">
+        <h1 className="text-5xl sm:text-6xl font-extrabold leading-tight">
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600">
+            Welcome to Ditona Video Chat 🤗
+          </span>
         </h1>
-        <p className="mt-6 text-lg text-slate-300 max-w-2xl">
-          Fast one-tap matching. Private video chat. No sign-up required.
-        </p>
-        <div className="mt-8 flex gap-4">
-          <button
-            onClick={handleStartChatting}
-            className="rounded-lg bg-fuchsia-600 px-6 py-3 font-semibold text-white hover:bg-fuchsia-500 active:scale-95 transition"
-          >
-            Start chatting
-          </button>
-            <a href="/plans" className="rounded-lg px-6 py-3 font-semibold text-slate-200 border border-slate-700 hover:border-slate-500">
-            See plans
-          </a>
-        </div>
-      </main>
+        <p className="mt-4 text-lg text-gray-300">🔥 Unleash Your Wild Side 🫦</p>
 
-      {/* Age prompt */}
-      {showAgePrompt && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-md w-full">
-            <h2 className="text-xl font-bold mb-2">Age verification</h2>
-            <p className="text-slate-300 mb-4">You must confirm that you are 18+ to continue.</p>
-            <div className="flex justify-end gap-3">
-              <a href="/" className="px-4 py-2 rounded border border-slate-700 text-slate-200">Cancel</a>
-              <button onClick={handleStartChatting} className="px-4 py-2 rounded bg-fuchsia-600 text-white hover:bg-fuchsia-500">
-                I’m 18+
-              </button>
-            </div>
+        <div className="mt-8 bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl max-w-lg">
+          <label className="block text-sm text-gray-300 mb-2">Select your gender</label>
+          <div className="grid grid-cols-2 gap-3">
+            {genderOptions.map(opt=>{
+              const cls = classesFor(opt.key as MyGender);
+              const active = gender===opt.key ? "ring-2 ring-white" : "";
+              return (
+                <button key={opt.key} type="button" onClick={()=>setGender(opt.key as MyGender)}
+                  className={`px-3 py-3 rounded-lg border bg-black/40 hover:bg-black/30 transition-colors ${active} ${cls.border}`}
+                  aria-label={opt.label}>
+                  {opt.key!=="lgbt" ? (
+                    <span className={`flex items-center gap-2 ${cls.text}`}>
+                      <span className="text-2xl leading-none">{opt.symbol}</span>
+                      <span className="text-base font-semibold">{opt.label}</span>
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <span className="text-2xl leading-none">🏳️‍🌈</span>
+                      <span className={`text-2xl leading-none ${rainbowText}`}>⚧</span>
+                      <span className={`text-base font-semibold ${rainbowText}`}>LGBT</span>
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex items-center gap-2">
+            <input id="ageok" type="checkbox" className="h-4 w-4" checked={ageOk} onChange={(e)=>setAgeOk(e.target.checked)} />
+            <label htmlFor="ageok" className="text-sm text-gray-200">I confirm I am 18+</label>
+          </div>
+
+          <button onClick={onStart} disabled={!canStart}
+            className="mt-6 w-full py-3 rounded-xl text-white text-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-r from-fuchsia-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
+            Start Video Chat
+          </button>
+
+          <div className="mt-4 text-center text-sm text-gray-300 space-x-4">
+            <a href="/terms" className="hover:text-white">Terms of Use</a>
+            <a href="/privacy" className="hover:text-white">Privacy Policy</a>
+          </div>
+          <div className="mt-2 text-center text-xs text-gray-400 space-x-3">
+            <a href="mailto:info@ditonachat.com" className="hover:text-gray-200">info@ditonachat.com</a>
+            <a href="mailto:user@ditonachat.com" className="hover:text-gray-200">user@ditonachat.com</a>
+            <a href="mailto:suggestions@ditonachat.com" className="hover:text-gray-200">suggestions@ditonachat.com</a>
           </div>
         </div>
-      )}
-
-      {/* Footer */}
-      <footer className="mt-24 py-8 text-center text-sm text-slate-400 border-t border-slate-800">
-        © {new Date().getFullYear()} DitonaChat
-      </footer>
+      </main>
     </div>
   );
 }
