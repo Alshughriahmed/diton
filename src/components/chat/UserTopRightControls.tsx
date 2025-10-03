@@ -1,9 +1,10 @@
 "use client";
+import safeFetch from '@/app/chat/safeFetch';
 import { useEffect, useState } from "react";
 export default function UserTopRightControls(){
   const [isVip,setIsVip]=useState(false);
   useEffect(()=>{(async()=>{
-    try { const r=await fetch("/api/user/vip-status",{cache:"no-store"}); const j=await r.json(); setIsVip(!!j?.isVip); } catch { setIsVip(false); }
+    try { const r=await safeFetch("/api/user/vip-status",{cache:"no-store"}); const j=await r.json(); setIsVip(!!j?.isVip); } catch { setIsVip(false); }
   })();},[]);
   return (
     <div className="absolute right-3 top-[52%] z-[40] flex items-center gap-2">

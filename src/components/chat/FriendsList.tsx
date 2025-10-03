@@ -1,5 +1,5 @@
-
 "use client";
+import safeFetch from '@/app/chat/safeFetch';
 
 import { useState, useEffect } from 'react';
 
@@ -27,7 +27,7 @@ export default function FriendsList() {
   const fetchFriends = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/friends/list');
+      const response = await safeFetch('/api/friends/list');
       const data = await response.json();
       setFriends(data.friends || []);
     } catch (error) {

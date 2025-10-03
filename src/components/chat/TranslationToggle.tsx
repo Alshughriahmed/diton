@@ -1,5 +1,5 @@
-
 "use client";
+import safeFetch from '@/app/chat/safeFetch';
 
 import { useState, useEffect } from 'react';
 
@@ -17,7 +17,7 @@ export default function TranslationToggle() {
 
   const translateMessage = async (text: string, targetLang: string) => {
     try {
-      const response = await fetch('/api/translate', {
+      const response = await safeFetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, target: targetLang })
