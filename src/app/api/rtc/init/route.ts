@@ -1,7 +1,11 @@
+import { jsonEcho } from "@/lib/api/xreq";
+import { logRTC } from "@/lib/rtc/logger";
+
 const __withNoStore = <T extends Response>(r:T):T => { try { (r as any).headers?.set?.("cache-control","no-store"); } catch {} return r; };
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const preferredRegion = ["fra1", "iad1"];
 
 
 
@@ -38,11 +42,24 @@ async function setAnonCookie() {
   return value;
 }
 
-export async function POST() {
+export async function POST(req: Request) {
+  const start = Date.now();
+  const reqId = req.headers.get("x-req-id") || randomUUID();
+  
   await setAnonCookie();
-  return __noStore(NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } }));;
+  const res = jsonEcho(req, { ok: true }, { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+  
+  logRTC({
+    route: "/api/rtc/init",
+    reqId,
+    ms: Date.now() - start,
+    status: 200,
+    note: "init-ok",
+  });
+  
+  return __noStore(res);
 }
 
-export async function GET() {
-  return POST();
+export async function GET(req: Request) {
+  return POST(req);
 }

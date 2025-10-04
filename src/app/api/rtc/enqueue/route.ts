@@ -1,7 +1,12 @@
+import { jsonEcho } from "@/lib/api/xreq";
+import { logRTC } from "@/lib/rtc/logger";
+import { cleanupGhosts } from "@/lib/rtc/queue";
+
 const __withNoStore = <T extends Response>(r:T):T => { try { (r as any).headers?.set?.("cache-control","no-store"); } catch {} return r; };
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const preferredRegion = ["fra1", "iad1"];
 
 
 
@@ -50,7 +55,13 @@ async function saveUserMetaUpstash(anonId:string, meta:any){
 
 export async function POST(
 req: NextRequest) {
+  const start = Date.now();
+  const reqId = req.headers.get("x-req-id") || crypto.randomUUID();
+  
   try {
+    // Trigger cleanup on every enqueue
+    cleanupGhosts().catch(() => {});
+    
     const cookieStore = await cookies();
     const headerStore = await headers();
     const raw =
@@ -60,7 +71,8 @@ req: NextRequest) {
 
     const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
     if (!anonId) {
-      return __noStore(NextResponse.json({ error: "enqueue-fail", info: "no-anon" }, { status: 500 }));
+      logRTC({ route: "/api/rtc/enqueue", reqId, ms: Date.now() - start, status: 500, note: "no-anon" });
+      return __noStore(jsonEcho(req, { error: "enqueue-fail", info: "no-anon" }, { status: 500 }));
     }
 
     const b: any = await req.json().catch(() => ({}));
@@ -83,16 +95,11 @@ try {
   }
 } catch {}
     
-    try {
-      return __noStore(new NextResponse(null, { status: 204 }));
-    } catch (e: any) {
-      return __noStore(NextResponse.json(
-        { error: "enqueue-fail", info: String(e?.message || e).slice(0, 140) },
-        { status: 500 }
-      ));
-    }
+    logRTC({ route: "/api/rtc/enqueue", reqId, ms: Date.now() - start, status: 204, note: "enqueued" });
+    return __noStore(new NextResponse(null, { status: 204 }));
   } catch (e: any) {
-    return __noStore(NextResponse.json(
+    logRTC({ route: "/api/rtc/enqueue", reqId, ms: Date.now() - start, status: 500, note: String(e?.message || e).slice(0, 100) });
+    return __noStore(jsonEcho(req, 
       { error: "enqueue-fail", info: String(e?.message || e).slice(0, 140) },
       { status: 500 }
     ));
