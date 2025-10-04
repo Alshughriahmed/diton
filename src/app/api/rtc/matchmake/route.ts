@@ -1,7 +1,12 @@
+import { jsonEcho } from "@/lib/api/xreq";
+import { logRTC } from "@/lib/rtc/logger";
+import { cleanupGhosts } from "@/lib/rtc/queue";
+
 const __withNoStore = <T extends Response>(r:T):T => { try { (r as any).headers?.set?.("cache-control","no-store"); } catch {} return r; };
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const preferredRegion = ["fra1", "iad1"];
 
 
 
@@ -38,7 +43,13 @@ async function upstashGetMeta(anonId:string){
 }
 
 export async function POST(
-_req: NextRequest) {
+req: NextRequest) {
+  const start = Date.now();
+  const reqId = req.headers.get("x-req-id") || crypto.randomUUID();
+  
+  // Trigger cleanup on every matchmake
+  cleanupGhosts().catch(() => {});
+  
   const cookieStore = await cookies();
   const headerStore = await headers();
   const raw =
@@ -48,14 +59,15 @@ _req: NextRequest) {
 
   const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
   if (!anonId) {
-    return __noStore(NextResponse.json({ error: "anon-required" }, { status: 401, headers: { "cache-control": "no-store" } }));;
+    logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: 401, note: "no-anon" });
+    return __noStore(jsonEcho(req, { error: "anon-required" }, { status: 401, headers: { "cache-control": "no-store" } }));
   }
   let prevFor:string|null=null;
   let filters: {gender?: string, countries?: string[]} = {};
   
   try{
-    if(_req.headers.get("content-type")?.includes("application/json")){
-      const b:any = await _req.json().catch(()=>null);
+    if(req.headers.get("content-type")?.includes("application/json")){
+      const b:any = await req.json().catch(()=>null);
       prevFor = b?.prevFor || null;
       
       // Extract filter parameters
@@ -66,7 +78,7 @@ _req: NextRequest) {
         filters.countries = b.countries.filter((c: any) => c && c !== 'ALL').slice(0, 15);
       }
     } else {
-      prevFor = _req.nextUrl?.searchParams?.get("prevFor") || null;
+      prevFor = req.nextUrl?.searchParams?.get("prevFor") || null;
     }
   }catch{}
   
@@ -140,7 +152,7 @@ _req: NextRequest) {
       }
     } catch {}
     
-    return __noStore(NextResponse.json({ 
+    return __noStore(jsonEcho(req, { 
       found: true, 
       pairId: mapped.pairId, 
       role: mapped.role,
@@ -190,9 +202,15 @@ if (res.status === 200) {
     }
   }catch{}
 
-  return __noStore(NextResponse.json(body, { status: 200 }));;
+  logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: 200, note: "matched" });
+  return __noStore(jsonEcho(req, body, { status: 200 }));
 }
 
-  if (res.status === 204) return __noStore(new NextResponse(null, { status:204 }));;
-  return __noStore(NextResponse.json(res.body || { error:"mm-fail" }, { status: res.status || 500 }));;
+  if (res.status === 204) {
+    logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: 204, note: "no-match" });
+    return __noStore(new NextResponse(null, { status:204 }));
+  }
+  
+  logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: res.status || 500, note: "mm-fail" });
+  return __noStore(jsonEcho(req, res.body || { error:"mm-fail" }, { status: res.status || 500 }));
 }

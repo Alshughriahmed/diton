@@ -33,12 +33,20 @@ export function useVip() {
     // Simple anonymous check - no need for session dependency
     const checkVipStatus = async () => {
       try {
-        const response = await safeFetch('/api/user/vip-status', {
+        
+  const response = await safeFetch('/api/user/vip-status', {
           headers: {
             'Cache-Control': 'no-cache'
           }
         });
-        if (!response.ok) throw new Error('VIP status check failed');
+        if (response.status === 401) {
+            if (isMounted) {
+              setIsVip(false);
+              setVipStatus({ level: 'guest' });
+            }
+            return;
+          }
+          if (!response.ok) throw new Error('VIP status check failed');
         const data = await response.json();
         if (isMounted) {
           setIsVip(data.isVip || false);

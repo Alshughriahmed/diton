@@ -663,13 +663,34 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     state.pc = new RTCPeerConnection({ iceServers });
     
     /* P2_AUTO_NEXT_START */
-    state.pc.addEventListener('connectionstatechange', () => {
-      const st = state.pc?.connectionState;
-      if (st === 'disconnected' || st === 'failed') {
-        console.log('AUTO_NEXT: fired');
-        if (typeof window !== 'undefined') window.dispatchEvent(new Event('ui:next'));
-      }
-    });
+    const AUTO_NEXT_MS = parseInt(process.env.NEXT_PUBLIC_AUTO_NEXT_MS || "0", 10);
+    
+    if (AUTO_NEXT_MS > 0) {
+      let autoNextTimer: NodeJS.Timeout | null = null;
+      
+      state.pc.addEventListener('connectionstatechange', () => {
+        const st = state.pc?.connectionState;
+        
+        // Clear any existing timer
+        if (autoNextTimer) {
+          clearTimeout(autoNextTimer);
+          autoNextTimer = null;
+        }
+        
+        if (st === 'disconnected' || st === 'failed') {
+          console.log(`AUTO_NEXT: scheduling in ${AUTO_NEXT_MS}ms`);
+          autoNextTimer = setTimeout(() => {
+            console.log('AUTO_NEXT: fired');
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new Event('ui:next'));
+            }
+          }, AUTO_NEXT_MS);
+        } else if (st === 'connected') {
+          // Cancel auto-next if connection recovers
+          console.log('AUTO_NEXT: canceled (connection recovered)');
+        }
+      });
+    }
     /* P2_AUTO_NEXT_END */
     
     // Setup DataChannel for real-time communication
