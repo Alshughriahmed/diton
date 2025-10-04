@@ -10,3 +10,4 @@ _ops/backups/
 _ops/reports/
 .DS_Store
 *.log
+tmp/
