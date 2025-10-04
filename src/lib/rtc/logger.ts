@@ -1,18 +1,16 @@
-type AnyRec = Record<string, any>;
+type Any = Record<string, any>;
 
-export function logRTC(event: string, status: number, extra?: AnyRec): void;
-export function logRTC(obj: AnyRec): void;
-export function logRTC(a: any, b?: any, c?: any): void {
+export function logRTC(a: string | Any, b?: number | Any, c?: Any): void {
   try {
     if (typeof a === "string") {
-      console.log(\`[rtc] \${a}\`, b ?? "", c ?? "");
+      const status = typeof b === "number" ? b : 0;
+      const extra  = typeof b === "number" ? c : b;
+      console.log("[rtc]", a, status, extra ?? "");
     } else {
       console.log("[rtc]", JSON.stringify(a ?? {}));
     }
   } catch {}
 }
 
-export function logJson(obj: AnyRec) {
-  try { console.log("[rtc]", JSON.stringify(obj)); } catch {}
-}
+export const logJson = (obj: Any) => { try { console.log("[rtc]", JSON.stringify(obj)); } catch {} };
 export default logRTC;
