@@ -30,3 +30,40 @@ export default async function safeFetch(input: RequestInfo | URL, init: SafeInit
     if (t) clearTimeout(t);
   }
 }
+
+// ==== RTC wiring helpers (non-breaking; flags OFF) ====
+// Builds RTC headers for idempotency and ICE grace without forcing call sites to change yet.
+export type RtcMeta = { pairId?: string; role?: string; sdpTag?: string; anonId?: string; lastStopTs?: number };
+export function rtcHeaders(meta: RtcMeta = {}): Record<string,string> {
+  const h: Record<string,string> = {};
+  if (meta.pairId) h["x-pair-id"] = String(meta.pairId);
+  if (meta.role) h["x-rtc-role"] = String(meta.role);
+  if (meta.sdpTag) h["x-sdp-tag"] = String(meta.sdpTag);
+  // best-effort anon + lastStopTs from client storage
+  try {
+    if (!meta.anonId && typeof localStorage!=="undefined") meta.anonId = localStorage.getItem("__anonId") || "";
+    if (meta.anonId) h["x-anon-id"] = meta.anonId;
+    if (!meta.lastStopTs && typeof localStorage!=="undefined") {
+      const v = Number(localStorage.getItem("__lastStopTs") || "0");
+      if (v>0) meta.lastStopTs = v;
+    }
+    if (meta.lastStopTs) h["x-last-stop-ts"] = String(meta.lastStopTs);
+  } catch {}
+  return h;
+}
+
+// create/update anon id if absent; no server roundtrip needed
+export function ensureAnonId(): string {
+  let id = "";
+  try {
+    if (typeof localStorage!=="undefined") {
+      id = localStorage.getItem("__anonId") || "";
+      if (!id) { id = (globalThis.crypto?.randomUUID?.() ?? String(Date.now())); localStorage.setItem("__anonId", id); }
+    }
+  } catch {}
+  return id;
+}
+
+export function markLastStopTs(ts?: number){
+  try { if (typeof localStorage!=="undefined") localStorage.setItem("__lastStopTs", String(ts ?? Date.now())); } catch {}
+}
