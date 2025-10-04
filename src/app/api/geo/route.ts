@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 export async function GET(req: Request) {
   const h = new Headers((req as any).headers);
   const data = {
@@ -10,7 +12,7 @@ export async function GET(req: Request) {
     ip:      h.get("x-forwarded-for")     || h.get("x-real-ip") || null,
     src: "headers"
   };
-  return NextResponse.json(data, { status: 200 });
+  return withReqId(NextResponse.json(data, { status: 200 }));
 }
 export const runtime="nodejs";
 export const dynamic="force-dynamic";

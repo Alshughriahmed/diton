@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 import { requireVip } from "@/utils/vip";
 import { rateLimit } from "@/lib/rtc/upstash";
 
 function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"); }catch{} return res; }
-
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
@@ -26,14 +26,14 @@ export async function POST(req: Request) {
   let body:any = {};
   try { body = await req.json(); } catch {}
   const msg = (body?.text ?? body?.message ?? body?.txt ?? "").trim();
-  if (!msg) return __noStore(NextResponse.json({ ok:false, error:"bad message" }, { status: 400 }));
+  if (!msg) return withReqId(__noStore(NextResponse.json({ ok:false, error:"bad message" }, { status: 400 }))));
 
   // فتح كامل
-  if (FREE) return __noStore(NextResponse.json({ ok:true }));
+  if (FREE) return withReqId(__noStore(NextResponse.json({ ok:true }))));
 
   // VIP غير محدود
   const isVip = await requireVip();
-  if (isVip) return __noStore(NextResponse.json({ ok:true }));
+  if (isVip) return withReqId(__noStore(NextResponse.json({ ok:true }))));
 
   // حدّ غير VIP لكل pairId + anon
   const url = new URL(req.url);
@@ -43,8 +43,8 @@ export async function POST(req: Request) {
   if (pairId && anon) {
     const key = `msg:${pairId}:${anon}`;
     const ok = await rateLimit(key, MAX_NONVIP_PER_PAIR, WINDOW_SEC);
-    if (!ok) return __noStore(NextResponse.json({ ok:false, error:"limit" }, { status: 429 }));
-    return __noStore(NextResponse.json({ ok:true }));
+    if (!ok) return withReqId(__noStore(NextResponse.json({ ok:false, error:"limit" }, { status: 429 }))));
+    return withReqId(__noStore(NextResponse.json({ ok:true }))));
   }
 
   // fallback: 10/ساعة على IP|UA (سلوك سابق)
@@ -53,6 +53,6 @@ export async function POST(req: Request) {
   const row = hits.get(k) || { n:0, t: now };
   if (now - row.t > 60*60*1000) { row.n = 0; row.t = now; }
   row.n += 1; hits.set(k, row);
-  if (row.n > 10) return __noStore(NextResponse.json({ ok:false, error:"rate limit" }, { status: 429 }));
-  return __noStore(NextResponse.json({ ok:true }));
+  if (row.n > 10) return withReqId(__noStore(NextResponse.json({ ok:false, error:"rate limit" }, { status: 429 }))));
+  return withReqId(__noStore(NextResponse.json({ ok:true }))));
 }

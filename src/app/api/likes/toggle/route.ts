@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextRequest, NextResponse } from 'next/server';
+import { withReqId } from "@/lib/http/withReqId";
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,12 +14,13 @@ export async function POST(req: NextRequest) {
       isLiked: liked
     };
     
-    return NextResponse.json(response);
+    return withReqId(NextResponse.json(response));
   } catch (error) {
-    return NextResponse.json(
+    return withReqId(NextResponse.json(
       { error: 'Failed to toggle like' },
       { status: 500 }
-    );
+    ));
   }
-}export const runtime="nodejs";
+}
+export const runtime="nodejs";
 export const dynamic="force-dynamic";

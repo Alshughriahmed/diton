@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextRequest, NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 import { signAgeJWT } from "@/lib/age-jwt";
 import { writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
@@ -48,14 +50,15 @@ export async function POST(req: NextRequest) {
       return response;
     } catch (error) {
       console.error("[AGE_JWT_ERROR]", error);
-      return NextResponse.json({ ok: false, error: "JWT signing failed" }, { status: 500 });
+      return withReqId(NextResponse.json({ ok: false, error: "JWT signing failed" }, { status: 500 }));
     }
   }
   
   // For real providers, would verify webhook signature and extract result
-  return NextResponse.json({
+  return withReqId(NextResponse.json({
     ok: false,
     error: "Provider not configured"
-  }, { status: 501 });
-}export const runtime="nodejs";
+  }, { status: 501 }));
+}
+export const runtime="nodejs";
 export const dynamic="force-dynamic";

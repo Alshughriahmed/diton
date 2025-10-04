@@ -1,6 +1,8 @@
+export const revalidate = 0;
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 import { getServerSession } from "next-auth";
 import Stripe from "stripe";
 
@@ -11,10 +13,10 @@ const NO_STORE = {
 };
 
 function j(b: any, s?: number | { status?: number }): NextResponse {
-  return NextResponse.json(b, {
+  return withReqId(NextResponse.json(b, {
     status: (typeof s === "number" ? s : (s?.status || 200)),
     headers: NO_STORE
-  });
+  }));
 }
 
 function resolvePriceId(inputId: string, plan: string, env: any) {
@@ -98,4 +100,5 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return j({ error: e?.message || "stripe_error" }, 500);
   }
-}export const dynamic="force-dynamic";
+}
+export const dynamic="force-dynamic";

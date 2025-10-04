@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -15,12 +17,12 @@ export async function GET() {
   try {
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) {
-      return NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } });
+      return withReqId(NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } }));
     }
     // مفاتيح موجودة: أعد JSON متوافقًا
     // ملاحظة: نتجنب استدعاء Stripe هنا لتفادي الفشل على بيئة بلا net perms.
-    return NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } });
+    return withReqId(NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } }));
   } catch {
-    return NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } });
+    return withReqId(NextResponse.json({ plans: FALLBACK_PLANS }, { headers: { "Cache-Control":"no-store" } }));
   }
 }

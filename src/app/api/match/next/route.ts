@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { allow, ipFrom } from "../../../../lib/ratelimit";
+import { withReqId } from "@/lib/http/withReqId";
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { requireVip } from "../../../../utils/vip";
@@ -103,7 +105,7 @@ export async function GET(req: Request) {
   if (hcaptchaToken) {
     const isValidCaptcha = await verifyHCaptcha(hcaptchaToken);
     if (!isValidCaptcha) {
-      return NextResponse.json({ error: "Invalid captcha" }, { status: 400 });
+      return withReqId(NextResponse.json({ error: "Invalid captcha" }, { status: 400 }));
     }
   }
   
@@ -120,27 +122,27 @@ export async function GET(req: Request) {
   // غير-VIP: gender ≤ 1، countries ≤ 1، والدولة = ALL أو بلدي فقط
   if (!isVip && process.env.FREE_FOR_ALL !== "1") {
     if (genders.length > 1) {
-      return NextResponse.json({ error: "VIP gender filter" }, { status: 403 });
+      return withReqId(NextResponse.json({ error: "VIP gender filter" }, { status: 403 }));
     }
     if (countriesArray.length > 1) {
-      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+      return withReqId(NextResponse.json({ error: "VIP country filter" }, { status: 403 }));
     }
     if (countriesArray.length === 1 && countriesArray[0] !== "ALL" && myCountry && countriesArray[0] !== myCountry) {
-      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+      return withReqId(NextResponse.json({ error: "VIP country filter" }, { status: 403 }));
     }
   }
 
   // VIP: حدود أمان فقط
   if (isVip) {
     if (genders.length > 2) {
-      return NextResponse.json({ error: "gender too many" }, { status: 400 });
+      return withReqId(NextResponse.json({ error: "gender too many" }, { status: 400 }));
     }
     if (countriesArray.length > 15) {
-      return NextResponse.json({ error: "countries too many" }, { status: 400 });
+      return withReqId(NextResponse.json({ error: "countries too many" }, { status: 400 }));
     }
   }
   
-  return NextResponse.json({ ts: Date.now(), ...p });
+  return withReqId(NextResponse.json({ ts: Date.now(), ...p }));
 }
 
 export async function POST(req: Request) {
@@ -165,7 +167,7 @@ export async function POST(req: Request) {
   if (hcaptcha_token) {
     const isValidCaptcha = await verifyHCaptcha(hcaptcha_token);
     if (!isValidCaptcha) {
-      return NextResponse.json({ error: "Invalid captcha" }, { status: 400 });
+      return withReqId(NextResponse.json({ error: "Invalid captcha" }, { status: 400 }));
     }
   }
   
@@ -182,25 +184,25 @@ export async function POST(req: Request) {
   // غير-VIP: gender ≤ 1، countries ≤ 1، والدولة = ALL أو بلدي فقط
   if (!isVip && process.env.FREE_FOR_ALL !== "1") {
     if (genders.length > 1) {
-      return NextResponse.json({ error: "VIP gender filter" }, { status: 403 });
+      return withReqId(NextResponse.json({ error: "VIP gender filter" }, { status: 403 }));
     }
     if (countriesArray.length > 1) {
-      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+      return withReqId(NextResponse.json({ error: "VIP country filter" }, { status: 403 }));
     }
     if (countriesArray.length === 1 && countriesArray[0] !== "ALL" && myCountry && countriesArray[0] !== myCountry) {
-      return NextResponse.json({ error: "VIP country filter" }, { status: 403 });
+      return withReqId(NextResponse.json({ error: "VIP country filter" }, { status: 403 }));
     }
   }
 
   // VIP: حدود أمان فقط
   if (isVip) {
     if (genders.length > 2) {
-      return NextResponse.json({ error: "gender too many" }, { status: 400 });
+      return withReqId(NextResponse.json({ error: "gender too many" }, { status: 400 }));
     }
     if (countriesArray.length > 15) {
-      return NextResponse.json({ error: "countries too many" }, { status: 400 });
+      return withReqId(NextResponse.json({ error: "countries too many" }, { status: 400 }));
     }
   }
   
-  return NextResponse.json({ ts: Date.now(), ...p });
+  return withReqId(NextResponse.json({ ts: Date.now(), ...p }));
 }

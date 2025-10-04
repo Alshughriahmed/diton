@@ -1,4 +1,5 @@
 import { jsonEcho } from "@/lib/api/xreq";
+import { withReqId } from "@/lib/http/withReqId";
 import { logRTC } from "@/lib/rtc/logger";
 import { cleanupGhosts } from "@/lib/rtc/queue";
 

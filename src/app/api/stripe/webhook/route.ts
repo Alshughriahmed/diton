@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 import Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -22,6 +24,6 @@ export async function POST(req: Request) {
     // TODO: مزامنة الاستحقاق مع مخزن دائم لاحقًا (اختياري للـMVP)
   }
 
-  return NextResponse.json({ ok: true });
+  return withReqId(NextResponse.json({ ok: true }));
 }
 export const dynamic="force-dynamic";

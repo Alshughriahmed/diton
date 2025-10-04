@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 export const runtime = "nodejs";
 
 // Reorder ICE servers to prioritize TURNS:443 and TURN:443
@@ -75,6 +77,6 @@ export async function GET() {
   // Apply reordering to prioritize TURNS:443 and TURN:443 servers first
   const iceServers = reorderIceServers(rawIceServers);
   
-  return NextResponse.json({ iceServers });
+  return withReqId(NextResponse.json({ iceServers }));
 }
 export const dynamic="force-dynamic";

@@ -1,12 +1,11 @@
+import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
-  return new Response(JSON.stringify({ 
-    status: "healthy", 
-    timestamp: Date.now(),
-    service: "DitonaChat" 
-  }), { 
-    status: 200, 
-    headers: { "content-type": "application/json" } 
-  });
+  const res = NextResponse.json({ ok: true, ts: Date.now() });
+  return withReqId(res);
 }
-export const runtime="nodejs";
-export const dynamic="force-dynamic";

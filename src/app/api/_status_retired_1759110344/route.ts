@@ -1,4 +1,6 @@
+export const runtime = "nodejs";
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -12,7 +14,7 @@ export async function GET() {
     freeForAll: bool(process.env.FREE_FOR_ALL) || bool(process.env.NEXT_PUBLIC_FREE_FOR_ALL),
     now: new Date().toISOString()
   };
-  return NextResponse.json(payload, {
+  return withReqId(NextResponse.json(payload, {
     headers: { "cache-control": "no-store, no-cache, must-revalidate" }
-  });
+  }));
 }

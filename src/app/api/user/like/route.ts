@@ -1,10 +1,10 @@
 export const revalidate = 0;
 const __withNoStore = <T extends Response>(r:T):T => { try { (r as any).headers?.set?.("cache-control","no-store"); } catch {} return r; };
 import { NextRequest, NextResponse } from 'next/server';
+import { withReqId } from "@/lib/http/withReqId";
 import { getServerSession } from 'next-auth/next';
 
 function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"); }catch{} return res; }
-
 export const dynamic = 'force-dynamic';
 
 interface LikeData {
@@ -22,14 +22,14 @@ export async function POST(request: NextRequest) {
     const session = await getServerSession();
     
     if (!session?.user?.email) {
-      return __noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
+      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))));
     }
 
     const userId = session.user.email;
     const body: LikeData = await request.json();
 
     if (!body.action || !body.timestamp) {
-      return __noStore(NextResponse.json({ error: 'Invalid request data' }, { status: 400 }));
+      return withReqId(__noStore(NextResponse.json({ error: 'Invalid request data' }, { status: 400 }))));
     }
 
     // Update like count
@@ -60,15 +60,15 @@ export async function POST(request: NextRequest) {
       likeHistory.get(userId)!.shift();
     }
 
-    return __noStore(NextResponse.json({ 
+    return withReqId(__noStore(NextResponse.json({ 
       success: true,
       totalLikes: userLikeSet.size,
       timestamp: Date.now()
-    }));
+    }))));
 
   } catch (error) {
     console.error('Like API error:', error);
-    return __noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }));
+    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }))));
   }
 }
 
@@ -77,19 +77,20 @@ export async function GET(request: NextRequest) {
     const session = await getServerSession();
     
     if (!session?.user?.email) {
-      return __noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
+      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))));
     }
 
     const userId = session.user.email;
     const userLikeSet = userLikes.get(userId) || new Set();
     
-    return __noStore(NextResponse.json({
+    return withReqId(__noStore(NextResponse.json({
       totalLikes: userLikeSet.size,
       history: likeHistory.get(userId) || []
-    }));
+    }))));
 
   } catch (error) {
     console.error('Like GET API error:', error);
-    return __noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }));
+    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }))));
   }
-}export const runtime="nodejs";
+}
+export const runtime="nodejs";

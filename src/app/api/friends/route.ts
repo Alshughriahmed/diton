@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 
 // Mock friends data for demo
 const mockFriends = [
@@ -9,6 +11,7 @@ const mockFriends = [
 
 export async function GET() {
   // استرجع مصفوفة عرض فقط من LIKES المؤقتة
-  return NextResponse.json({ friends: mockFriends });
-}export const runtime="nodejs";
+  return withReqId(NextResponse.json({ friends: mockFriends }));
+}
+export const runtime="nodejs";
 export const dynamic="force-dynamic";

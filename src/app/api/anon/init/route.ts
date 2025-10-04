@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { cookies } from "next/headers";
+import { withReqId } from "@/lib/http/withReqId";
 import { NextResponse } from "next/server";
 import { randomUUID, createHmac } from "crypto";
 
@@ -29,7 +31,7 @@ async function setAnonCookie() {
 
 export async function POST() {
   await setAnonCookie();
-  return NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+  return withReqId(NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } }));
 }
 
 export async function GET() {

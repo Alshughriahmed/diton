@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextRequest, NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 import { allow, ipFrom } from "@/lib/ratelimit";
 import { writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
@@ -8,7 +10,7 @@ export async function POST(req: NextRequest) {
     // Simple CSRF protection - require custom header in production
     const isDev = process.env.NODE_ENV === "development";
     if (!isDev && !req.headers.get("x-csrf-token")) {
-      return NextResponse.json({ error: "CSRF token required" }, { status: 403 });
+      return withReqId(NextResponse.json({ error: "CSRF token required" }, { status: 403 }));
     }
 
     // Rate limiting - 10 reports per minute per IP (as specified)
@@ -16,7 +18,7 @@ export async function POST(req: NextRequest) {
     const rateLimitResult = allow(`report:${clientIP}`, 10, 60 * 1000);
     
     if (!rateLimitResult.ok) {
-      return NextResponse.json({ error: "Rate limited" }, { status: 429 });
+      return withReqId(NextResponse.json({ error: "Rate limited" }, { status: 429 }));
     }
 
     // Parse request body
@@ -24,7 +26,7 @@ export async function POST(req: NextRequest) {
     const { reason, peerId, ts } = body;
 
     if (!reason || !peerId) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+      return withReqId(NextResponse.json({ error: "Missing required fields" }, { status: 400 }));
     }
 
     // Create report record
@@ -57,15 +59,16 @@ export async function POST(req: NextRequest) {
 
     console.log("[MODERATION_REPORT]", report);
 
-    return NextResponse.json({ 
+    return withReqId(NextResponse.json({ 
       ok: true, 
       reportId: `rpt_${Date.now()}`,
       message: "Report submitted successfully"
-    });
+    }));
     
   } catch (error) {
     console.error("[REPORT_ERROR]", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return withReqId(NextResponse.json({ error: "Internal server error" }, { status: 500 }));
   }
-}export const runtime="nodejs";
+}
+export const runtime="nodejs";
 export const dynamic="force-dynamic";

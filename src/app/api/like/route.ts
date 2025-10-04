@@ -1,4 +1,5 @@
 import { jsonEcho } from "@/lib/api/xreq";
+import { withReqId } from "@/lib/http/withReqId";
 // runtime: Node لقراءة مفاتيح Upstash
 export const runtime = "nodejs";
 

@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextResponse } from 'next/server';
+import { withReqId } from "@/lib/http/withReqId";
 export const runtime = 'nodejs';
 
 const URL = process.env.UPSTASH_REDIS_REST_URL || '';
@@ -50,19 +52,20 @@ export async function POST(req: Request) {
       turns443: !!m.turns443,
     };
     const res = await store(allowed);
-    return NextResponse.json({ ok: true, ...res }, { status: 200 });
+    return withReqId(NextResponse.json({ ok: true, ...res }, { status: 200 }));
   } catch {
-    return NextResponse.json({ ok: false }, { status: 200 });
+    return withReqId(NextResponse.json({ ok: false }, { status: 200 }));
   }
 }
 
 // Debug endpoint (safe): presence only, no values
 export async function GET() {
-  return NextResponse.json({
+  return withReqId(NextResponse.json({
     ok: true,
     env: {
       upstash_url: !!process.env.UPSTASH_REDIS_REST_URL,
       upstash_token: !!process.env.UPSTASH_REDIS_REST_TOKEN,
     }
-  }, { status: 200 });
-}export const dynamic="force-dynamic";
+  }, { status: 200 }));
+}
+export const dynamic="force-dynamic";

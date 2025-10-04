@@ -1,4 +1,6 @@
+export const revalidate = 0;
 import { NextResponse } from "next/server";
+import { withReqId } from "@/lib/http/withReqId";
 
 export async function GET() {
   const ageProvider = process.env.AGE_PROVIDER || "stub";
@@ -45,15 +47,16 @@ export async function GET() {
       </body>
       </html>
     `;
-    return new NextResponse(html, {
+    return withReqId(new NextResponse(html, {
       headers: { 'Content-Type': 'text/html' }
-    });
+    }));
   }
   
   // For real providers (veriff, yoti), would redirect to external verification
-  return NextResponse.json({
+  return withReqId(NextResponse.json({
     ok: false,
     error: "Provider not configured"
-  }, { status: 501 });
-}export const runtime="nodejs";
+  }, { status: 501 }));
+}
+export const runtime="nodejs";
 export const dynamic="force-dynamic";

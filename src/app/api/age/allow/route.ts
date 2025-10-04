@@ -1,4 +1,5 @@
 import { allow, ipFrom } from "../../../../lib/ratelimit";
+import { withReqId } from "@/lib/http/withReqId";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
