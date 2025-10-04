@@ -9,10 +9,10 @@ export const revalidate = 0;
 const H = { "cache-control":"no-store, no-cache, must-revalidate", "referrer-policy":"no-referrer" } as const;
 const ffa = () => process.env.FREE_FOR_ALL==="1" || process.env.NEXT_PUBLIC_FREE_FOR_ALL==="1";
 export async function GET() {
-  if (ffa()) return withReqId(__noStore(NextResponse.json({ ok: true, mode:"fast-path", ffa: true }, { headers: H }))));
-  return withReqId(__noStore(NextResponse.json({ ok: false, reason:"ffa-off" }, { status: 403, headers: H }))));
+  if (ffa()) return withReqId(__noStore(NextResponse.json({ ok: true, mode:"fast-path", ffa: true }, { headers: H })));
+  return withReqId(__noStore(NextResponse.json({ ok: false, reason:"ffa-off" }, { status: 403, headers: H })));
 }
 export async function POST() { return GET(); }
 export async function OPTIONS() {
-  return withReqId(__noStore(NextResponse.json({ ok: true }, { headers: { ...H, "access-control-allow-methods": "GET,POST,OPTIONS" } }))));
+  return withReqId(__noStore(NextResponse.json({ ok: true }, { headers: { ...H, "access-control-allow-methods": "GET,POST,OPTIONS" } })));
 }

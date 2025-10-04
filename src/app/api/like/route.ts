@@ -7,7 +7,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"); }catch{} return res; }
-
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 

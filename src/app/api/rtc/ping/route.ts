@@ -17,11 +17,11 @@ import { touchQueue } from "@/lib/rtc/mm";
 function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"); }catch{} return res; }
 
 export async function GET(_req: NextRequest){
-  const anon = extractAnonId(_req); if (!anon) return withReqId(__noStore(NextResponse.json({ ok:false },{status:403}))));;
+  const anon = extractAnonId(_req); if (!anon) return withReqId(__noStore(NextResponse.json({ ok:false },{status:403})));;
   const attr = await hgetall(`rtc:attrs:${anon}`);
   if (attr?.gender && attr?.country) {
     await touchQueue(anon, { gender: attr.gender, country: attr.country });
     await Promise.all([ expire(`rtc:attrs:${anon}`,120), expire(`rtc:filters:${anon}`,120) ]);
   }
-  return withReqId(__noStore(NextResponse.json({ ok:true },{status:200}))));;
+  return withReqId(__noStore(NextResponse.json({ ok:true },{status:200})));;
 }

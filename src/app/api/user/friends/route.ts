@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
     const session = await getServerSession();
     
     if (!session?.user?.email) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 })));
     }
 
     const userId = session.user.email;
@@ -87,11 +87,11 @@ export async function GET(request: NextRequest) {
       friends,
       total: friends.length,
       online: friends.filter(f => f.isOnline).length
-    }))));
+    })));
 
   } catch (error) {
     console.error('Friends GET API error:', error);
-    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }))));
+    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 })));
   }
 }
 
@@ -100,14 +100,14 @@ export async function POST(request: NextRequest) {
     const session = await getServerSession();
     
     if (!session?.user?.email) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 })));
     }
 
     const userId = session.user.email;
     const { friendId, action } = await request.json();
 
     if (!friendId || !action) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Invalid request data' }, { status: 400 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Invalid request data' }, { status: 400 })));
     }
 
     if (!userFriends.has(userId)) {
@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
     if (action === 'add') {
       // Check if already friends
       if (friends.find(f => f.id === friendId)) {
-        return withReqId(__noStore(NextResponse.json({ error: 'Already friends' }, { status: 400 }))));
+        return withReqId(__noStore(NextResponse.json({ error: 'Already friends' }, { status: 400 })));
       }
 
       // Add new friend
@@ -130,12 +130,12 @@ export async function POST(request: NextRequest) {
         success: true, 
         friend: newFriend,
         message: 'Friend added successfully' 
-      }))));
+      })));
 
     } else if (action === 'remove') {
       const friendIndex = friends.findIndex(f => f.id === friendId);
       if (friendIndex === -1) {
-        return withReqId(__noStore(NextResponse.json({ error: 'Friend not found' }, { status: 404 }))));
+        return withReqId(__noStore(NextResponse.json({ error: 'Friend not found' }, { status: 404 })));
       }
 
       friends.splice(friendIndex, 1);
@@ -143,14 +143,14 @@ export async function POST(request: NextRequest) {
       return withReqId(__noStore(NextResponse.json({ 
         success: true,
         message: 'Friend removed successfully' 
-      }))));
+      })));
     }
 
-    return withReqId(__noStore(NextResponse.json({ error: 'Invalid action' }, { status: 400 }))));
+    return withReqId(__noStore(NextResponse.json({ error: 'Invalid action' }, { status: 400 })));
 
   } catch (error) {
     console.error('Friends POST API error:', error);
-    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }))));
+    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 })));
   }
 }
 
@@ -159,21 +159,21 @@ export async function DELETE(request: NextRequest) {
     const session = await getServerSession();
     
     if (!session?.user?.email) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 })));
     }
 
     const userId = session.user.email;
     const { friendId } = await request.json();
 
     if (!friendId) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Friend ID required' }, { status: 400 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Friend ID required' }, { status: 400 })));
     }
 
     const friends = userFriends.get(userId) || [];
     const friendIndex = friends.findIndex(f => f.id === friendId);
     
     if (friendIndex === -1) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Friend not found' }, { status: 404 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Friend not found' }, { status: 404 })));
     }
 
     friends.splice(friendIndex, 1);
@@ -181,11 +181,11 @@ export async function DELETE(request: NextRequest) {
     return withReqId(__noStore(NextResponse.json({ 
       success: true,
       message: 'Friend removed successfully'
-    }))));
+    })));
 
   } catch (error) {
     console.error('Friends DELETE API error:', error);
-    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }))));
+    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 })));
   }
 }
 export const runtime="nodejs";

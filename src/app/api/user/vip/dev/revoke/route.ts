@@ -4,7 +4,6 @@ import { NextResponse } from "next/server";
 import { withReqId } from "@/lib/http/withReqId";
 
 function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"); }catch{} return res; }
-
 export const dynamic = 'force-dynamic';
 
 export async function POST() {
@@ -12,5 +11,4 @@ export async function POST() {
   res.cookies.set("vip", "", { path: "/", maxAge: 0, sameSite: "lax", httpOnly: false });
   return __noStore(res);
 }
-
 export const runtime = "nodejs";

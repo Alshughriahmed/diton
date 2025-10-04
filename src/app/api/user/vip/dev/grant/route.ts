@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const { email } = await req.json();
     
     if (!email || typeof email !== "string") {
-      return withReqId(__noStore(NextResponse.json({ error: "Invalid email" }, { status: 400 }))));
+      return withReqId(__noStore(NextResponse.json({ error: "Invalid email" }, { status: 400 })));
     }
     
     VIP_USERS.add(email.toLowerCase());
@@ -25,9 +25,9 @@ export async function POST(req: NextRequest) {
       message: "VIP status granted",
       email: email.toLowerCase(),
       isVip: true
-    }, { status: 200 }))));
+    }, { status: 200 })));
   } catch (error) {
-    return withReqId(__noStore(NextResponse.json({ error: "Invalid request" }, { status: 400 }))));
+    return withReqId(__noStore(NextResponse.json({ error: "Invalid request" }, { status: 400 })));
   }
 }
 export const runtime = "nodejs";

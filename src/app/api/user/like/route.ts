@@ -22,14 +22,14 @@ export async function POST(request: NextRequest) {
     const session = await getServerSession();
     
     if (!session?.user?.email) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 })));
     }
 
     const userId = session.user.email;
     const body: LikeData = await request.json();
 
     if (!body.action || !body.timestamp) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Invalid request data' }, { status: 400 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Invalid request data' }, { status: 400 })));
     }
 
     // Update like count
@@ -64,11 +64,11 @@ export async function POST(request: NextRequest) {
       success: true,
       totalLikes: userLikeSet.size,
       timestamp: Date.now()
-    }))));
+    })));
 
   } catch (error) {
     console.error('Like API error:', error);
-    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }))));
+    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 })));
   }
 }
 
@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
     const session = await getServerSession();
     
     if (!session?.user?.email) {
-      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))));
+      return withReqId(__noStore(NextResponse.json({ error: 'Unauthorized' }, { status: 401 })));
     }
 
     const userId = session.user.email;
@@ -86,11 +86,11 @@ export async function GET(request: NextRequest) {
     return withReqId(__noStore(NextResponse.json({
       totalLikes: userLikeSet.size,
       history: likeHistory.get(userId) || []
-    }))));
+    })));
 
   } catch (error) {
     console.error('Like GET API error:', error);
-    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 }))));
+    return withReqId(__noStore(NextResponse.json({ error: 'Internal server error' }, { status: 500 })));
   }
 }
 export const runtime="nodejs";

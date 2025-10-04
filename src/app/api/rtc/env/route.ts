@@ -16,5 +16,5 @@ function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"
 export async function GET() {
   const server = { FREE_FOR_ALL: process.env.FREE_FOR_ALL ?? "0" };
   const pub = { NEXT_PUBLIC_FREE_FOR_ALL: process.env.NEXT_PUBLIC_FREE_FOR_ALL ?? "0" };
-  return withReqId(__noStore(NextResponse.json({ server, public: pub }, { headers: { "Cache-Control": "no-store" } }))));;
+  return withReqId(__noStore(NextResponse.json({ server, public: pub }, { headers: { "Cache-Control": "no-store" } })));;
 }
