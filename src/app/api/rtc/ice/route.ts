@@ -1,3 +1,4 @@
+export const preferredRegion = ["fra1","iad1"];
 const __withNoStore = <T extends Response>(r:T):T => { try { (r as any).headers?.set?.("cache-control","no-store"); } catch {} return r; };
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
