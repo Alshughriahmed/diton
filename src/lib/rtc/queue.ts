@@ -93,3 +93,32 @@ export async function ghostCleanup(nowMs = NOW()): Promise<number> {
 }
 
 function safeJSON(s: string){ try { return JSON.parse(s); } catch { return undefined; } }
+
+
+export type QueueStats = { wait: number; ghosts?: number; ts: number };
+
+
+export async function getQueueStats(nowMs:number = Date.now()): Promise<QueueStats> {
+  try {
+    const wait = await qlen();
+    // تقدير الأشباح: العناصر الأقدم من GHOST_MAX_AGE_MS
+    let ghosts = 0;
+    try {
+      // إذا توفّر Redis REST نفذ ZCOUNT، وإلا صفّر
+      const URL = process.env.UPSTASH_REDIS_REST_URL;
+      const TOK = process.env.UPSTASH_REDIS_REST_TOKEN;
+      if (URL && TOK) {
+        const cutoff = nowMs - 30000; // مطابق لـ GHOST_MAX_AGE_MS
+        const r = await fetch(`${URL}/zcount/rtc:wait/-inf/${cutoff}`, { headers:{Authorization:`Bearer ${TOK}`} }).catch(()=>null as any);
+        const j = r && r.ok ? await r.json().catch(()=>null) : null;
+        ghosts = Number(j?.result ?? 0);
+      }
+    } catch {}
+    return { wait: Number(wait||0), ghosts, ts: nowMs };
+  } catch {
+    return { wait: 0, ghosts: 0, ts: nowMs };
+  }
+}
+
+
+export { ghostCleanup as cleanupGhosts };
