@@ -27,7 +27,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'pnpm'
-
+      - name: Enable pnpm via corepack
+  shell: bash
+  run: |
+    set -Eeuo pipefail
+    corepack enable
+    corepack prepare pnpm@10.15.1 --activate
+    pnpm -v
+ 
       - name: Enable corepack + pnpm
         run: |
           corepack enable
