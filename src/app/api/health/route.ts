@@ -4,23 +4,27 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// minimal local helper: echo x-req-id + set no-store
-function withReqId(res: NextResponse, req: Request) {
-  const id =
-    req.headers.get("x-req-id") ||
-    (globalThis.crypto?.randomUUID?.() ?? String(Date.now()));
+const H = {
+  "cache-control": "no-store",
+  "referrer-policy": "no-referrer",
+} as const;
+
+function withReqId(res: NextResponse, req?: Request): NextResponse {
   try {
+    const incoming = req?.headers?.get("x-req-id") ?? "";
+    const id =
+      incoming || (globalThis.crypto?.randomUUID?.() ?? String(Date.now()));
     res.headers.set("x-req-id", id);
-    if (!res.headers.has("Cache-Control")) res.headers.set("Cache-Control", "no-store");
-    if (!res.headers.has("Referrer-Policy")) res.headers.set("Referrer-Policy", "no-referrer");
+    if (!res.headers.has("cache-control")) res.headers.set("cache-control", "no-store");
+    if (!res.headers.has("referrer-policy")) res.headers.set("referrer-policy", "no-referrer");
   } catch {}
   return res;
 }
 
 export async function GET(req: Request) {
-  return withReqId(new NextResponse("ok", { status: 200 }), req);
+  return withReqId(NextResponse.json({ ok: true }, { headers: H }), req);
 }
 
 export async function OPTIONS(req: Request) {
-  return withReqId(new NextResponse(null, { status: 204 }), req);
+  return withReqId(new NextResponse(null, { status: 204, headers: H }), req);
 }
