@@ -9,71 +9,85 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
     strategy:
       matrix:
         node-version: [20]
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup pnpm
-      uses: pnpm/action-setup@v2
-      with:
-        version: latest
-        
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'pnpm'
-        
-    - name: Install dependencies
-      run: pnpm install
-      
-    - name: Type check
-      run: pnpm exec tsc --noEmit
-      
-    - name: Build application
-      run: pnpm run build
-      env:
-        SKIP_ENV_VALIDATION: true
-        
-    - name: Install Playwright browsers
-      run: pnpm exec playwright install chromium
-      
-    - name: Start development server
-      run: |
-        source ./disable_alt_screen.sh
-        safe_exec pnpm run dev &
-      env:
-        PORT: 3000
-        TERM: dumb
-        NO_COLOR: 1
-        CI: 1
-        
-    - name: Wait for server
-      run: |
-        timeout 60 bash -c 'until curl -f http://localhost:3000/api/health; do sleep 1; done'
-        
-    - name: Run Playwright tests
-      run: pnpm exec playwright test
-      env:
-        BASE_URL: http://localhost:3000
-        
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: playwright-report
-        path: playwright-report/
-        retention-days: 7
-        
-    - name: Print test summary
-      if: always()
-      run: |
-        echo "✅ CI Pipeline completed"
-        echo "📊 Tests: Playwright smoke tests"
-        echo "🔧 Build: Next.js application"
-        echo "📝 Type check: TypeScript validation"
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Build application
+        run: pnpm run build
+        env:
+          SKIP_ENV_VALIDATION: true
+          CI: 1
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium
+
+      # بدّل خطوة تشغيل السيرفر بكتلة تتحمل غياب الملف وتتفادى TTY
+      - name: Start development server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          F=".disable_alt_screen.sh"
+          if [ -f "$F" ]; then . "$F"; else echo "skip: $F missing"; fi
+          nohup pnpm run dev >/dev/null 2>&1 &
+          echo $! > dev.pid
+        env:
+          PORT: 3000
+          TERM: dumb
+          NO_COLOR: 1
+          CI: 1
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Wait for server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for i in {1..60}; do
+            if curl -fsS "http://localhost:3000/api/health" >/dev/null; then
+              echo "server ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "server did not start in time"; exit 1
+
+      - name: Run Playwright tests
+        run: pnpm exec playwright test
+        env:
+          BASE_URL: http://localhost:3000
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Print test summary
+        if: always()
+        run: |
+          echo "✅ CI Pipeline completed"
+          echo "📊 Tests: Playwright smoke tests"
+          echo "🔧 Build: Next.js application"
+          echo "📝 Type check: TypeScript validation"
