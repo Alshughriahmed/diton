@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 // Vercel regions
-export const preferredRegion = ["fra1", "iad1"] as const;
+export const preferredRegion = ['fra1','iad1']
 
 // ---------- helpers: headers ----------
 function withStdHeaders(req: NextRequest, res: NextResponse) {
