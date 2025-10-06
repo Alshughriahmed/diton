@@ -1,4 +1,3 @@
-// src/app/api/rtc/matchmake/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { jsonEcho } from "@/lib/api/xreq";
@@ -25,8 +24,7 @@ export async function POST(req: NextRequest) {
   const reqId = req.headers.get("x-req-id") || crypto.randomUUID();
 
   try {
-    // استخرج anon من الكوكي (أو من رأس Cookie كاحتياط)
-    const cookieStore = cookies(); // لا تستخدم await
+    const cookieStore = await cookies();
     const raw =
       cookieStore.get("anon")?.value ??
       req.headers.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
@@ -38,7 +36,6 @@ export async function POST(req: NextRequest) {
       return __noStore(jsonEcho(req, { error: "matchmake-fail", info: "no-anon" }, { status: 401 }));
     }
 
-    // بارس اختياري (لا نعتمد عليه لكي لا نكسر التوافق)
     const body: any = await req.json().catch(() => ({}));
     const hint = {
       gender: (body.gender ?? "").toString().toLowerCase() || undefined,
@@ -47,35 +44,19 @@ export async function POST(req: NextRequest) {
       filterCountries: (body.filterCountries ?? "").toString() || undefined,
     };
 
-    // نفّذ الملاءمة
     let out: any = null;
-    try {
-      // كثير من المشاريع تُصدّر matchmake(anonId, hint?) — نجرب تمريـر hint إن وُجد
-      out = await (matchmake as any)(anonId, hint);
-    } catch (e) {
-      // إن كان التوقيع مختلفًا، جرّب الاستدعاء البسيط
-      try { out = await (matchmake as any)(anonId); } catch {}
-    }
+    try { out = await (matchmake as any)(anonId, hint); }
+    catch { try { out = await (matchmake as any)(anonId); } catch {} }
 
-    // إذا لم توجد نتيجة صريحة نعيد 204
     if (!out || out === true) {
       logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - t0, status: 204, note: "no-match-yet" });
       return __noStore(new NextResponse(null, { status: 204 }));
     }
 
-    // نجاح مع payload
     logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - t0, status: 200, note: "matched" });
     return __noStore(jsonEcho(req, { ok: true, result: out }, { status: 200 }));
   } catch (e: any) {
-    logRTC({
-      route: "/api/rtc/matchmake",
-      reqId,
-      ms: Date.now() - t0,
-      status: 500,
-      note: String(e?.message || e).slice(0, 100),
-    });
-    return __noStore(
-      jsonEcho(req, { error: "matchmake-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 })
-    );
+    logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - t0, status: 500, note: String(e?.message || e).slice(0, 100) });
+    return __noStore(jsonEcho(req, { error: "matchmake-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 }));
   }
 }
