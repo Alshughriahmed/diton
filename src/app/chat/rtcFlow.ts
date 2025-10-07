@@ -1,7 +1,10 @@
-// path: src/app/chat/rtcFlow.ts
+// rtcFlow.ts — Perfect Negotiation + Teardown + Backoff + Resets
+// ملاحظات: لا قيم صلبة. العميل يقرأ فقط NEXT_PUBLIC_*.
+// حدود حجم: نحمي إرسال SDP على ~200KB قبل POST.
+
 import apiSafeFetch from "@/app/chat/safeFetch";
 import { getLocalStream } from "@/lib/media";
-import { sendRtcMetrics, type RtcMetrics } from "@/utils/metrics";
+import { sendRtcMetrics } from "@/utils/metrics";
 import { rtcHeaders, markLastStopTs } from "@/app/chat/rtcHeaders.client";
 
 /* region: helpers */
@@ -9,9 +12,10 @@ const isAbort = (e: any) => e && (e.name === "AbortError" || e.code === 20);
 const swallowAbort = (e: any) => { if (!isAbort(e)) throw e; };
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 function safeAbort(ac?: AbortController | null) { try { if (ac && !ac.signal?.aborted) ac.abort("stop"); } catch {} }
+function jsonSizeUtf8(obj: unknown): number { try { return new Blob([JSON.stringify(obj)]).size; } catch { return 0; } }
 /* endregion */
 
-/* region: TURN helpers */
+/* region: TURN helpers (unchanged, with ordering) */
 function hasTurns443FromPc(pc: RTCPeerConnection | null | undefined): boolean {
   try {
     const cfg = pc?.getConfiguration?.();
@@ -61,6 +65,11 @@ interface RtcState {
   pc: RTCPeerConnection | null;
   lastPeer: string | null;
   prevForOnce: string | null;
+  // Perfect Negotiation flags
+  makingOffer: boolean;
+  ignoreOffer: boolean;
+  isSettingRemoteAnswerPending: boolean;
+  polite: boolean;
 }
 let state: RtcState = {
   remoteStream: null,
@@ -71,15 +80,22 @@ let state: RtcState = {
   ac: null,
   pc: null,
   lastPeer: null,
-  prevForOnce: null
+  prevForOnce: null,
+  makingOffer: false,
+  ignoreOffer: false,
+  isSettingRemoteAnswerPending: false,
+  polite: false,
 };
 let onPhaseCallback: ((phase: Phase) => void) | null = null;
 let session = 0;
 let cooldownNext = false;
+
+// KPIs
 const __kpi = {
   tEnq: 0, tMatched: 0, tFirstRemote: 0, reconnectStart: 0, reconnectDone: 0, iceTries: 0,
   sessionId: (typeof crypto !== "undefined" && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : String(Date.now()),
 };
+
 if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
   try {
     window.addEventListener("unhandledrejection", (e: any) => { if ((e?.reason?.name || "") === "AbortError") e.preventDefault?.(); });
@@ -173,6 +189,14 @@ export function stop(mode: "full" | "network" = "full") {
       }
     } catch {}
 
+    // Reset واجهة المستخدم لكل pairId جديد
+    try {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("ditona:chat:reset"));
+        window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked: false } }));
+      }
+    } catch {}
+
     state.phase = "stopped";
     try { onPhaseCallback?.("stopped"); } catch {}
     if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "idle", role: null } }));
@@ -194,33 +218,66 @@ async function getIceServers() {
 }
 /* endregion */
 
-/* region: SDP flows */
+/* region: Perfect Negotiation core */
+async function applyRemoteDescriptionPN(desc: RTCSessionDescriptionInit, polite: boolean) {
+  if (!state.pc) return;
+  const pc = state.pc;
+
+  const readyForOffer =
+    !state.makingOffer &&
+    (pc.signalingState === "stable" || state.isSettingRemoteAnswerPending);
+
+  const offerCollision = desc.type === "offer" && !readyForOffer;
+
+  state.ignoreOffer = !polite && offerCollision;
+  if (state.ignoreOffer) {
+    logRtc("pn-ignore-offer", 409, { polite, signaling: pc.signalingState });
+    return;
+  }
+  if (offerCollision && polite) {
+    try { await pc.setLocalDescription({ type: "rollback" } as any); } catch {}
+  }
+
+  state.isSettingRemoteAnswerPending = desc.type === "answer";
+  try { await pc.setRemoteDescription(desc); }
+  finally { state.isSettingRemoteAnswerPending = false; }
+}
+/* endregion */
+
+/* region: SDP flows with PN + backoff */
 async function callerFlow(sid: number, curSdpTag?: string | null) {
   if (!checkSession(sid) || !state.pc) return;
   ensureCallerOnly("caller-flow");
 
+  if (jsonSizeUtf8(await state.pc.createOffer({})) > 200 * 1024) {
+    logRtc("offer-too-large", 413); return;
+  }
+
+  state.makingOffer = true;
   const offer = await state.pc.createOffer();
-  await state.pc.setLocalDescription(offer);
+  try { await state.pc.setLocalDescription(offer); }
+  finally { state.makingOffer = false; }
 
   // POST offer (idempotent)
-  const K = (globalThis.crypto as any)?.randomUUID?.() || String(Date.now());
-  const H2 = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined, idempotencyKey: K });
+  const H2 = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
   await apiSafeFetch("/api/rtc/offer", {
     method: "POST",
     headers: { "content-type": "application/json", ...H2 },
-    body: JSON.stringify({ pairId: (state as any).pairId, sdp: JSON.stringify(offer) })
+    body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) })
   }).catch(() => {});
 
-  // Poll answer
-  while (checkSession(sid) && !state.ac?.signal.aborted) {
-    const H = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined });
+  // Poll answer with backoff
+  let backoff = 300;
+  for (let tries = 0; checkSession(sid) && !state.ac?.signal.aborted && tries < 50; tries++) {
+    const H = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
     const r = await apiSafeFetch("/api/rtc/answer", { method: "GET", cache: "no-store", headers: { ...H } });
     if (!r || !checkSession(sid)) return;
     if (r.status === 200) {
       const { sdp } = await r.json().catch(() => ({}));
-      if (sdp) { await state.pc.setRemoteDescription(JSON.parse(sdp)); logRtc("answer-received", 200); break; }
+      if (sdp) { await applyRemoteDescriptionPN(JSON.parse(sdp), /*polite*/ false); logRtc("answer-received", 200); break; }
     }
-    await sleep(300 + Math.floor(Math.random() * 400));
+    await sleep(backoff + Math.floor(Math.random() * 200));
+    backoff = Math.min(backoff * 1.5, 1200);
   }
 }
 
@@ -228,28 +285,30 @@ async function calleeFlow(sid: number, curSdpTag?: string | null) {
   if (!checkSession(sid) || !state.pc) return;
   ensureCalleeOnly("callee-flow");
 
-  while (checkSession(sid) && !state.ac?.signal.aborted) {
-    const H = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined });
+  let backoff = 300;
+  for (let tries = 0; checkSession(sid) && !state.ac?.signal.aborted && tries < 50; tries++) {
+    const H = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
     const r = await apiSafeFetch("/api/rtc/offer", { method: "GET", cache: "no-store", headers: { ...H } });
     if (!r || !checkSession(sid)) return;
     if (r.status === 200) {
       const { sdp } = await r.json().catch(() => ({}));
       if (sdp) {
-        await state.pc.setRemoteDescription(JSON.parse(sdp));
+        await applyRemoteDescriptionPN(JSON.parse(sdp), /*polite*/ true);
+        // create answer
         const answer = await state.pc.createAnswer();
         await state.pc.setLocalDescription(answer);
         // POST answer (idempotent)
-        const K2 = (globalThis.crypto as any)?.randomUUID?.() || String(Date.now());
-        const H2a = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined, idempotencyKey: K2 });
+        const H2a = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
         await apiSafeFetch("/api/rtc/answer", {
           method: "POST",
           headers: { "content-type": "application/json", ...H2a },
-          body: JSON.stringify({ pairId: (state as any).pairId, sdp: JSON.stringify(answer) })
+          body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(answer) })
         }).catch(() => {});
         break;
       }
     }
-    await sleep(300 + Math.floor(Math.random() * 400));
+    await sleep(backoff + Math.floor(Math.random() * 200));
+    backoff = Math.min(backoff * 1.5, 1200);
   }
 }
 /* endregion */
@@ -260,26 +319,31 @@ async function iceExchange(sid: number, curSdpTag?: string | null) {
 
   state.pc.onicecandidate = async (e) => {
     if (!e.candidate || !checkSession(sid) || state.ac?.signal.aborted) return;
-    const H = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined });
+    const H = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
+    // حماية حجم ICE ~4KB تتم في السيرفر أيضًا
     await apiSafeFetch("/api/rtc/ice", {
       method: "POST",
       headers: { "content-type": "application/json", ...H },
-      body: JSON.stringify({ pairId: (state as any).pairId, candidate: e.candidate })
+      body: JSON.stringify({ pairId: state.pairId, candidate: e.candidate })
     }).catch(() => {});
   };
 
-  while (checkSession(sid) && !state.ac?.signal.aborted) {
-    const H = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined });
+  let backoff = 300;
+  for (let tries = 0; checkSession(sid) && !state.ac?.signal.aborted && tries < 120; tries++) {
+    const H = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
     const r = await apiSafeFetch("/api/rtc/ice", { method: "GET", cache: "no-store", headers: { ...H } });
     if (!r || !checkSession(sid)) return;
     if (r.status === 200) {
-      const { candidate, candidates } = await r.json().catch(() => ({}));
-      const items = Array.isArray(candidates) ? candidates : (candidate ? [candidate] : []);
-      for (const cand of items) {
-        try { await state.pc!.addIceCandidate(cand); logRtc("ice-added", 200); } catch (e) { logRtc("ice-add-error", 500, { error: String(e) }); }
+      const items = await r.json().catch(() => ([]));
+      if (Array.isArray(items)) {
+        for (const it of items) {
+          const cand = it?.cand || it?.candidate || it;
+          try { await state.pc!.addIceCandidate(cand); logRtc("ice-added", 200); } catch (e) { logRtc("ice-add-error", 500, { error: String(e) }); }
+        }
       }
     }
-    await sleep(300 + Math.floor(Math.random() * 400));
+    await sleep(backoff + Math.floor(Math.random() * 200));
+    backoff = Math.min(backoff * 1.5, 1500);
   }
 }
 /* endregion */
@@ -303,7 +367,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     // enqueue
     const curSdpTag: string | null = null;
     const t = Date.now(); __kpi.tEnq = (typeof performance !== "undefined" ? performance.now() : t);
-    const HEnq = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined });
+    const HEnq = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
     await apiSafeFetch("/api/rtc/enqueue", {
       method: "POST",
       headers: { "content-type": "application/json", "x-ditona-session": String(currentSession), ...HEnq },
@@ -322,7 +386,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
       const payload: any = { ...filters };
       if (state.prevForOnce) { payload.prevFor = state.prevForOnce; state.prevForOnce = null; }
 
-      const HMm = rtcHeaders({ pairId: (state as any).pairId || undefined, role: (state as any).role || undefined, sdpTag: curSdpTag || undefined });
+      const HMm = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
       matchmakeOptions.headers = { ...matchmakeOptions.headers, "x-ditona-step": "matchmake", "x-ditona-session": String(currentSession), ...HMm };
       matchmakeOptions.body = JSON.stringify(payload);
 
@@ -333,7 +397,10 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
         const j = await r.json().catch(() => ({}));
         if (j?.pairId && j?.role) {
           state.pairId = j.pairId; state.role = j.role; state.phase = "matched";
-          try { __ditonaSetPair((state as any).pairId, (state as any).role); } catch {}
+          state.polite = (state.role === "callee"); // PN: callee polite
+          state.makingOffer = false; state.ignoreOffer = false; state.isSettingRemoteAnswerPending = false;
+
+          try { __ditonaSetPair(state.pairId, state.role); } catch {}
           if (j.peerAnonId) state.lastPeer = j.peerAnonId;
           onPhase("matched");
           if (typeof window !== "undefined") {
@@ -341,6 +408,9 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
             window.localStorage.setItem("ditona_role", j.role);
             window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: j.pairId, role: j.role } }));
             window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched", role: j.role } }));
+            // Reset UI state لهذا الزوج الجديد
+            window.dispatchEvent(new CustomEvent("ditona:chat:reset"));
+            window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked: false } }));
           }
           __kpi.tMatched = (typeof performance !== "undefined" ? performance.now() : Date.now());
           logRtc("match-found", 200, { role: state.role });
@@ -356,7 +426,20 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     const iceServers = await getIceServers();
     state.pc = new RTCPeerConnection({ iceServers });
 
-    // optional AUTO_NEXT delay via env
+    // Perfect Negotiation events
+    state.pc.onnegotiationneeded = async () => {
+      if (!checkSession(currentSession) || !state.pc) return;
+      try {
+        state.makingOffer = true;
+        const offer = await state.pc.createOffer();
+        await state.pc.setLocalDescription(offer);
+      } catch (e) { logRtc("pn-onnegotiationneeded", 500, { error: String(e) }); }
+      finally { state.makingOffer = false; }
+      // السيرفر يحمي الإديمبوتنسي؛ callerFlow سيقوم بالـPOST
+      if (state.role === "caller") { try { await callerFlow(currentSession, null); } catch (e) { swallowAbort(e); } }
+    };
+
+    // AUTO_NEXT via env
     const AUTO_NEXT_MS = parseInt(process.env.NEXT_PUBLIC_AUTO_NEXT_MS || "0", 10);
     if (AUTO_NEXT_MS > 0) {
       let autoNextTimer: any = null;
@@ -427,7 +510,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     if (state.role === "caller") await callerFlow(currentSession, null);
     else await calleeFlow(currentSession, null);
 
-    // debug hooks
+    // debug
     if (typeof window !== "undefined") {
       (window as any).ditonaPC = state.pc;
       (window as any).ditonaTurns443First = () => hasTurns443First(state.pc);
@@ -464,13 +547,19 @@ function setupDataChannel(dc: RTCDataChannel) {
     logRtc("datachannel-open", 200);
     (globalThis as any).__ditonaDataChannel = dc;
     if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "dc-open" } }));
+    // Reset رسائل/Like فور فتح القناة لزوج جديد
+    try {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("ditona:chat:reset"));
+        window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked: false } }));
+      }
+    } catch {}
     try { dc.send(JSON.stringify({ type: "meta:init" })); setTimeout(() => dc?.send?.(JSON.stringify({ type: "meta:init" })), 300); setTimeout(() => dc?.send?.(JSON.stringify({ type: "meta:init" })), 1200); } catch {}
   };
   dc.onmessage = async (ev) => {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === "meta:init") {
-        // Phase 1: immediate meta from cache
         const sendImmediate = async () => {
           let country = "Unknown", city = "Unknown", gender = "Unknown", name = "Anonymous";
           try { const { getImmediateGeo } = await import("@/lib/geoCache"); const g = getImmediateGeo(); country = g.country; city = g.city; } catch {}
@@ -478,7 +567,6 @@ function setupDataChannel(dc: RTCDataChannel) {
           const meta = { country, city, gender, name, avatar: null, likes: 0 };
           try { dc.send(JSON.stringify({ type: "meta", payload: meta })); } catch {} return meta;
         };
-        // Phase 2: fresh geo
         sendImmediate().then(async (initial) => {
           try {
             const { fetchGeoWithCache } = await import("@/lib/geoCache");
