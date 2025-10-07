@@ -158,7 +158,7 @@ async function collectAndSendMetrics() {
 /* region: stop */
 export function stop(mode: "full" | "network" = "full") {
   try { markLastStopTs(); } catch {}
-  try { __ditonaSetPair(null as any, (state as any).role); } catch {}
+  try { __ditonaSetPair(undefined, (state as any).role); } catch {}
   try {
     const dc = (globalThis as any).__ditonaDataChannel;
     if (dc) { try { dc.onopen = dc.onmessage = dc.onclose = dc.onerror = null as any; } catch {} (globalThis as any).__ditonaDataChannel = null; }
@@ -201,9 +201,9 @@ export function stop(mode: "full" | "network" = "full") {
     try { onPhaseCallback?.("stopped"); } catch {}
     if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "idle", role: null } }));
     clearLocalStorage();
-    state.sid = 0; state.phase = "idle"; state.role = null; state.pairId = null;
-    try { __ditonaSetPair((state as any).pairId, (state as any).role); } catch {}
-    logRtc("stop", 200);
+   state.sid = 0; state.phase = "idle"; state.role = null; state.pairId = null;
+try { __ditonaSetPair(((state as any).pairId || undefined), (state as any).role); } catch {}
+logRtc("stop", 200); 
   } catch (e) { console.warn("[rtc] stop error:", e); }
 }
 /* endregion */
@@ -400,7 +400,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
           state.polite = (state.role === "callee"); // PN: callee polite
           state.makingOffer = false; state.ignoreOffer = false; state.isSettingRemoteAnswerPending = false;
 
-          try { __ditonaSetPair(state.pairId, state.role); } catch {}
+          try { __ditonaSetPair(state.pairId || undefined, state.role); } catch {}
           if (j.peerAnonId) state.lastPeer = j.peerAnonId;
           onPhase("matched");
           if (typeof window !== "undefined") {
