@@ -59,29 +59,27 @@ req: NextRequest) {
   const reqId = req.headers.get("x-req-id") || crypto.randomUUID();
   
   try {
-    // Trigger cleanup on every enqueue
-    cleanupGhosts().catch(() => {});
-    
-    const cookieStore = await cookies();
-    const headerStore = await headers();
-    const raw =
-      cookieStore.get("anon")?.value ??
-      headerStore.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
-      null;
+   // Trigger cleanup on every enqueue
+cleanupGhosts().catch(() => {});
 
-    const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
-    if (!anonId) {
-      logRTC({ route: "/api/rtc/enqueue", reqId, ms: Date.now() - start, status: 500, note: "no-anon" });
-      return __noStore(jsonEcho(req, { error: "enqueue-fail", info: "no-anon" }, { status: 500 }));
-    }
+const raw =
+  req.headers.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
+  null;
 
-    const b: any = await req.json().catch(() => ({}));
-    const gender = String(b.gender || "u").toLowerCase();
-    const country = String(b.country || req.headers.get("x-vercel-ip-country") || "XX").toUpperCase();
-    const filterGenders = String(b.filterGenders || "all");
-    const filterCountries = String(b.filterCountries || "ALL");
+const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
+if (!anonId) {
+  logRTC({ route: "/api/rtc/enqueue", reqId, ms: Date.now() - start, status: 403, note: "no-anon" });
+  return __noStore(jsonEcho(req, { error: "anon-required" }, { status: 403 }));
+}
 
-    await enqueue(anonId, { gender, country }, { genders: filterGenders, countries: filterCountries });
+const b: any = await req.json().catch(() => ({}));
+const gender = String(b.gender ?? "u").toLowerCase();
+const country = String(b.country ?? req.headers.get("x-vercel-ip-country") ?? "XX").toUpperCase();
+const filterGenders = String(b.filterGenders ?? "all");
+const filterCountries = String(b.filterCountries ?? "ALL");
+
+await enqueue(anonId, { gender, country }, { genders: filterGenders, countries: filterCountries });
+ 
 // VIP weight: bring vip to the front
 try {
   const isVip = await requireVip();
