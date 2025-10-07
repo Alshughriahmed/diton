@@ -45,21 +45,29 @@ export async function POST(req: NextRequest) {
     const filterGenders = String(b.filterGenders ?? "all");
     const filterCountries = String(b.filterCountries ?? "ALL");
 
-    await enqueue(anonId, { gender, country }, { genders: filterGenders, countries: filterCountries });
+     await enqueue(anonId, { gender, country }, { genders: filterGenders, countries: filterCountries });
 
-    // VIP: تقدّم في الصف
-    try {
-      const isVip = await requireVip();
-      if (isVip) {
-        const pri = Date.now() - 600_000; // 10 دقائق
-        await Promise.all([
-          zadd(`rtc:q`, pri, anonId),
-          zadd(`rtc:q:gender:${gender}`, pri, anonId),
-          zadd(`rtc:q:country:${country}`, pri, anonId),
-        ]);
-      }
-    } catch {}
+  // إدراج أساسي لكل مستخدم في صفوف الرصد (ZSET) — score = now
+  const now = Date.now();
+  await Promise.all([
+    zadd("rtc:q", now, anonId),
+    zadd(`rtc:q:gender:${gender}`, now, anonId),
+    zadd(`rtc:q:country:${country}`, now, anonId),
+  ]).catch(() => {});
 
+  // VIP: تقديم إضافي بتخفيض score
+  try {
+    const isVip = await requireVip();
+    if (isVip) {
+      const pri = now - 600_000; // 10 دقائق
+      await Promise.all([
+        zadd("rtc:q", pri, anonId),
+        zadd(`rtc:q:gender:${gender}`, pri, anonId),
+        zadd(`rtc:q:country:${country}`, pri, anonId),
+      ]);
+    }
+  } catch {}
+ 
     logRTC({ route: "/api/rtc/enqueue", reqId, ms: Date.now() - start, status: 204, note: "enqueued" });
     return __noStore(new NextResponse(null, { status: 204 }));
   } catch (e: any) {
