@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { jsonEcho } from "@/lib/api/xreq";
 import { logRTC } from "@/lib/rtc/logger";
 import { verifySigned } from "@/lib/rtc/auth";
-import { matchmake } from "@/lib/rtc/mm";
+import { matchmake, pairMapOf } from "@/lib/rtc/mm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ export async function OPTIONS(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
-  const rid = req.headers.get("x-req-id") || crypto.randomUUID();
+  const rid = req.headers.get("x-req-id") || (globalThis as any).crypto?.randomUUID?.() || `${t0}`;
 
   try {
     await cookies();
@@ -33,6 +33,21 @@ export async function POST(req: NextRequest) {
       logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:401, note:"no-anon" });
       return noStore(jsonEcho(req, { error:"no-anon" }, { status:401 }));
     }
+
+    // Fast-path: إن كنت مقترنًا بالفعل فأعد الزوج فوريًا
+    try {
+      const mapped = await pairMapOf(anonId);
+      if (mapped?.pairId && mapped?.role) {
+        logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:200, note:"mapped-fast" });
+        const r = NextResponse.json(
+          { pairId: mapped.pairId, role: mapped.role, peerAnonId: mapped.peerAnonId },
+          { status: 200 }
+        );
+        r.headers.set("Cache-Control","no-store");
+        if (rid) r.headers.set("x-req-id", rid);
+        return r;
+      }
+    } catch {}
 
     // تلميحات اختيارية (لا تؤثر على العقد)
     const body = await req.json().catch(() => ({} as any));
