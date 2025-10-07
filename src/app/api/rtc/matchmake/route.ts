@@ -22,7 +22,7 @@ export async function OPTIONS(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
-  const rid = req.headers.get("x-req-id") || (globalThis as any).crypto?.randomUUID?.() || `${t0}`;
+  const rid = req.headers.get("x-req-id") || `${t0}`;
 
   try {
     await cookies();
@@ -34,13 +34,13 @@ export async function POST(req: NextRequest) {
       return noStore(jsonEcho(req, { error:"no-anon" }, { status:401 }));
     }
 
-    // Fast-path: إن كنت مقترنًا بالفعل فأعد الزوج فوريًا
+    // fast-path: إن كنت مقترناً بالفعل أعد الزوج فوراً
     try {
       const mapped = await pairMapOf(anonId);
       if (mapped?.pairId && mapped?.role) {
         logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:200, note:"mapped-fast" });
         const r = NextResponse.json(
-          { pairId: mapped.pairId, role: mapped.role, peerAnonId: mapped.peerAnonId },
+          { pairId: mapped.pairId, role: mapped.role }, // لا peerAnonId هنا
           { status: 200 }
         );
         r.headers.set("Cache-Control","no-store");
@@ -63,7 +63,6 @@ export async function POST(req: NextRequest) {
     try { out = await (matchmake as any)(anonId, hint); }
     catch { out = await (matchmake as any)(anonId); }
 
-    // out = {status, body?}
     if (!out || out === true || out.status === 204) {
       logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:204, note:"no-match-yet" });
       const r = new NextResponse(null, { status: 204 });
@@ -83,7 +82,6 @@ export async function POST(req: NextRequest) {
       return r;
     }
 
-    // أخطاء محددة من mm
     const code = Number(out.status) || 500;
     logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:code, note:"mm-propagate" });
     return noStore(jsonEcho(req, out.body || { error:"mm-fail" }, { status: code }));
