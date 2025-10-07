@@ -8,35 +8,34 @@ import { matchmake } from "@/lib/rtc/mm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const preferredRegion = ["fra1", "iad1"];
+export const preferredRegion = ["fra1","iad1"];
 
-const __noStore = <T extends Response>(r: T): T => {
-  try { (r as any).headers?.set?.("Cache-Control", "no-store"); } catch {}
+const noStore = <T extends Response>(r:T):T => { try{ (r as any).headers?.set?.("Cache-Control","no-store"); }catch{} return r; };
+
+export async function OPTIONS(req: NextRequest) {
+  await cookies();
+  const r = new NextResponse(null, { status: 204 });
+  r.headers.set("Cache-Control","no-store");
+  const rid = req.headers.get("x-req-id"); if (rid) r.headers.set("x-req-id", rid);
   return r;
-};
-
-export async function OPTIONS() {
-  return __noStore(new NextResponse(null, { status: 204 }));
 }
 
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
-  const reqId = req.headers.get("x-req-id") || crypto.randomUUID();
+  const rid = req.headers.get("x-req-id") || crypto.randomUUID();
 
   try {
-    const cookieStore = await cookies();
-    const raw =
-      cookieStore.get("anon")?.value ??
-      req.headers.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
-      null;
-
-    const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
+    await cookies();
+    const raw = req.headers.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] || null;
+    const sec = process.env.ANON_SIGNING_SECRET!;
+    const anonId = raw ? verifySigned(raw, sec) : null;
     if (!anonId) {
-      logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - t0, status: 401, note: "no-anon" });
-      return __noStore(jsonEcho(req, { error: "matchmake-fail", info: "no-anon" }, { status: 401 }));
+      logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:401, note:"no-anon" });
+      return noStore(jsonEcho(req, { error:"no-anon" }, { status:401 }));
     }
 
-    const body: any = await req.json().catch(() => ({}));
+    // تلميحات اختيارية (لا تؤثر على العقد)
+    const body = await req.json().catch(() => ({} as any));
     const hint = {
       gender: (body.gender ?? "").toString().toLowerCase() || undefined,
       country: (body.country ?? "").toString().toUpperCase() || undefined,
@@ -44,19 +43,37 @@ export async function POST(req: NextRequest) {
       filterCountries: (body.filterCountries ?? "").toString() || undefined,
     };
 
-    let out: any = null;
+    // نعيد مخرجات matchmake بعقد مسطّح متوافق مع العميل
+    let out: any;
     try { out = await (matchmake as any)(anonId, hint); }
-    catch { try { out = await (matchmake as any)(anonId); } catch {} }
+    catch { out = await (matchmake as any)(anonId); }
 
-    if (!out || out === true) {
-      logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - t0, status: 204, note: "no-match-yet" });
-      return __noStore(new NextResponse(null, { status: 204 }));
+    // out = {status, body?}
+    if (!out || out === true || out.status === 204) {
+      logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:204, note:"no-match-yet" });
+      const r = new NextResponse(null, { status: 204 });
+      r.headers.set("Cache-Control","no-store");
+      if (rid) r.headers.set("x-req-id", rid);
+      return r;
     }
 
-    logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - t0, status: 200, note: "matched" });
-    return __noStore(jsonEcho(req, { ok: true, result: out }, { status: 200 }));
+    if (out.status === 200 && out.body?.pairId && out.body?.role) {
+      logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:200, note:"matched" });
+      const r = NextResponse.json(
+        { pairId: out.body.pairId, role: out.body.role, peerAnonId: out.body.peerAnonId },
+        { status: 200 }
+      );
+      r.headers.set("Cache-Control","no-store");
+      if (rid) r.headers.set("x-req-id", rid);
+      return r;
+    }
+
+    // أخطاء محددة من mm
+    const code = Number(out.status) || 500;
+    logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:code, note:"mm-propagate" });
+    return noStore(jsonEcho(req, out.body || { error:"mm-fail" }, { status: code }));
   } catch (e: any) {
-    logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - t0, status: 500, note: String(e?.message || e).slice(0, 100) });
-    return __noStore(jsonEcho(req, { error: "matchmake-fail", info: String(e?.message || e).slice(0, 140) }, { status: 500 }));
+    logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:500, note:String(e?.message||e).slice(0,100) });
+    return noStore(jsonEcho(req, { error:"matchmake-fail", info:String(e?.message||e).slice(0,140) }, { status:500 }));
   }
 }
