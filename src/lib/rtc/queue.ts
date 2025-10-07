@@ -12,7 +12,8 @@ export type QueueStats = {
 const URL = process.env.UPSTASH_REDIS_REST_URL || "";
 const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 
-const KEY_WAIT = process.env.RTC_QUEUE_ZKEY || "rtc:wait:z";           // ZSET of waiters: score = ts
+const KEY_WAIT = process.env.RTC_QUEUE_ZKEY || "rtc:q";
+           // ZSET of waiters: score = ts
 const KEY_PAIRS = process.env.RTC_PAIRS_HKEY || "rtc:pairs:active";    // HASH/COUNTER of active pairs
 const GHOST_T_SEC = Number(process.env.RTC_GHOST_T_SEC || 45);         // ghost window
 
