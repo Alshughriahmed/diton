@@ -1,166 +1,135 @@
-/* Prev buffer API
- * Key:   rtc:prev:{anonId}
- * Value: JSON { pairId, peerAnonId, meta, ts }
- * TTL:   from env PREV_TTL_SEC (seconds). No hard-coded values.
- */
+// Route: /api/rtc/prev/for
+// Constraints: ENV-only, no-store, OPTIONS=204, echo x-req-id, await cookies(), preferredRegion=["fra1","iad1"]
 
-import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { extractAnonId } from "@/lib/rtc/auth";
-
-// Runtime hints
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-// Vercel regions
-export const preferredRegion = ['fra1','iad1']
+export const preferredRegion = ["fra1","iad1"] as string[]; // بلا as const
 
-// ---------- helpers: headers ----------
-function withStdHeaders(req: NextRequest, res: NextResponse) {
-  try {
-    const reqId = req.headers.get("x-req-id");
-    if (reqId) res.headers.set("x-req-id", reqId);
-    res.headers.set("Cache-Control", "no-store");
-  } catch {}
-  return res;
+import { cookies } from "next/headers";
+
+type PrevRecord = {
+  peerAnonId: string;
+  pairId: string;
+  ts: number; // epoch ms
+};
+
+const H_NO_STORE = { "Cache-Control": "no-store" } as const;
+
+function hWithReqId(req: Request, extra?: Record<string, string>) {
+  const rid = req.headers.get("x-req-id") || "";
+  return new Headers({ ...H_NO_STORE, ...(extra || {}), ...(rid ? { "x-req-id": rid } : {}) });
 }
 
-// ---------- Upstash helpers (local, no new imports) ----------
-const UP_URL = process.env.UPSTASH_REDIS_REST_URL || "";
-const UP_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
-async function upstashPipeline(commands: string[][]) {
-  if (!UP_URL || !UP_TOKEN) throw new Error("upstash-env-missing");
-  const r = await fetch(`${UP_URL}/pipeline`, {
+// Minimal Upstash REST client (ENV-only). No memory fallback.
+async function upstashPipeline(cmds: (string | string[])[]) {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error("UPSTASH env missing");
+  const res = await fetch(`${url}/pipeline`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${UP_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ commands }),
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(cmds),
+    cache: "no-store",
   });
-  if (!r.ok) throw new Error(`upstash-${r.status}`);
-  return (await r.json()) as Array<{ result: unknown }>;
-}
-async function upSetPXJSON(key: string, value: unknown, ttlMs: number) {
-  const json = JSON.stringify(value);
-  await upstashPipeline([["SET", key, json, "PX", String(ttlMs)]]);
-}
-async function upGetDel(key: string): Promise<string | null> {
-  const [res] = await upstashPipeline([["GETDEL", key]]);
-  const val = (res?.result ?? null) as string | null;
-  return val ?? null;
+  if (!res.ok) throw new Error(`Upstash ${res.status}`);
+  return res.json() as Promise<Array<{ result: unknown }>>;
 }
 
-// ---------- common ----------
-function getPrevKey(anonId: string) {
-  return `rtc:prev:${anonId}`;
-}
-function getPrevTtlMs() {
-  const sec = Number(process.env.PREV_TTL_SEC || "60");
-  if (!Number.isFinite(sec) || sec <= 0) throw new Error("prev-ttl-invalid");
-  return Math.floor(sec * 1000);
+function parseIntEnv(name: string) {
+  const v = process.env[name];
+  if (!v) throw new Error(`ENV ${name} missing`);
+  const n = Number.parseInt(v, 10);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`ENV ${name} invalid`);
+  return n;
 }
 
-// ---------- OPTIONS ----------
-export async function OPTIONS(req: NextRequest) {
-  // touch cookies to satisfy await cookies() policy
-  await cookies();
-  return withStdHeaders(
-    req,
-    new NextResponse(null, { status: 204 }),
-  );
+function log(req: Request, data: Record<string, unknown>) {
+  // {reqId,pairId,anonId,role,op,phase,latencyMs,outcome}
+  const rid = req.headers.get("x-req-id") || "";
+  console.log(JSON.stringify({ reqId: rid, role: "server", ...data }));
 }
 
-// ---------- GET: consume once ----------
-export async function GET(req: NextRequest) {
-  await cookies(); // policy
-  const anonId = extractAnonId(req);
-  if (!anonId) {
-    return withStdHeaders(
-      req,
-      NextResponse.json({ error: "anon-required" }, { status: 401 }),
-    );
+export async function OPTIONS(req: Request) {
+  await cookies(); // policy: always await
+  return new Response(null, { status: 204, headers: hWithReqId(req) });
+}
+
+/**
+ * GET: consume single prev-for item for caller anon
+ * Headers:
+ *  - x-anon-id: required
+ * Env:
+ *  - PREV_TTL_SEC: required (no defaults)
+ * Storage key: rtc:prev-for:<anon> = JSON {peerAnonId,pairId,ts}
+ * Behavior:
+ *  - If missing/expired/self-match -> 204
+ *  - If valid -> 200 {ok:true, found:true, pairId, peerAnonId}
+ */
+export async function GET(req: Request) {
+  const t0 = Date.now();
+  await cookies(); // policy: always await
+
+  const headers = hWithReqId(req, { "Content-Type": "application/json; charset=utf-8" });
+  const anon = (req.headers.get("x-anon-id") || "").trim();
+
+  if (!anon) {
+    log(req, { op: "prev/for", phase: "validate", outcome: "bad-request", latencyMs: Date.now() - t0 });
+    return new Response(JSON.stringify({ ok: false, error: "missing-anon" }), { status: 400, headers });
   }
+
+  let ttlSec: number;
   try {
-    const raw = await upGetDel(getPrevKey(anonId));
-    if (!raw) {
-      return withStdHeaders(req, new NextResponse(null, { status: 204 }));
-    }
-    let data: any;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      // corrupted payload, treat as empty
-      return withStdHeaders(req, new NextResponse(null, { status: 204 }));
-    }
-    // self-match guard
-    if (!data || typeof data !== "object" || data.peerAnonId === anonId) {
-      return withStdHeaders(req, new NextResponse(null, { status: 204 }));
-    }
-    return withStdHeaders(
-      req,
-      NextResponse.json(
-        {
-          ok: true,
-          prev: {
-            pairId: String(data.pairId || ""),
-            peerAnonId: String(data.peerAnonId || ""),
-            meta: data.meta ?? null,
-            ts: Number(data.ts || 0),
-          },
-        },
-        { status: 200 },
-      ),
-    );
-  } catch (e: any) {
-    return withStdHeaders(
-      req,
-      NextResponse.json(
-        { ok: false, error: String(e?.message || e).slice(0, 180) },
-        { status: 500 },
-      ),
-    );
+    ttlSec = parseIntEnv("PREV_TTL_SEC");
+  } catch (e) {
+    log(req, { op: "prev/for", phase: "env", outcome: "server-error", msg: String(e), latencyMs: Date.now() - t0 });
+    return new Response(JSON.stringify({ ok: false, error: "server-env" }), { status: 500, headers });
   }
-}
 
-// ---------- POST: set buffer ----------
-export async function POST(req: NextRequest) {
-  await cookies(); // policy
-  const anonId = extractAnonId(req);
-  if (!anonId) {
-    return withStdHeaders(
-      req,
-      NextResponse.json({ error: "anon-required" }, { status: 401 }),
-    );
-  }
+  const key = `rtc:prev-for:${anon}`;
+
+  // Try GETDEL first. If unsupported, fallback to GET + DEL.
+  let recStr: string | null = null;
   try {
-    const body = (await req.json().catch(() => null)) as any;
-    const pairId = String(body?.pairId || "");
-    const peerAnonId = String(body?.peerAnonId || "");
-    const meta = body?.meta ?? null;
-
-    if (!pairId || !peerAnonId) {
-      return withStdHeaders(
-        req,
-        NextResponse.json({ ok: false, error: "pairId|peerAnonId-required" }, { status: 400 }),
-      );
-    }
-    // do not store self-match
-    if (peerAnonId === anonId) {
-      return withStdHeaders(req, new NextResponse(null, { status: 204 }));
-    }
-
-    const payload = { pairId, peerAnonId, meta, ts: Date.now() };
-    await upSetPXJSON(getPrevKey(anonId), payload, getPrevTtlMs());
-
-    return withStdHeaders(req, NextResponse.json({ ok: true }, { status: 200 }));
-  } catch (e: any) {
-    return withStdHeaders(
-      req,
-      NextResponse.json(
-        { ok: false, error: String(e?.message || e).slice(0, 180) },
-        { status: 500 },
-      ),
-    );
+    const r = await upstashPipeline([["GETDEL", key]]);
+    recStr = (r?.[0]?.result as string) ?? null;
+  } catch {
+    const r = await upstashPipeline([["GET", key], ["DEL", key]]);
+    recStr = (r?.[0]?.result as string) ?? null;
   }
+
+  if (!recStr) {
+    log(req, { op: "prev/for", phase: "fetch", outcome: "no-prev", anonId: anon, latencyMs: Date.now() - t0 });
+    return new Response(null, { status: 204, headers: hWithReqId(req) });
+  }
+
+  let rec: PrevRecord | null = null;
+  try {
+    rec = JSON.parse(recStr) as PrevRecord;
+  } catch {
+    // Corrupt payload → treat as empty
+    log(req, { op: "prev/for", phase: "parse", outcome: "corrupt", anonId: anon, latencyMs: Date.now() - t0 });
+    return new Response(null, { status: 204, headers: hWithReqId(req) });
+  }
+
+  // Validate TTL window and self-match
+  const tooOld = Date.now() - (rec?.ts ?? 0) > ttlSec * 1000;
+  const selfMatch = rec?.peerAnonId === anon;
+
+  if (tooOld || selfMatch) {
+    log(req, {
+      op: "prev/for",
+      phase: "validate",
+      outcome: tooOld ? "expired" : "self-match",
+      anonId: anon,
+      pairId: rec?.pairId,
+      latencyMs: Date.now() - t0,
+    });
+    return new Response(null, { status: 204, headers: hWithReqId(req) });
+  }
+
+  // Success
+  const body = { ok: true, found: true, pairId: rec.pairId, peerAnonId: rec.peerAnonId };
+  log(req, { op: "prev/for", phase: "done", outcome: "200", anonId: anon, pairId: rec.pairId, latencyMs: Date.now() - t0 });
+  return new Response(JSON.stringify(body), { status: 200, headers });
 }
