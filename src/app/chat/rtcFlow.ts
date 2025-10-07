@@ -375,50 +375,49 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     }).catch(() => {});
 
     // matchmake
-    for (let i = 0; i < 50 && checkSession(currentSession) && !state.ac?.signal.aborted; i++) {
-      const matchmakeOptions: RequestInit = { method: "POST", cache: "no-store", headers: { "content-type": "application/json" } };
-      let filters: any = {};
-      try {
-        const { useFilters } = await import("@/state/filters");
-        const { gender, countries } = useFilters.getState();
-        filters = { gender: gender === "all" ? null : gender, countries: countries?.length ? countries : null };
-      } catch {}
-      const payload: any = { ...filters };
-      if (state.prevForOnce) { payload.prevFor = state.prevForOnce; state.prevForOnce = null; }
+for (let i = 0; i < 50 && checkSession(currentSession) && !state.ac?.signal.aborted; i++) {
+  const matchmakeOptions: RequestInit = { method: "POST", cache: "no-store", headers: { "content-type": "application/json" } };
+  // ... إعداد payload و HMm
+  const r = await apiSafeFetch("/api/rtc/matchmake", matchmakeOptions);
+  if (!r || !checkSession(currentSession)) return;
 
-      const HMm = rtcHeaders({ pairId: state.pairId || undefined, role: state.role || undefined, sdpTag: curSdpTag || undefined });
-      matchmakeOptions.headers = { ...matchmakeOptions.headers, "x-ditona-step": "matchmake", "x-ditona-session": String(currentSession), ...HMm };
-      matchmakeOptions.body = JSON.stringify(payload);
+  // 204 => لا توقف البحث. أبقِ الـUI على "searching" ثم أعد المحاولة.
+  if (r.status === 204) {
+    state.phase = "searching";
+    try { onPhase("searching"); } catch {}
+    await sleep(900);
+    continue;
+  }
 
-      const r = await apiSafeFetch("/api/rtc/matchmake", matchmakeOptions);
-      if (!r || !checkSession(currentSession)) return;
+  // 200 => نجاح: استخرج {pairId,role} وثبّت الحالة
+  if (r.status === 200) {
+    const j = await r.json().catch(() => ({}));
+    if (j?.pairId && j?.role) {
+      state.pairId = j.pairId; state.role = j.role; state.phase = "matched";
+      state.polite = (state.role === "callee");
+      state.makingOffer = false; state.ignoreOffer = false; state.isSettingRemoteAnswerPending = false;
 
-      if (r.status === 200) {
-        const j = await r.json().catch(() => ({}));
-        if (j?.pairId && j?.role) {
-          state.pairId = j.pairId; state.role = j.role; state.phase = "matched";
-          state.polite = (state.role === "callee"); // PN: callee polite
-          state.makingOffer = false; state.ignoreOffer = false; state.isSettingRemoteAnswerPending = false;
-
-          try { __ditonaSetPair(state.pairId || undefined, state.role); } catch {}
-          if (j.peerAnonId) state.lastPeer = j.peerAnonId;
-          onPhase("matched");
-          if (typeof window !== "undefined") {
-            window.localStorage.setItem("ditona_pair", j.pairId);
-            window.localStorage.setItem("ditona_role", j.role);
-            window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: j.pairId, role: j.role } }));
-            window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched", role: j.role } }));
-            // Reset UI state لهذا الزوج الجديد
-            window.dispatchEvent(new CustomEvent("ditona:chat:reset"));
-            window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked: false } }));
-          }
-          __kpi.tMatched = (typeof performance !== "undefined" ? performance.now() : Date.now());
-          logRtc("match-found", 200, { role: state.role });
-          break;
-        }
+      try { __ditonaSetPair(state.pairId || undefined, state.role); } catch {}
+      if (j.peerAnonId) state.lastPeer = j.peerAnonId;
+      onPhase("matched");
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("ditona_pair", j.pairId);
+        window.localStorage.setItem("ditona_role", j.role);
+        window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: j.pairId, role: j.role } }));
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched", role: j.role } }));
+        window.dispatchEvent(new CustomEvent("ditona:chat:reset"));
+        window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked: false } }));
       }
-      await sleep(300 + Math.floor(Math.random() * 500));
+      __kpi.tMatched = (typeof performance !== "undefined" ? performance.now() : Date.now());
+      logRtc("match-found", 200, { role: state.role });
+      break;
     }
+  }
+
+  // غير ذلك: أخطاء عابرة (مثل 4xx/5xx) → backoff خفيف ثم إعادة محاولة
+  await sleep(900);
+}
+
 
     if (!state.pairId || !state.role || !checkSession(currentSession)) { stop(); return; }
 
