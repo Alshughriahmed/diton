@@ -1,17 +1,14 @@
 // src/app/chat/rtcFlow.ts
-// Search loop resilient + Perfect Negotiation (light) + teardown/retry
-// لا قيم صلبة. العميل يقرأ فقط NEXT_PUBLIC_*.
-// يحترم: /api/anon/init, /api/rtc/{enqueue,matchmake,offer,answer,ice}, /api/turn
+// Resilient search loop + light Perfect Negotiation + safe teardown/retry
 
-/* region: imports */
+"use client";
+
 import apiSafeFetch from "@/app/chat/safeFetch";
 import { rtcHeaders, markLastStopTs } from "@/app/chat/rtcHeaders.client";
-/* endregion */
 
-/* region: types + state */
 export type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
-
 type Role = "caller" | "callee";
+
 type State = {
   sid: number;
   phase: Phase;
@@ -47,15 +44,12 @@ let state: State = {
 let onPhaseCallback: ((p: Phase) => void) | null = null;
 let cooldownNext = false;
 
-/* endregion */
-
-/* region: utils */
+/* utils */
 const isAbort = (e: any) => e && (e.name === "AbortError" || e.code === 20);
 const swallowAbort = (e: any) => { if (!isAbort(e)) console.warn("[rtc] non-abort error:", e); };
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const checkSession = (sid: number) => state.sid === sid;
 function safeAbort(ac?: AbortController | null) { try { if (ac && !ac.signal.aborted) ac.abort("stop"); } catch {} }
-
 function logRtc(event: string, code: number, extra?: Record<string, unknown>) {
   try { console.log("[rtc]", event, code, extra || {}); } catch {}
 }
@@ -63,17 +57,15 @@ function logRtc(event: string, code: number, extra?: Record<string, unknown>) {
 async function getIceServers(): Promise<RTCIceServer[]> {
   try {
     const r = await apiSafeFetch("/api/turn", { method: "GET", cache: "no-store" });
-    if (r && r.ok) {
+    if (r?.ok) {
       const j = await r.json().catch(() => ({}));
       if (Array.isArray(j?.iceServers)) return j.iceServers as RTCIceServer[];
     }
   } catch {}
-  return []; // لا قيم صلبة
+  return [];
 }
 
-/* endregion */
-
-/* region: perfect negotiation helpers */
+/* perfect negotiation helpers */
 function wirePerfect(pc: RTCPeerConnection) {
   pc.onnegotiationneeded = async () => {
     if (!state.pc || !state.pairId || !state.role) return;
@@ -83,7 +75,6 @@ function wirePerfect(pc: RTCPeerConnection) {
       const offer = await state.pc.createOffer();
       await state.pc.setLocalDescription(offer);
       if (state.role === "caller") {
-        // إديمبوتنسي على السيرفر عبر x-sdp-tag إن أردت (العميل ليس مفروضًا يرسلها)
         const body = { pairId: state.pairId, sdp: JSON.stringify(offer) };
         await apiSafeFetch("/api/rtc/offer", {
           method: "POST",
@@ -108,12 +99,11 @@ function wirePerfect(pc: RTCPeerConnection) {
     }).catch(swallowAbort);
   };
 }
-/* endregion */
 
-/* region: ICE polling */
+/* ICE polling */
 async function iceExchange(sessionId: number) {
   let backoff = 300;
-  while (checkSession(sessionId) && !state.ac?.signal.aborted && state.pairId && state.role) {
+  while (checkSession(sessionId) && !state.ac?.signal?.aborted && state.pairId && state.role) {
     const r = await apiSafeFetch(`/api/rtc/ice?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
       cache: "no-store",
@@ -125,7 +115,14 @@ async function iceExchange(sessionId: number) {
       if (Array.isArray(items)) {
         for (const it of items) {
           const cand = it?.cand || it?.candidate || it;
-          try { await state.pc?.addIceCandidate(cand); } catch (e) { logRtc("ice-add-error", 500, { error: String(e) }); }
+          try {
+            if (state.pc?.remoteDescription) {
+              await state.pc.addIceCandidate(cand);
+            } else {
+              // أضف لاحقًا بعد ضبط remote إذا لزم. حالياً نحاول ثم نلتقط الأخطاء.
+              await state.pc?.addIceCandidate(cand);
+            }
+          } catch (e) { logRtc("ice-add-error", 500, { error: String(e) }); }
         }
       }
     }
@@ -133,15 +130,13 @@ async function iceExchange(sessionId: number) {
     backoff = Math.min(backoff * 1.5, 1500);
   }
 }
-/* endregion */
 
-/* region: caller/callee flows */
+/* caller/callee flows */
 async function callerFlow(sessionId: number) {
   if (!checkSession(sessionId) || !state.pc || state.role !== "caller" || !state.pairId) return;
 
-  // انتظر answer
   let backoff = 350;
-  for (let i = 0; i < 90 && checkSession(sessionId) && !state.ac?.signal.aborted; i++) {
+  for (let i = 0; i < 90 && checkSession(sessionId) && !state.ac?.signal?.aborted; i++) {
     const r = await apiSafeFetch(`/api/rtc/answer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
       cache: "no-store",
@@ -153,7 +148,6 @@ async function callerFlow(sessionId: number) {
       const { sdp } = await r.json().catch(() => ({}));
       if (sdp) {
         const desc = JSON.parse(String(sdp));
-        // PN: معالجة التعارضات ببساطة عبر setRemote مباشرة هنا لأن caller ينتظر answer فقط
         await state.pc!.setRemoteDescription(desc).catch(e => logRtc("setRemoteAnswer", 500, { e: String(e) }));
         return;
       }
@@ -166,9 +160,8 @@ async function callerFlow(sessionId: number) {
 async function calleeFlow(sessionId: number) {
   if (!checkSession(sessionId) || !state.pc || state.role !== "callee" || !state.pairId) return;
 
-  // اسحب offer ثم أرسل answer
   let backoff = 350;
-  for (let i = 0; i < 90 && checkSession(sessionId) && !state.ac?.signal.aborted; i++) {
+  for (let i = 0; i < 90 && checkSession(sessionId) && !state.ac?.signal?.aborted; i++) {
     const r = await apiSafeFetch(`/api/rtc/offer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
       cache: "no-store",
@@ -181,16 +174,13 @@ async function calleeFlow(sessionId: number) {
       if (sdp) {
         const offer = JSON.parse(String(sdp));
         try {
-          // Perfect negotiation: معالجة collision إن حدثت
           const offerCollision = offer?.type === "offer" && (state.makingOffer || state.pc!.signalingState !== "stable");
           state.ignoreOffer = !state.polite && offerCollision;
-          if (state.ignoreOffer) { /* تجاهل */ }
-          else {
+          if (!state.ignoreOffer) {
             if (offerCollision) { try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {} }
             await state.pc!.setRemoteDescription(offer);
             const answer = await state.pc!.createAnswer();
             await state.pc!.setLocalDescription(answer);
-
             await apiSafeFetch("/api/rtc/answer", {
               method: "POST",
               headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
@@ -205,9 +195,8 @@ async function calleeFlow(sessionId: number) {
     backoff = Math.min(backoff * 1.3, 1200);
   }
 }
-/* endregion */
 
-/* region: public API */
+/* public API */
 export async function start(media: MediaStream | null, onPhase: (phase: Phase) => void) {
   try {
     stop(); // guard
@@ -224,17 +213,20 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     logRtc("flow-start", 200);
 
     // 1) init anon cookie
-    try { await apiSafeFetch("/api/anon/init", { method: "GET", cache: "no-store", signal: state.ac?.signal });
+    try {
+      await apiSafeFetch("/api/anon/init", { method: "GET", cache: "no-store", signal: state.ac?.signal });
+    } catch (e) { swallowAbort(e); }
+
     // 2) enqueue
     const HEnq = rtcHeaders({});
     await apiSafeFetch("/api/rtc/enqueue", {
       method: "POST",
       headers: { "content-type": "application/json", ...HEnq },
       body: JSON.stringify({ t: Date.now() }),
-    }).catch(() => {});
+    }).catch(swallowAbort);
 
-    // 3) matchmake polling: لا توقف عند 204
-    while (checkSession(currentSession) && !(state.ac?.signal?.aborted)) {
+    // 3) matchmake polling: لا تتوقف عند 204
+    while (checkSession(currentSession) && !state.ac?.signal?.aborted) {
       const HMm = rtcHeaders({});
       const r = await apiSafeFetch("/api/rtc/matchmake", {
         method: "POST",
@@ -248,7 +240,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
         state.phase = "searching";
         try { onPhase("searching"); } catch {}
         await sleep(900);
-        continue; // استمر بالبحث
+        continue;
       }
 
       if (r.status === 200) {
@@ -280,7 +272,6 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
         }
       }
 
-      // خطأ عابر → backoff خفيف
       await sleep(900);
     }
 
@@ -308,7 +299,8 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     if (media) { media.getTracks().forEach(tr => state.pc?.addTrack(tr, media)); }
 
     // 5) ICE + SDP flows
-    await iceExchange(currentSession);
+    // ابدأ تبادل ICE بالتوازي مع سحب/دفع SDP
+    void iceExchange(currentSession);
     if (state.role === "caller") await callerFlow(currentSession);
     else await calleeFlow(currentSession);
 
@@ -322,16 +314,13 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
         try { onPhase("connected"); } catch {}
         if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected", role: state.role } }));
       } else if (cs === "disconnected" || cs === "failed") {
-        // يمكن لاحقًا إضافة restartIce/backoff إن لزم
+        // يمكن لاحقًا إضافة restartIce/backoff
       } else if (cs === "closed") {
         stop();
       }
     };
 
-    // debug hooks
-    if (typeof window !== "undefined") {
-      (window as any).ditonaPC = state.pc;
-    }
+    if (typeof window !== "undefined") { (window as any).ditonaPC = state.pc; }
   } catch (e: any) {
     if (isAbort(e)) logRtc("flow-aborted", 499);
     else { logRtc("flow-error", 500, { error: e?.message || String(e) }); }
@@ -372,13 +361,10 @@ export async function next() {
   cooldownNext = true;
   try {
     try { stop("network"); } catch {}
+    try { window?.localStorage?.removeItem("ditona_pair"); } catch {}
     await sleep(700);
     if (onPhaseCallback) await start(null, onPhaseCallback);
   } finally { cooldownNext = false; }
 }
 
-export async function prev() {
-  // نفس سلوك next في جانب الشبكة
-  return next();
-}
-/* endregion */
+export async function prev() { return next(); }
