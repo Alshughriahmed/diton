@@ -1,6 +1,6 @@
 // src/app/api/rtc/_lib.ts
 import { NextRequest, NextResponse } from "next/server";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 // نستخدم الغلاف الداخلي لديكم بدل @upstash/redis
 import {
   set as rSet,
@@ -61,9 +61,10 @@ export const kIdem = (pairId: string, role: Role, tag: string) =>
 
 // ترويسات وردود موحّدة
 function ridFromHeaders() {
-  try { return headers().get("x-req-id") || crypto.getRandomValues(new Uint32Array(1))[0].toString(16); }
-  catch { return Math.random().toString(16).slice(2); }
-}
+   // لا نعتمد على headers() هنا. توليد محلي فقط.
+   try { return crypto.getRandomValues(new Uint32Array(1))[0].toString(16); }
+   catch { return Math.random().toString(16).slice(2); }
+ }
 export function withCommon(res: NextResponse, rid?: string) {
   res.headers.set("Cache-Control", "no-store");
   const id = rid || ridFromHeaders();
