@@ -1,216 +1,156 @@
+//////////////////////  src/app/api/rtc/matchmake/route.ts  ///////////////////////////////////////
+
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { jsonEcho } from "@/lib/api/xreq";
 import { logRTC } from "@/lib/rtc/logger";
-import { cleanupGhosts } from "@/lib/rtc/queue";
+import { verifySigned } from "@/lib/rtc/auth";
+import { matchmake, pairMapOf } from "@/lib/rtc/mm";
+import { setNxPx, expire, exists } from "@/lib/rtc/upstash"; // +exists (قراءة فقط للّوج)
 
-const __withNoStore = <T extends Response>(r:T):T => { try { (r as any).headers?.set?.("cache-control","no-store"); } catch {} return r; };
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const preferredRegion = ["fra1", "iad1"];
+export const preferredRegion = ["fra1","iad1"];
 
+const noStore = <T extends Response>(r:T):T => { try{ (r as any).headers?.set?.("Cache-Control","no-store"); }catch{} return r; };
 
-
-
-
-
-
-
-import { NextRequest, NextResponse } from "next/server";
-import { cookies, headers } from "next/headers";
-import { verifySigned } from "@/lib/rtc/auth";
-import { matchmake, pairMapOf } from "@/lib/rtc/mm";
-import { setPx } from "@/lib/rtc/upstash";
-
-function __noStore(res: any){ try{ res.headers?.set?.("Cache-Control","no-store"); }catch{} return res; }
-
-
-async function upstashGetMeta(anonId:string){
-  try{
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-    if(!url||!token||!anonId) return null;
-    const key = `rtc:user:${anonId}`;
-    const r = await fetch(url, {
-      method:'POST',
-      headers:{'content-type':'application/json','authorization':`Bearer ${token}`},
-      body: JSON.stringify([["HGET", key, "meta"]]),
-      cache:'no-store'
-    }).catch(()=>null);
-    const j = r? await r.json().catch(()=>null) : null;
-    const raw = Array.isArray(j?.result) ? j.result[0] : j?.result;
-    return raw ? JSON.parse(raw) : null;
-  }catch{ return null; }
+export async function OPTIONS(req: NextRequest) {
+  await cookies();
+  const r = new NextResponse(null, { status: 204 });
+  r.headers.set("Cache-Control","no-store");
+  const rid = req.headers.get("x-req-id"); if (rid) r.headers.set("x-req-id", rid);
+  return r;
 }
 
-export async function POST(
-req: NextRequest) {
-  const start = Date.now();
-  const reqId = req.headers.get("x-req-id") || crypto.randomUUID();
-  
-  // Trigger cleanup on every matchmake
-  cleanupGhosts().catch(() => {});
-  
-  const cookieStore = await cookies();
-  const headerStore = await headers();
-  const raw =
-    cookieStore.get("anon")?.value ??
-    headerStore.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] ??
-    null;
+export async function POST(req: NextRequest) {
+  const t0 = Date.now();
+  const rid = req.headers.get("x-req-id") || `${t0}`;
 
-  const anonId = raw ? verifySigned(raw, process.env.ANON_SIGNING_SECRET!) : null;
-  if (!anonId) {
-    logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: 401, note: "no-anon" });
-    return __noStore(jsonEcho(req, { error: "anon-required" }, { status: 401, headers: { "cache-control": "no-store" } }));
-  }
-  let prevFor:string|null=null;
-  let filters: {gender?: string, countries?: string[]} = {};
-  
-  try{
-    if(req.headers.get("content-type")?.includes("application/json")){
-      const b:any = await req.json().catch(()=>null);
-      prevFor = b?.prevFor || null;
-      
-      // Extract filter parameters
-      if (b?.gender && b.gender !== 'all') {
-        filters.gender = String(b.gender);
-      }
-      if (b?.countries && Array.isArray(b.countries) && b.countries.length > 0) {
-        filters.countries = b.countries.filter((c: any) => c && c !== 'ALL').slice(0, 15);
-      }
-    } else {
-      prevFor = req.nextUrl?.searchParams?.get("prevFor") || null;
+  try {
+    await cookies();
+    const raw = req.headers.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] || null;
+    const sec = process.env.ANON_SIGNING_SECRET!;
+    const anonId = raw ? verifySigned(raw, sec) : null;
+    if (!anonId) {
+      logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:401, phase:"auth", note:"no-anon" });
+      return noStore(jsonEcho(req, { error:"no-anon" }, { status:401 }));
     }
-  }catch{}
-  
-  if (prevFor) { try{ await setPx(`rtc:prev-wish:${anonId}`, String(prevFor), 7000); }catch{} }
 
-  // Update user's filters and attributes in queue if filters provided
-  if (filters.gender || filters.countries) {
+    // fast-path: إن كنت مقترناً بالفعل أعد الزوج فوراً (سلوك ثابت؛ نضيف لوج فقط)
     try {
-      const { enqueue } = await import('@/lib/rtc/mm');
-      
-      // Default attrs (will be improved with real user data later)
-      const attrs = {
-        gender: 'unknown', // TODO: get from user profile
-        country: 'UNKNOWN' // TODO: get from geo or user profile
-      };
-      
-      // Prepare filters for enqueue
-      const enqueueFilt = {
-        genders: filters.gender || 'all',
-        countries: filters.countries?.length ? filters.countries.join(',') : 'ALL'
-      };
-      
-      // Update queue with new filters
-      await enqueue(anonId, attrs, enqueueFilt);
-    } catch (error) {
-      console.warn('[matchmake] Failed to update filters:', error);
-    }
-  }
-
-  const mapped = await pairMapOf(anonId);
-  if (mapped) {
-    // Fetch peer info from the pair record
-    let peerAnonId = null;
-    try {
-      const url = process.env.UPSTASH_REDIS_REST_URL;
-      const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-      if (url && token) {
-        const endpoint = url.endsWith('/pipeline') ? url : `${url}/pipeline`;
-        const pairKey = `rtc:pair:${mapped.pairId}`;
-        const r = await fetch(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
-          body: JSON.stringify([["HGET", pairKey, "a"], ["HGET", pairKey, "b"]]),
-          cache: "no-store"
-        });
-        const jr: any = await r.json().catch(() => null);
-        const arr = Array.isArray(jr?.result) ? jr.result : (Array.isArray(jr) ? jr : []);
-        const userA = arr[0]?.result ?? null;
-        const userB = arr[1]?.result ?? null;
-        
-        // Determine peer based on role
-        if (mapped.role === "caller") {
-          peerAnonId = userB;
-        } else {
-          peerAnonId = userA;
-        }
-        
-        // Fallback: try to get from rtc:last if pair fetch failed
-        if (!peerAnonId) {
-          const lastKey = `rtc:last:${anonId}`;
-          const lr = await fetch(endpoint, {
-            method: "POST",
-            headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
-            body: JSON.stringify([["GET", lastKey]]),
-            cache: "no-store"
-          });
-          const lj: any = await lr.json().catch(() => null);
-          const lastArr = Array.isArray(lj?.result) ? lj.result : (Array.isArray(lj) ? lj : []);
-          peerAnonId = lastArr[0]?.result ?? null;
-        }
+      const mapped = await pairMapOf(anonId);
+      const mapOK = Boolean(mapped?.pairId && mapped?.role);
+      let pairExists:boolean|null = null;
+      if (mapped?.pairId) {
+        try { pairExists = !!(await exists(`rtc:pair:${mapped.pairId}`)); } catch { pairExists = null; }
       }
-    } catch {}
-    
-    return __noStore(jsonEcho(req, { 
-      found: true, 
-      pairId: mapped.pairId, 
-      role: mapped.role,
-      peerAnonId: peerAnonId || "" 
-    }, { status: 200 }));;
-  }
-  // Call matchmake with updated filters context 
-  const res = await matchmake(anonId);
-  
-if (res.status === 200) {
-  const body:any = res.body || {};
-  try{
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-    if (url && token && body.peerAnonId){
-      const key = `rtc:attrs:${body.peerAnonId}`;
-      const r = await fetch(url, {
-        method:"POST",
-        headers:{ "content-type":"application/json", "authorization":`Bearer ${token}` },
-        body: JSON.stringify([["HGETALL", key]]),
-        cache:"no-store"
-      });
-      const j:any = await r.json().catch(()=>null);
-      const arr:any = j?.result;
-      let map: any = null;
-      if (Array.isArray(arr)) { map = {}; for (let i=0;i<arr.length;i+=2) map[arr[i]] = arr[i+1]; }
-      else if (arr && typeof arr==="object") { map = arr; }
-      if (map) body.peerMeta = { country: map.country ?? null, gender: map.gender ?? null };
-    }
-  }catch{}
-  try{
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-    if (url && token && body.peerAnonId){
-      // Set last connection records for both users (TTL ~ 90s)
-      try{
-        const setBody = JSON.stringify([
-          ["SET", `rtc:last:${anonId}`, body.peerAnonId, "PX", "90000"],
-          ["SET", `rtc:last:${body.peerAnonId}`, anonId, "PX", "90000"]
-        ]);
-        await fetch(url + "/pipeline", {
+      if (mapped?.pairId && mapped?.role) {
+        logRTC({
+          route:"/api/rtc/matchmake",
           method:"POST",
-          headers:{ "content-type":"application/json", "authorization":`Bearer ${token}` },
-          body: setBody, cache:"no-store"
+          reqId:rid,
+          ms:Date.now()-t0,
+          status:200,
+          phase:"matched",
+          anonId,
+          pairId: mapped.pairId,
+          role: mapped.role,
+          mapOK,
+          pairExists,
+          note:"mapped-fast"
         });
-      }catch{}
+        const r = NextResponse.json(
+          { pairId: mapped.pairId, role: mapped.role }, // لا peerAnonId هنا
+          { status: 200 }
+        );
+        r.headers.set("Cache-Control","no-store");
+        if (rid) r.headers.set("x-req-id", rid);
+        return r;
+      } else {
+        // خريطة غير مكتملة — ليس خطأ، نكمل المسار العادي
+        logRTC({
+          route:"/api/rtc/matchmake",
+          method:"POST",
+          reqId:rid,
+          ms:Date.now()-t0,
+          status:204,
+          phase:"probe-map",
+          anonId,
+          mapOK,
+          pairExists,
+          note:"no-fastpath"
+        });
+      }
+    } catch {
+      logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:204, phase:"probe-map", anonId, note:"map-check-error" });
     }
-  }catch{}
 
-  logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: 200, note: "matched" });
-  return __noStore(jsonEcho(req, body, { status: 200 }));
-}
+    // تلميحات اختيارية (لا تؤثر على العقد)
+    const body = await req.json().catch(() => ({} as any));
+    const hint = {
+      gender: (body.gender ?? "").toString().toLowerCase() || undefined,
+      country: (body.country ?? "").toString().toUpperCase() || undefined,
+      filterGenders: (body.filterGenders ?? "").toString() || undefined,
+      filterCountries: (body.filterCountries ?? "").toString() || undefined,
+    };
 
-  if (res.status === 204) {
-    logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: 204, note: "no-match" });
-    return __noStore(new NextResponse(null, { status:204 }));
+    logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, phase:"call-mm", anonId, note:"mm-begin" });
+
+    // استدعاء matchmake
+    let out: any;
+    try { out = await (matchmake as any)(anonId, hint); }
+    catch { out = await (matchmake as any)(anonId); }
+
+    // لا يوجد تطابق بعد
+    if (!out || out === true || out.status === 204) {
+      logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:204, phase:"search", anonId, note:"no-match-yet" });
+      const r = new NextResponse(null, { status: 204 });
+      r.headers.set("Cache-Control","no-store");
+      if (rid) r.headers.set("x-req-id", rid);
+      return r;
+    }
+
+    // تم التطابق
+    if (out.status === 200 && out.body?.pairId && out.body?.role) {
+      const { pairId, role, peerAnonId } = out.body;
+
+      // كتابة خريطة الزوج و TTL (سلوك قائم مُسبقًا)
+      await setNxPx(`rtc:pair:map:${anonId}`, `${pairId}|${role}`, 150_000);
+      await expire(`rtc:pair:${pairId}`, 150);
+
+      logRTC({
+        route:"/api/rtc/matchmake",
+        method:"POST",
+        reqId:rid,
+        ms:Date.now()-t0,
+        status:200,
+        phase:"matched",
+        anonId,
+        pairId,
+        role,
+        note:"matched"
+      });
+      const r = NextResponse.json({ pairId, role, peerAnonId }, { status: 200 });
+      r.headers.set("Cache-Control","no-store");
+      if (rid) r.headers.set("x-req-id", rid);
+      return r;
+    }
+
+    // أخطاء من mm
+    const code = Number(out.status) || 500;
+    logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:code, phase:"mm-error", anonId, note:"mm-propagate" });
+    return noStore(jsonEcho(req, out.body || { error:"mm-fail" }, { status: code }));
+  } catch (e: any) {
+    logRTC({
+      route:"/api/rtc/matchmake",
+      method:"POST",
+      reqId:rid,
+      ms:Date.now()-t0,
+      status:500,
+      phase:"exception",
+      note:String(e?.message||e).slice(0,100)
+    });
+    return noStore(jsonEcho(req, { error:"matchmake-fail", info:String(e?.message||e).slice(0,140) }, { status:500 }));
   }
-  
-  logRTC({ route: "/api/rtc/matchmake", reqId, ms: Date.now() - start, status: res.status || 500, note: "mm-fail" });
-  return __noStore(jsonEcho(req, res.body || { error:"mm-fail" }, { status: res.status || 500 }));
 }
