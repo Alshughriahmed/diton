@@ -165,7 +165,7 @@ export async function createPairAndMap(callerAnon: string, calleeAnon: string) {
   return { pairId };
 }
 export async function getPairAndRole(anon: string, pairId: string): Promise<{ pair: Pair|null; role: Role|null; peer: string|null }> {
-  const s = await rGet<string>(kPair(pairId));
+  const s = (await rGet(kPair(pairId))) as string | null;
   if (!s) return { pair: null, role: null, peer: null };
   const p = JSON.parse(s) as Pair;
   if (p.callerAnon === anon) return { pair: p, role: "caller", peer: p.calleeAnon };
