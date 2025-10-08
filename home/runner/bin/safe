@@ -1,0 +1,6 @@
+
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export TERM=dumb PAGER=cat GIT_PAGER=cat GH_PAGER=cat LESS='-RFX' CI=1 NO_COLOR=1 FORCE_COLOR=0 EDITOR=true
+FILTER="sed -u -e \$'s/\\x1b\\[\\?1049[hl]//g' -e \$'s/\\x1b\\[2J//g' -e \$'s/\\x1b\\[H//g'"
+stdbuf -oL -eL bash -lc "$*" 2>&1 | eval "$FILTER"

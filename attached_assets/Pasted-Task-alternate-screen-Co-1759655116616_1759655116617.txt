@@ -1,0 +1,89 @@
+Task: إعداد بيئة طرفية غير تفاعلية تمنع اختفاء الشاشة (alternate screen) بلا لمس لمجلد المشروع
+
+Constraints
+- ممنوع تعديل أي ملف داخل repo workspace.
+- مسموح تعديل ملفات HOME فقط: ~/.bashrc, ~/.profile, ~/bin/*
+- لا بناء، لا gh auth، لا تشغيل تفاعلي. إرجاع مخرجات فقط.
+
+Goals
+1) تعطيل كل pagers والمحررات التفاعلية.
+2) منع أو تحييد or filter أكواد ANSI التي تفعّل alternate screen (?1049h/?1049l) أو تمسح الشاشة.
+3) توفير أوامر جاهزة أستخدمها قبل أي سكربت: `source ~/session-guard.sh` أو التفاف بالأمر `safe`.
+
+Deliverables
+- الملفات التالية في HOME فقط:
+  - `~/session-guard.sh`
+  - `~/bin/safe` (تنفيذي)
+  - تحديث `~/.bashrc` لعمل source تلقائي
+- طباعة “OK” مع اختبارين بسيطين يثبتان التعطيل.
+
+Exact steps (do exactly)
+1) أنشئ ~/bin إن لم يوجد وأضِفه إلى PATH:
+mkdir -p ~/bin
+grep -q 'export PATH="$HOME/bin:$PATH"' ~/.bashrc || echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+
+bash
+نسخ الكود
+
+2) أنشئ ~/session-guard.sh بالمحتوى التالي:
+cat > ~/session-guard.sh <<'SH'
+
+session-guard — non-interactive shell profile
+export TERM=dumb
+export CI=1 NO_COLOR=1 FORCE_COLOR=0
+export PAGER=cat GIT_PAGER=cat GH_PAGER=cat MANPAGER=cat
+export LESS='-RFX' EDITOR=true VISUAL=true GIT_EDITOR=true
+git config --global core.pager cat >/dev/null 2>&1 || true
+
+فلتر ANSI لإزالة smcup/rmcup ومسح الشاشة
+_ANSI_FILTER="sed -u -e $'s/\x1b\[\?1049[hl]//g' -e $'s/\x1b\[2J//g' -e $'s/\x1b\[H//g'"
+
+دالة تشغيل آمن
+safe() { stdbuf -oL -eL bash -lc "$*" 2>&1 | eval "$_ANSI_FILTER"; }
+
+استعادة الشاشة إن تم تفعيلها خارجيًا
+printf '\e[?1049l' || true
+SH
+
+bash
+نسخ الكود
+
+3) أنشئ ~/bin/safe كتنفيذ مباشر يطبق الفلتر على أي أمر:
+cat > ~/bin/safe <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export TERM=dumb PAGER=cat GIT_PAGER=cat GH_PAGER=cat LESS='-RFX' CI=1 NO_COLOR=1 FORCE_COLOR=0 EDITOR=true
+FILTER="sed -u -e $'s/\x1b\[\?1049[hl]//g' -e $'s/\x1b\[2J//g' -e $'s/\x1b\[H//g'"
+stdbuf -oL -eL bash -lc "$*" 2>&1 | eval "$FILTER"
+SH
+chmod +x ~/bin/safe
+
+swift
+نسخ الكود
+
+4) فعّل الـguard تلقائيًا لكل جلسة جديدة:
+grep -q 'session-guard.sh' ~/.bashrc || echo 'source "$HOME/session-guard.sh"' >> ~/.bashrc
+
+bash
+نسخ الكود
+
+5) اختبارا قبول فقط (لا يمس المشروع):
+- اختبار 1: تأكيد الإعدادات
+  ```
+  source ~/session-guard.sh
+  echo "TERM=$TERM | PAGER=$PAGER | LESS=$LESS"
+  git config --get core.pager || echo "no-core-pager"
+  ```
+- اختبار 2: محاكاة كود ANSI يجب أن لا يبدّل الشاشة بل يُطبع خامًا
+  ```
+  printf '\e[?1049hHELLO\e[?1049l\n' | sed -u -e $'s/\\x1b\\[\\?1049[hl]//g'
+  ```
+
+Return
+- اطبع محتوى الملفات الثلاثة (أول 20 سطرًا لكل ملف).
+- نتيجة الاختبارين أعلاه كنص خام.
+- لا تغيّر أي ملف داخل مجلد المشروع. لا تشغيل gh أو build.
+
+
+
+

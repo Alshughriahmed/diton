@@ -11,3 +11,5 @@ _ops/reports/
 .DS_Store
 *.log
 tmp/
+.vercel
+.env*.local

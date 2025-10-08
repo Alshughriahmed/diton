@@ -1,0 +1,84 @@
+Task: تحقق /api/rtc/offer على الإنتاج بكوكي موقّع — دون أي تعديل للكود
+
+لا تغيّر ملفات المشروع أو إعدادات البيئة.
+
+شغّل الأوامر على Shell فقط.
+
+إن نقصت بيئة ما، توقّف واطلبها صراحةً دون طباعة القيم.
+
+المتطلبات المتوقعة في جلسة الشِل
+
+ANON_SIGNING_SECRET
+
+UPSTASH_REDIS_REST_URL وUPSTASH_REDIS_REST_TOKEN
+
+BASE=https://www.ditonachat.com إن لم تكن موجودة، اضبطها محليًا.
+
+نفّذ بالترتيب التالي
+set -Eeuo pipefail
+BASE="${BASE:-https://www.ditonachat.com}"
+
+# تحقق المتغيرات (لا تطبع القيم)
+: "${ANON_SIGNING_SECRET:?missing ANON_SIGNING_SECRET}"
+: "${UPSTASH_REDIS_REST_URL:?missing UPSTASH_REDIS_REST_URL}"
+: "${UPSTASH_REDIS_REST_TOKEN:?missing UPSTASH_REDIS_REST_TOKEN}"
+
+# 1) مولّد كوكي anon موقّع (ملف JS مؤقت لتفادي مشاكل الاقتباس)
+cat >/tmp/mkcookie.js << "JS"
+const crypto=require("crypto");
+const id=process.argv[2], sec=process.env.ANON_SIGNING_SECRET;
+if(!sec){process.stderr.write("ANON_SIGNING_SECRET missing\n");process.exit(1);}
+const body=Buffer.from(id,"utf8").toString("base64url");
+const sig=crypto.createHmac("sha256",sec).update(body).digest("hex");
+process.stdout.write(encodeURIComponent(`${body}.${sig}`));
+JS
+
+pair="ptest-$(date +%s)"
+caller="a-caller"; callee="a-callee"
+node /tmp/mkcookie.js "$caller" >/tmp/c.cookie
+node /tmp/mkcookie.js "$callee" >/tmp/e.cookie
+
+# 2) ربط الأدوار في Upstash (يحاكي matchmake)
+printf %s '[["SET","rtc:pair:map:a-caller","'"$pair"'|caller"],["SET","rtc:pair:map:a-callee","'"$pair"'|callee"]]' >/tmp/map.json
+curl -fsS -X POST "$UPSTASH_REDIS_REST_URL/pipeline" \
+  -H "Authorization: Bearer $UPSTASH_REDIS_REST_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @/tmp/map.json >/dev/null
+
+# 3) حمولة SDP سليمة (تهريب \n داخل JSON عبر Node)
+node -e "console.log(JSON.stringify({pairId:process.argv[1],sdp:'v=0\\no=- 0 0 IN IP4 127.0.0.1\\ns=offer'}))" "$pair" > /tmp/payload.json
+
+# 4) POST أول → 204
+curl -fsS -i "$BASE/api/rtc/offer" \
+  -H "x-req-id:off-1" -H "content-type: application/json" \
+  -H "Cookie: anon=$(cat /tmp/c.cookie); ditona_anon=$(cat /tmp/c.cookie)" \
+  --data-binary @/tmp/payload.json | sed -n "1,25p"
+
+# 5) POST مكرر خلال 45s → 204 (idempotent)
+curl -fsS -i "$BASE/api/rtc/offer" \
+  -H "x-req-id:off-2" -H "content-type: application/json" -H "x-sdp-tag:tag1" \
+  -H "Cookie: anon=$(cat /tmp/c.cookie); ditona_anon=$(cat /tmp/c.cookie)" \
+  --data-binary @/tmp/payload.json | sed -n "1,25p"
+
+# 6) GET من callee → 200 وجسم sdp
+curl -fsS -i "$BASE/api/rtc/offer?pairId=$pair" \
+  -H "x-req-id:off-3" \
+  -H "Cookie: anon=$(cat /tmp/e.cookie); ditona_anon=$(cat /tmp/e.cookie)" \
+  | sed -n "1,40p"
+
+معايير القبول
+
+off-1 ⇒ HTTP/2 204 + Cache-Control: no-store + echo x-req-id: off-1.
+
+off-2 ⇒ HTTP/2 204 أيضًا خلال ≤45s.
+
+off-3 ⇒ HTTP/2 200 مع JSON يحتوي {"sdp":"..."}.
+
+عند الفشل
+
+اطبع سطر الخطأ كما هو.
+
+اطبع فقط أسماء المتغيرات المتوفرة دون قيم:
+printenv | grep -E "^(ANON_SIGNING_SECRET|UPSTASH_REDIS_REST_URL|UPSTASH_REDIS_REST_TOKEN|BASE)=" | sed "s/=.*/=<MASKED>/"
+
+لا تغييرات على ملفات أو ENV دائمة.
