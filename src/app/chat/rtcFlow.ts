@@ -9,7 +9,7 @@ import { rtcHeaders, markLastStopTs } from "@/app/chat/rtcHeaders.client";
 /* endregion */
 
 /* region: types + state */
-export type Phase = "idle" | "searching" | "matched" | "connected" | "failed";
+export type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 
 type Role = "caller" | "callee";
 type State = {
