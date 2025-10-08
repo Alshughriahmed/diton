@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
 
   const role = await auth(anon, pairId);
 
-  // ICE grace: إذا لم نعد مُصرّحًا ولكننا ضمن نافذة السماح لهذا الـanon → 204
+  // ICE grace: ضمن النافذة نعيد 204 بدلاً من 403
   if (!role) {
     const graceSec = parseIceGraceSec();
     if (graceSec > 0) {
@@ -115,7 +115,6 @@ export async function GET(req: NextRequest) {
   const anon = extractAnonId(req);
   if (!anon) return noStoreJson(req, { error: "anon-required" }, 403);
 
-  // pairId من query أو من رأس x-pair-id
   const url = new URL(req.url);
   const q = (url.searchParams.get("pairId") || "").trim();
   const h = (req.headers.get("x-pair-id") || "").trim();
