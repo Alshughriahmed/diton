@@ -136,7 +136,7 @@ export async function enqueueIntoQ(anon: string) {
   await rZadd(kQ, Date.now(), anon);
 }
 export async function pickCandidate(selfAnon: string): Promise<string | null> {
-  const window = await rZrange<string>(kQ, 0, 19);
+  const window = (await rZrange(kQ, 0, 19)) as string[];
   if (!window?.length) return null;
   for (const cand of window) {
     if (cand === selfAnon) continue;
