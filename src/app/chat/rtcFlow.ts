@@ -1,6 +1,4 @@
-// src/app/chat/rtcFlow.ts
-// Resilient search loop + light Perfect Negotiation + safe teardown/retry
-
+// Resilient search loop + Perfect Negotiation + safe teardown/retry
 "use client";
 
 import apiSafeFetch from "@/app/chat/safeFetch";
@@ -49,9 +47,18 @@ const isAbort = (e: any) => e && (e.name === "AbortError" || e.code === 20);
 const swallowAbort = (e: any) => { if (!isAbort(e)) console.warn("[rtc] non-abort error:", e); };
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const checkSession = (sid: number) => state.sid === sid;
+const hasPair = () => Boolean(state.pairId && state.role);
 function safeAbort(ac?: AbortController | null) { try { if (ac && !ac.signal.aborted) ac.abort("stop"); } catch {} }
 function logRtc(event: string, code: number, extra?: Record<string, unknown>) {
   try { console.log("[rtc]", event, code, extra || {}); } catch {}
+}
+function getUserAttrs() {
+  const gender = localStorage.getItem("ditona_gender") || "u";
+  const country = localStorage.getItem("ditona_country") || "XX";
+  const filterGenders = localStorage.getItem("ditona_filterGenders") || "all";
+  const filterCountries = localStorage.getItem("ditona_filterCountries") || "ALL";
+  const vip = localStorage.getItem("ditona_vip") === "1" ? 1 : 0;
+  return { gender, country, filterGenders, filterCountries, vip };
 }
 
 async function getIceServers(): Promise<RTCIceServer[]> {
@@ -68,18 +75,16 @@ async function getIceServers(): Promise<RTCIceServer[]> {
 /* perfect negotiation helpers */
 function wirePerfect(pc: RTCPeerConnection) {
   pc.onnegotiationneeded = async () => {
-    if (!state.pc || !state.pairId || !state.role) return;
-    if (!checkSession(state.sid)) return;
+    if (!state.pc || !hasPair() || !checkSession(state.sid)) return;
     try {
       state.makingOffer = true;
       const offer = await state.pc.createOffer();
       await state.pc.setLocalDescription(offer);
       if (state.role === "caller") {
-        const body = { pairId: state.pairId, sdp: JSON.stringify(offer) };
         await apiSafeFetch("/api/rtc/offer", {
           method: "POST",
-          headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
-          body: JSON.stringify(body),
+          headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId!, role: state.role! }) },
+          body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
         }).catch(swallowAbort);
       }
     } catch (e) {
@@ -91,10 +96,10 @@ function wirePerfect(pc: RTCPeerConnection) {
 
   pc.onicecandidate = async (e) => {
     if (!e.candidate || !checkSession(state.sid) || state.ac?.signal.aborted) return;
-    if (!state.pairId || !state.role) return;
+    if (!hasPair()) return;
     await apiSafeFetch("/api/rtc/ice", {
       method: "POST",
-      headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
+      headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId!, role: state.role! }) },
       body: JSON.stringify({ pairId: state.pairId, candidate: e.candidate }),
     }).catch(swallowAbort);
   };
@@ -103,11 +108,11 @@ function wirePerfect(pc: RTCPeerConnection) {
 /* ICE polling */
 async function iceExchange(sessionId: number) {
   let backoff = 300;
-  while (checkSession(sessionId) && !state.ac?.signal?.aborted && state.pairId && state.role) {
-    const r = await apiSafeFetch(`/api/rtc/ice?pairId=${encodeURIComponent(state.pairId)}`, {
+  while (checkSession(sessionId) && !state.ac?.signal?.aborted && hasPair()) {
+    const r = await apiSafeFetch(`/api/rtc/ice?pairId=${encodeURIComponent(state.pairId!)}`, {
       method: "GET",
       cache: "no-store",
-      headers: { ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
+      headers: { ...rtcHeaders({ pairId: state.pairId!, role: state.role! }) },
     }).catch(() => null);
     if (!r || !checkSession(sessionId)) break;
     if (r.status === 200) {
@@ -115,14 +120,8 @@ async function iceExchange(sessionId: number) {
       if (Array.isArray(items)) {
         for (const it of items) {
           const cand = it?.cand || it?.candidate || it;
-          try {
-            if (state.pc?.remoteDescription) {
-              await state.pc.addIceCandidate(cand);
-            } else {
-              // أضف لاحقًا بعد ضبط remote إذا لزم. حالياً نحاول ثم نلتقط الأخطاء.
-              await state.pc?.addIceCandidate(cand);
-            }
-          } catch (e) { logRtc("ice-add-error", 500, { error: String(e) }); }
+          try { await state.pc?.addIceCandidate(cand); }
+          catch (e) { logRtc("ice-add-error", 500, { error: String(e) }); }
         }
       }
     }
@@ -140,7 +139,7 @@ async function callerFlow(sessionId: number) {
     const r = await apiSafeFetch(`/api/rtc/answer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
       cache: "no-store",
-      headers: { ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
+      headers: { ...rtcHeaders({ pairId: state.pairId!, role: state.role! }) },
     }).catch(() => null);
     if (!r || !checkSession(sessionId)) return;
 
@@ -165,7 +164,7 @@ async function calleeFlow(sessionId: number) {
     const r = await apiSafeFetch(`/api/rtc/offer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
       cache: "no-store",
-      headers: { ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
+      headers: { ...rtcHeaders({ pairId: state.pairId!, role: state.role! }) },
     }).catch(() => null);
     if (!r || !checkSession(sessionId)) return;
 
@@ -183,7 +182,7 @@ async function calleeFlow(sessionId: number) {
             await state.pc!.setLocalDescription(answer);
             await apiSafeFetch("/api/rtc/answer", {
               method: "POST",
-              headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
+              headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId!, role: state.role! }) },
               body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(answer) }),
             }).catch(swallowAbort);
           }
@@ -217,25 +216,36 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
       await apiSafeFetch("/api/anon/init", { method: "GET", cache: "no-store", signal: state.ac?.signal });
     } catch (e) { swallowAbort(e); }
 
-    // 2) enqueue
+    // 2) enqueue مع الخصائص
     const HEnq = rtcHeaders({});
     await apiSafeFetch("/api/rtc/enqueue", {
       method: "POST",
       headers: { "content-type": "application/json", ...HEnq },
-      body: JSON.stringify({ t: Date.now() }),
+      body: JSON.stringify(getUserAttrs()),
     }).catch(swallowAbort);
 
-    // 3) matchmake polling: لا تتوقف عند 204
+    // 3) matchmake polling: لا تتوقف عند 204 — وعند 400 أعد enqueue
     while (checkSession(currentSession) && !state.ac?.signal?.aborted) {
-      const HMm = rtcHeaders({});
       const r = await apiSafeFetch("/api/rtc/matchmake", {
         method: "POST",
         cache: "no-store",
-        headers: { "content-type": "application/json", ...HMm },
+        headers: { "content-type": "application/json", ...rtcHeaders({}) },
         body: JSON.stringify({}),
       }).catch(() => null);
 
       if (!r || !checkSession(currentSession)) return;
+
+      if (r.status === 400) {
+        // نقص attrs على الخادم → أعد enqueue بالخصائص
+        await apiSafeFetch("/api/rtc/enqueue", {
+          method: "POST",
+          headers: { "content-type": "application/json", ...rtcHeaders({}) },
+          body: JSON.stringify(getUserAttrs()),
+        }).catch(swallowAbort);
+        await sleep(600);
+        continue;
+      }
+
       if (r.status === 204) {
         state.phase = "searching";
         try { onPhase("searching"); } catch {}
@@ -275,7 +285,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
       await sleep(900);
     }
 
-    if (!state.pairId || !state.role || !checkSession(currentSession)) { stop(); return; }
+    if (!hasPair() || !checkSession(currentSession)) { stop(); return; }
 
     // 4) PC + TURN
     const iceServers = await getIceServers();
@@ -299,7 +309,6 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     if (media) { media.getTracks().forEach(tr => state.pc?.addTrack(tr, media)); }
 
     // 5) ICE + SDP flows
-    // ابدأ تبادل ICE بالتوازي مع سحب/دفع SDP
     void iceExchange(currentSession);
     if (state.role === "caller") await callerFlow(currentSession);
     else await calleeFlow(currentSession);
