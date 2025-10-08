@@ -125,7 +125,4 @@ export async function GET(req: NextRequest) {
   return noStoreJson(req, { sdp: String(sdp) }, 200);
 }
 
-  await expire(`rtc:pair:${pairId}`, 150);
-  log(req, { op: "answer", phase: "read", outcome: "200", pairId, anonId: anon, latencyMs: Date.now() - t0 });
-  return noStoreJson(req, { sdp: String(sdp) }, 200);
-}
+  
