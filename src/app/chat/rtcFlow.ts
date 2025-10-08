@@ -224,8 +224,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     logRtc("flow-start", 200);
 
     // 1) init anon cookie
-    try { await apiSafeFetch("/api/anon/init", { method: "GET", cache: "no-store", signal: state.ac.signal }); } catch (e) { swallowAbort(e); }
-
+    try { await apiSafeFetch("/api/anon/init", { method: "GET", cache: "no-store", signal: state.ac?.signal });
     // 2) enqueue
     const HEnq = rtcHeaders({});
     await apiSafeFetch("/api/rtc/enqueue", {
@@ -235,7 +234,7 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
     }).catch(() => {});
 
     // 3) matchmake polling: لا توقف عند 204
-    while (checkSession(currentSession) && !state.ac.signal.aborted) {
+    while (checkSession(currentSession) && !(state.ac?.signal?.aborted)) {
       const HMm = rtcHeaders({});
       const r = await apiSafeFetch("/api/rtc/matchmake", {
         method: "POST",
