@@ -270,8 +270,8 @@ export async function start(media: MediaStream | null, onPhase: (phase: Phase) =
           state.phase = "matched";
           try { onPhase("matched"); } catch {}
           if (typeof window !== "undefined") {
-            window.localStorage.setItem("ditona_pair", state.pairId);
-            window.localStorage.setItem("ditona_role", state.role);
+            window.localStorage.setItem("ditona_pair", state.pairId!);
+            window.localStorage.setItem("ditona_role", state.role!);
             window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: state.pairId, role: state.role } }));
             window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched", role: state.role } }));
             window.dispatchEvent(new CustomEvent("ditona:chat:reset"));
