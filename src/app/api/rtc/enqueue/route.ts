@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const preferredRegion = ["fra1","iad1"]; // بدون as const
 
-function noStoreEcho(req: NextRequest, res: NextResponse) {
+function noStoreEcho(req: NextRequest, res: Response) {
   res.headers.set("Cache-Control", "no-store");
   const rid = req.headers.get("x-req-id");
   if (rid) res.headers.set("x-req-id", rid);
@@ -91,3 +91,4 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
