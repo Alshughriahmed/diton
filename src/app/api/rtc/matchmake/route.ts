@@ -1,156 +1,93 @@
-//////////////////////  src/app/api/rtc/matchmake/route.ts  ///////////////////////////////////////
-
+// src/app/api/rtc/matchmake/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { jsonEcho } from "@/lib/api/xreq";
-import { logRTC } from "@/lib/rtc/logger";
-import { verifySigned } from "@/lib/rtc/auth";
-import { matchmake, pairMapOf } from "@/lib/rtc/mm";
-import { setNxPx, expire, exists } from "@/lib/rtc/upstash"; // +exists (قراءة فقط للّوج)
+import {
+  optionsHandler,
+  withCommon,
+  logEvt,
+  getAnonOrThrow,
+  kAttrs, kPair, kPairMap, kQ,
+  pickCandidate,
+  createPairAndMap,
+  NC, J,
+} from "../_lib";
+import {
+  get as rGet,
+  del as rDel,
+  zrem as rZrem,
+} from "@/lib/rtc/upstash";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const preferredRegion = ["fra1","iad1"];
+export const preferredRegion = ["fra1","iad1"]; // بدون as const
 
-const noStore = <T extends Response>(r:T):T => { try{ (r as any).headers?.set?.("Cache-Control","no-store"); }catch{} return r; };
+async function handle(req: NextRequest) {
+  await cookies(); // التزام القاعدة
+  const rid = req.headers.get("x-req-id") || "";
+  const t0 = Date.now();
+
+  try {
+    const anon = await getAnonOrThrow();
+
+    // 1) تحقق attrs موجودة وإلا 400 صريحة
+    const attrsRaw = (await rGet(kAttrs(anon))) as string | null;
+    if (!attrsRaw) {
+      logEvt({ route: "/api/rtc/matchmake", status: 400, rid, anonId: anon, note: "no-attrs" });
+      return withCommon(NextResponse.json({ error: "no-attrs" }, { status: 400 }), rid);
+    }
+
+    // 2) fast-path: خريطة زوج موجودة وصالحة؟
+    const mapped = (await rGet(kPairMap(anon))) as string | null;
+    if (mapped) {
+      const pairStr = (await rGet(kPair(mapped))) as string | null;
+      if (pairStr) {
+        const pair = JSON.parse(pairStr) as { callerAnon: string; calleeAnon: string };
+        let role: "caller" | "callee" | null = null;
+        if (pair.callerAnon === anon) role = "caller";
+        else if (pair.calleeAnon === anon) role = "callee";
+        if (role) {
+          logEvt({ route: "/api/rtc/matchmake", status: 200, rid, anonId: anon, pairId: mapped, role, phase: "fast-path", pairExists: true, mapOK: true });
+          return withCommon(NextResponse.json({ pairId: mapped, role }, { status: 200 }), rid);
+        }
+      }
+      // خريطة راكدة: احذفها وتابع المسار العادي
+      await rDel(kPairMap(anon));
+    }
+
+    // 3) اختيار مرشح من الطابور مع قفل claim (يُدار داخل pickCandidate)
+    const cand = await pickCandidate(anon);
+    if (!cand) {
+      logEvt({ route: "/api/rtc/matchmake", status: 204, rid, anonId: anon, phase: "no-candidate" });
+      return NC(204, rid);
+    }
+
+    // 4) إنشاء زوج وتحديث الخرائط + تنظيف من الطابور
+    const { pairId } = await createPairAndMap(anon, cand);
+    await Promise.allSettled([
+      rZrem(kQ, anon),
+      rZrem(kQ, cand),
+    ]);
+
+    logEvt({ route: "/api/rtc/matchmake", status: 200, rid, anonId: anon, pairId, role: "caller", phase: "new-pair" });
+    return withCommon(NextResponse.json({ pairId, role: "caller", peerAnonId: cand }, { status: 200 }), rid);
+  } catch (e: any) {
+    logEvt({ route: "/api/rtc/matchmake", status: 401, rid, note: String(e?.message || e) });
+    return J(401, { error: "matchmake-failed" }, rid);
+  } finally {
+    logEvt({ route: "/api/rtc/matchmake", status: 200, rid, note: `ms=${Date.now() - t0}` });
+  }
+}
 
 export async function OPTIONS(req: NextRequest) {
   await cookies();
-  const r = new NextResponse(null, { status: 204 });
-  r.headers.set("Cache-Control","no-store");
-  const rid = req.headers.get("x-req-id"); if (rid) r.headers.set("x-req-id", rid);
-  return r;
+  return optionsHandler();
 }
 
 export async function POST(req: NextRequest) {
-  const t0 = Date.now();
-  const rid = req.headers.get("x-req-id") || `${t0}`;
+  return handle(req);
+}
 
-  try {
-    await cookies();
-    const raw = req.headers.get("cookie")?.match(/(?:^|;\s*)anon=([^;]+)/)?.[1] || null;
-    const sec = process.env.ANON_SIGNING_SECRET!;
-    const anonId = raw ? verifySigned(raw, sec) : null;
-    if (!anonId) {
-      logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:401, phase:"auth", note:"no-anon" });
-      return noStore(jsonEcho(req, { error:"no-anon" }, { status:401 }));
-    }
-
-    // fast-path: إن كنت مقترناً بالفعل أعد الزوج فوراً (سلوك ثابت؛ نضيف لوج فقط)
-    try {
-      const mapped = await pairMapOf(anonId);
-      const mapOK = Boolean(mapped?.pairId && mapped?.role);
-      let pairExists:boolean|null = null;
-      if (mapped?.pairId) {
-        try { pairExists = !!(await exists(`rtc:pair:${mapped.pairId}`)); } catch { pairExists = null; }
-      }
-      if (mapped?.pairId && mapped?.role) {
-        logRTC({
-          route:"/api/rtc/matchmake",
-          method:"POST",
-          reqId:rid,
-          ms:Date.now()-t0,
-          status:200,
-          phase:"matched",
-          anonId,
-          pairId: mapped.pairId,
-          role: mapped.role,
-          mapOK,
-          pairExists,
-          note:"mapped-fast"
-        });
-        const r = NextResponse.json(
-          { pairId: mapped.pairId, role: mapped.role }, // لا peerAnonId هنا
-          { status: 200 }
-        );
-        r.headers.set("Cache-Control","no-store");
-        if (rid) r.headers.set("x-req-id", rid);
-        return r;
-      } else {
-        // خريطة غير مكتملة — ليس خطأ، نكمل المسار العادي
-        logRTC({
-          route:"/api/rtc/matchmake",
-          method:"POST",
-          reqId:rid,
-          ms:Date.now()-t0,
-          status:204,
-          phase:"probe-map",
-          anonId,
-          mapOK,
-          pairExists,
-          note:"no-fastpath"
-        });
-      }
-    } catch {
-      logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:204, phase:"probe-map", anonId, note:"map-check-error" });
-    }
-
-    // تلميحات اختيارية (لا تؤثر على العقد)
-    const body = await req.json().catch(() => ({} as any));
-    const hint = {
-      gender: (body.gender ?? "").toString().toLowerCase() || undefined,
-      country: (body.country ?? "").toString().toUpperCase() || undefined,
-      filterGenders: (body.filterGenders ?? "").toString() || undefined,
-      filterCountries: (body.filterCountries ?? "").toString() || undefined,
-    };
-
-    logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, phase:"call-mm", anonId, note:"mm-begin" });
-
-    // استدعاء matchmake
-    let out: any;
-    try { out = await (matchmake as any)(anonId, hint); }
-    catch { out = await (matchmake as any)(anonId); }
-
-    // لا يوجد تطابق بعد
-    if (!out || out === true || out.status === 204) {
-      logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:204, phase:"search", anonId, note:"no-match-yet" });
-      const r = new NextResponse(null, { status: 204 });
-      r.headers.set("Cache-Control","no-store");
-      if (rid) r.headers.set("x-req-id", rid);
-      return r;
-    }
-
-    // تم التطابق
-    if (out.status === 200 && out.body?.pairId && out.body?.role) {
-      const { pairId, role, peerAnonId } = out.body;
-
-      // كتابة خريطة الزوج و TTL (سلوك قائم مُسبقًا)
-      await setNxPx(`rtc:pair:map:${anonId}`, `${pairId}|${role}`, 150_000);
-      await expire(`rtc:pair:${pairId}`, 150);
-
-      logRTC({
-        route:"/api/rtc/matchmake",
-        method:"POST",
-        reqId:rid,
-        ms:Date.now()-t0,
-        status:200,
-        phase:"matched",
-        anonId,
-        pairId,
-        role,
-        note:"matched"
-      });
-      const r = NextResponse.json({ pairId, role, peerAnonId }, { status: 200 });
-      r.headers.set("Cache-Control","no-store");
-      if (rid) r.headers.set("x-req-id", rid);
-      return r;
-    }
-
-    // أخطاء من mm
-    const code = Number(out.status) || 500;
-    logRTC({ route:"/api/rtc/matchmake", method:"POST", reqId:rid, ms:Date.now()-t0, status:code, phase:"mm-error", anonId, note:"mm-propagate" });
-    return noStore(jsonEcho(req, out.body || { error:"mm-fail" }, { status: code }));
-  } catch (e: any) {
-    logRTC({
-      route:"/api/rtc/matchmake",
-      method:"POST",
-      reqId:rid,
-      ms:Date.now()-t0,
-      status:500,
-      phase:"exception",
-      note:String(e?.message||e).slice(0,100)
-    });
-    return noStore(jsonEcho(req, { error:"matchmake-fail", info:String(e?.message||e).slice(0,140) }, { status:500 }));
-  }
+export async function GET(req: NextRequest) {
+  return handle(req);
 }
