@@ -1,7 +1,16 @@
 // src/app/api/rtc/_lib.ts
 import { NextRequest, NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
-import { Redis } from "@upstash/redis";
+// نستخدم الغلاف الداخلي لديكم بدل @upstash/redis
+import {
+  set as rSet,
+  get as rGet,
+  del as rDel,
+  expire as rExpire,
+  zadd as rZadd,
+  zrange as rZrange,
+  setNxPx as rSetNxPx,
+} from "@/lib/rtc/upstash";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,7 +18,6 @@ export const revalidate = 0;
 export const preferredRegion = ["fra1","iad1"]; // بدون as const
 
 export const ICE_GRACE_ENABLED = process.env.ICE_GRACE === "1";
-export const redis = Redis.fromEnv();
 
 export type Role = "caller" | "callee";
 export type Gender = "m" | "f" | "u";
@@ -32,12 +40,13 @@ export interface Pair {
   iceCallee?: string[];
 }
 
-const ATTRS_TTL = 180;
-const FILTERS_TTL = 180;
-const MAP_TTL = 300;
-const PAIR_TTL = 600;
-const CLAIM_TTL = 10;
-const PREV_TTL = 600;
+// TTLs (ثوانٍ ما لم يُذكر خلاف ذلك)
+const ATTRS_TTL_S = 180;
+const FILTERS_TTL_S = 180;
+const MAP_TTL_MS = 300_000;  // setNxPx بالمللي ثانية
+const PAIR_TTL_S = 600;
+const CLAIM_TTL_S = 10;
+const PREV_TTL_S = 600;
 
 export const kQ = `rtc:q`;
 export const kAttrs   = (anon: string) => `rtc:attrs:${anon}`;
@@ -50,6 +59,7 @@ export const kPrevFor = (anon: string) => `rtc:prev-for:${anon}`;
 export const kIdem = (pairId: string, role: Role, tag: string) =>
   `rtc:idem:${pairId}:${role}:${tag}`;
 
+// ترويسات وردود موحّدة
 function ridFromHeaders() {
   try { return headers().get("x-req-id") || crypto.getRandomValues(new Uint32Array(1))[0].toString(16); }
   catch { return Math.random().toString(16).slice(2); }
@@ -71,6 +81,7 @@ export function FORB(msg = "forbidden", rid?: string) { return J(403, { error: m
 export function CONFLICT(msg = "conflict", rid?: string) { return J(409, { error: msg }, rid); }
 export function TOOLARGE(msg = "payload too large", rid?: string) { return J(413, { error: msg }, rid); }
 
+// سجلات موحّدة
 export function logEvt(p: Partial<{
   ts: string; route: string; status: number; rid: string;
   anonId: string; pairId: string; role: Role;
@@ -80,6 +91,7 @@ export function logEvt(p: Partial<{
   try { console.log(JSON.stringify(rec)); } catch {}
 }
 
+// مصادقة anon
 export async function getAnonOrThrow(): Promise<string> {
   const c = (await cookies()).get("anon")?.value;
   if (!c) throw new Error("NO_ANON_COOKIE");
@@ -88,12 +100,14 @@ export async function getAnonOrThrow(): Promise<string> {
   return anon;
 }
 
+// OPTIONS = 204 + no-store
 export function optionsHandler() {
   const r = new NextResponse(null, { status: 204 });
   r.headers.set("Cache-Control", "no-store");
   return r;
 }
 
+// Helpers
 export function normalizeAttrs(obj: any): Attrs {
   const gender: Gender = (obj?.gender ?? "u") as Gender;
   const country: Country = (obj?.country ?? "XX") as Country;
@@ -108,8 +122,8 @@ export function normalizeFilters(obj: any): Filters {
 }
 export async function touchTTL(anon: string) {
   await Promise.all([
-    redis.expire(kAttrs(anon), ATTRS_TTL),
-    redis.expire(kFilters(anon), FILTERS_TTL),
+    rExpire(kAttrs(anon), ATTRS_TTL_S),
+    rExpire(kFilters(anon), FILTERS_TTL_S),
   ]);
 }
 export function newPairId(): string {
@@ -118,16 +132,15 @@ export function newPairId(): string {
   return `p:${ts}:${(r[0].toString(36)+r[1].toString(36)).slice(0,8)}`;
 }
 export async function enqueueIntoQ(anon: string) {
-  await redis.zadd(kQ, { member: anon, score: Date.now(), nx: true });
+  await rZadd(kQ, Date.now(), anon);
 }
 export async function pickCandidate(selfAnon: string): Promise<string | null> {
-  const window = await redis.zrange<string>(kQ, 0, 19);
+  const window = await rZrange<string>(kQ, 0, 19);
   if (!window?.length) return null;
   for (const cand of window) {
     if (cand === selfAnon) continue;
-    const ok = await redis.set(kClaim(cand), `by:${selfAnon}`, { nx: true, ex: CLAIM_TTL });
-    if (ok !== "OK") continue;
-    return cand;
+    const ok = await rSetNxPx(kClaim(cand), `by:${selfAnon}`, CLAIM_TTL_S * 1000);
+    if (ok) return cand;
   }
   return null;
 }
@@ -135,18 +148,23 @@ export async function createPairAndMap(callerAnon: string, calleeAnon: string) {
   const pairId = newPairId();
   const pair: Pair = { callerAnon, calleeAnon, createdAt: Date.now(), active: 1 };
   await Promise.all([
-    redis.set(kPair(pairId), JSON.stringify(pair), { ex: PAIR_TTL }),
-    redis.set(kPairMap(callerAnon), pairId, { ex: MAP_TTL }),
-    redis.set(kPairMap(calleeAnon), pairId, { ex: MAP_TTL }),
-    redis.set(kPrevFor(callerAnon), calleeAnon, { ex: PREV_TTL }),
-    redis.set(kPrevFor(calleeAnon), callerAnon, { ex: PREV_TTL }),
-    redis.set(kLast(callerAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId }), { ex: PREV_TTL }),
-    redis.set(kLast(calleeAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId }), { ex: PREV_TTL }),
+    rSet(kPair(pairId), JSON.stringify(pair)),
+    rExpire(kPair(pairId), PAIR_TTL_S),
+    rSetNxPx(kPairMap(callerAnon), pairId, MAP_TTL_MS),
+    rSetNxPx(kPairMap(calleeAnon), pairId, MAP_TTL_MS),
+    rSet(kPrevFor(callerAnon), calleeAnon),
+    rExpire(kPrevFor(callerAnon), PREV_TTL_S),
+    rSet(kPrevFor(calleeAnon), callerAnon),
+    rExpire(kPrevFor(calleeAnon), PREV_TTL_S),
+    rSet(kLast(callerAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId })),
+    rExpire(kLast(callerAnon), PREV_TTL_S),
+    rSet(kLast(calleeAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId })),
+    rExpire(kLast(calleeAnon), PREV_TTL_S),
   ]);
   return { pairId };
 }
 export async function getPairAndRole(anon: string, pairId: string): Promise<{ pair: Pair|null; role: Role|null; peer: string|null }> {
-  const s = await redis.get<string>(kPair(pairId));
+  const s = await rGet<string>(kPair(pairId));
   if (!s) return { pair: null, role: null, peer: null };
   const p = JSON.parse(s) as Pair;
   if (p.callerAnon === anon) return { pair: p, role: "caller", peer: p.calleeAnon };
