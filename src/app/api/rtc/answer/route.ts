@@ -16,28 +16,22 @@ function hWithReqId(req: Request, extra?: Record<string, string>) {
   const rid = req.headers.get("x-req-id") || "";
   return new Headers({ ...H_NO_STORE, ...(extra || {}), ...(rid ? { "x-req-id": rid } : {}) });
 }
-
 function noStoreJson(req: Request, body: any, init?: number | ResponseInit) {
   const r = NextResponse.json(body, typeof init === "number" ? { status: init } : init);
   r.headers.set("Cache-Control", "no-store");
-  const rid = req.headers.get("x-req-id");
-  if (rid) r.headers.set("x-req-id", rid);
+  const rid = req.headers.get("x-req-id"); if (rid) r.headers.set("x-req-id", rid);
   return r;
 }
-
 function noStoreEmpty(req: Request, status: number) {
   const r = new NextResponse(null, { status });
   r.headers.set("Cache-Control", "no-store");
-  const rid = req.headers.get("x-req-id");
-  if (rid) r.headers.set("x-req-id", rid);
+  const rid = req.headers.get("x-req-id"); if (rid) r.headers.set("x-req-id", rid);
   return r;
 }
-
 function log(req: Request, data: Record<string, unknown>) {
   const rid = req.headers.get("x-req-id") || "";
   console.log(JSON.stringify({ reqId: rid, role: "server", ...data }));
 }
-
 async function auth(anon: string, pairId: string) {
   const map = await get(`rtc:pair:map:${anon}`);
   if (!map) return null;
@@ -50,11 +44,10 @@ export async function OPTIONS(req: NextRequest) {
   return new Response(null, { status: 204, headers: hWithReqId(req) });
 }
 
-/**
- * Idempotent POST /answer
- * المفتاح: rtc:idem:<pairId>:<role>:<sdpTag> مع TTL=45s
- * - أول طلب يمر: يكتب answer بقفل NX (120s)
- * - التكرارات خلال 45s تعيد 204 بلا آثار جانبية
+/** Idempotent POST /answer
+ * idem key: rtc:idem:<pairId>:<role>:<sdpTag> (TTL=45s)
+ * first write stores answer with NX (120s)
+ * repeats within 45s → 204
  */
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
@@ -71,12 +64,10 @@ export async function POST(req: NextRequest) {
   const role = await auth(anon, pairId);
   if (role !== "callee") return noStoreJson(req, { error: "only-callee" }, 403);
 
-  const hdr = req.headers;
-  const sdpTagHdr = (hdr.get("x-sdp-tag") || "").trim();
+  const sdpTagHdr = (req.headers.get("x-sdp-tag") || "").trim();
   const sdpFp = createHash("sha256").update(String(sdp)).digest("hex").slice(0, 16);
   const sdpTag = sdpTagHdr || sdpFp;
 
-  // Idempotency (45s)
   const idemKey = `rtc:idem:${pairId}:${role}:${sdpTag}`;
   const isFirst = await setNxPx(idemKey, "1", 45_000);
   if (!isFirst) {
@@ -84,7 +75,6 @@ export async function POST(req: NextRequest) {
     return noStoreEmpty(req, 204);
   }
 
-  // write answer with NX (120s)
   const ansKey = `rtc:pair:${pairId}:answer`;
   const ok = await setNxPx(ansKey, String(sdp), 120_000);
   if (!ok) {
@@ -104,7 +94,6 @@ export async function GET(req: NextRequest) {
   const anon = extractAnonId(req);
   if (!anon) return noStoreJson(req, { error: "anon-required" }, 403);
 
-  // NEW: read pairId from query OR header
   const url = new URL(req.url);
   const q = (url.searchParams.get("pairId") || "").trim();
   const h = (req.headers.get("x-pair-id") || "").trim();
@@ -124,5 +113,3 @@ export async function GET(req: NextRequest) {
   log(req, { op: "answer", phase: "read", outcome: "200", pairId, anonId: anon, latencyMs: Date.now() - t0 });
   return noStoreJson(req, { sdp: String(sdp) }, 200);
 }
-
-  
