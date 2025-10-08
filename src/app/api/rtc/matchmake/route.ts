@@ -4,6 +4,7 @@ import { jsonEcho } from "@/lib/api/xreq";
 import { logRTC } from "@/lib/rtc/logger";
 import { verifySigned } from "@/lib/rtc/auth";
 import { matchmake, pairMapOf } from "@/lib/rtc/mm";
+import { setNxPx, expire } from "@/lib/rtc/upstash"; // ⬅️ جديد
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,11 +59,12 @@ export async function POST(req: NextRequest) {
       filterCountries: (body.filterCountries ?? "").toString() || undefined,
     };
 
-    // نعيد مخرجات matchmake بعقد مسطّح متوافق مع العميل
+    // استدعاء matchmake
     let out: any;
     try { out = await (matchmake as any)(anonId, hint); }
     catch { out = await (matchmake as any)(anonId); }
 
+    // لا يوجد تطابق بعد
     if (!out || out === true || out.status === 204) {
       logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:204, note:"no-match-yet" });
       const r = new NextResponse(null, { status: 204 });
@@ -71,17 +73,22 @@ export async function POST(req: NextRequest) {
       return r;
     }
 
+    // تم التطابق
     if (out.status === 200 && out.body?.pairId && out.body?.role) {
+      const { pairId, role, peerAnonId } = out.body;
+
+      // ⬅️ مهم: اكتب خريطة الزوج و TTL قبل الرد
+      await setNxPx(`rtc:pair:map:${anonId}`, `${pairId}|${role}`, 150_000);
+      await expire(`rtc:pair:${pairId}`, 150);
+
       logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:200, note:"matched" });
-      const r = NextResponse.json(
-        { pairId: out.body.pairId, role: out.body.role, peerAnonId: out.body.peerAnonId },
-        { status: 200 }
-      );
+      const r = NextResponse.json({ pairId, role, peerAnonId }, { status: 200 });
       r.headers.set("Cache-Control","no-store");
       if (rid) r.headers.set("x-req-id", rid);
       return r;
     }
 
+    // أخطاء من mm
     const code = Number(out.status) || 500;
     logRTC({ route:"/api/rtc/matchmake", reqId:rid, ms:Date.now()-t0, status:code, note:"mm-propagate" });
     return noStore(jsonEcho(req, out.body || { error:"mm-fail" }, { status: code }));
