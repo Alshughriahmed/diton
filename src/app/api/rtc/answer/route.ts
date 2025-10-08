@@ -104,8 +104,12 @@ export async function GET(req: NextRequest) {
   const anon = extractAnonId(req);
   if (!anon) return noStoreJson(req, { error: "anon-required" }, 403);
 
-  const pairId = String(new URL(req.url).searchParams.get("pairId") || "");
-  if (!pairId) return noStoreJson(req, { error: "bad-input" }, 400);
+  // NEW: read pairId from query OR header
+  const url = new URL(req.url);
+  const q = (url.searchParams.get("pairId") || "").trim();
+  const h = (req.headers.get("x-pair-id") || "").trim();
+  const pairId = q || h;
+  if (!pairId) return noStoreJson(req, { error: "pair-required" }, 400);
 
   const role = await auth(anon, pairId);
   if (role !== "caller") return noStoreJson(req, { error: "only-caller" }, 403);
@@ -115,6 +119,11 @@ export async function GET(req: NextRequest) {
     log(req, { op: "answer", phase: "read", outcome: "204-no-answer", pairId, anonId: anon, latencyMs: Date.now() - t0 });
     return noStoreEmpty(req, 204);
   }
+
+  await expire(`rtc:pair:${pairId}`, 150);
+  log(req, { op: "answer", phase: "read", outcome: "200", pairId, anonId: anon, latencyMs: Date.now() - t0 });
+  return noStoreJson(req, { sdp: String(sdp) }, 200);
+}
 
   await expire(`rtc:pair:${pairId}`, 150);
   log(req, { op: "answer", phase: "read", outcome: "200", pairId, anonId: anon, latencyMs: Date.now() - t0 });
