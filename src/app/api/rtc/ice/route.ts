@@ -59,78 +59,22 @@ export async function OPTIONS(req: NextRequest) {
 }
 
 // -------- POST: push ICE --------
-export async function POST(req: NextRequest) {
-  const t0 = Date.now();
-  await cookies();
-
-  const anon = extractAnonId(req);
-  if (!anon) {
-    log(req, { op:"ice", phase:"auth", outcome:"403-anon-required", latencyMs:Date.now()-t0 });
-    return noStoreJson(req, { error:"anon-required" }, 403);
-  }
-
-  let pairId: string | undefined, candidate: unknown;
-  try {
-    const body = await req.json();
-    pairId = body?.pairId;
-    candidate = body?.candidate;
-  } catch {
-    log(req, { op:"ice", phase:"parse", outcome:"400-json", latencyMs:Date.now()-t0 });
-    return noStoreJson(req, { error:"bad-input" }, 400);
-  }
-  if (!pairId || !candidate) {
-    log(req, { op:"ice", phase:"validate", outcome:"400-missing", latencyMs:Date.now()-t0 });
-    return noStoreJson(req, { error:"bad-input" }, 400);
-  }
-  if (!sizeOk(candidate)) {
-    log(req, { op:"ice", phase:"validate", outcome:"413-too-large", latencyMs:Date.now()-t0 });
-    return noStoreEmpty(req, 413);
-  }
-
-  const role = await auth(anon, String(pairId));
-
-  // ICE-grace: 204 خلال نافذة ≤ ICE_GRACE ثوانٍ إن كان نفس anon ويرسل حزمًا قديمة بعد الانتقال
-  if (!role) {
-    const graceSec = parseIceGraceSec();
-    const hdrAnon = (req.headers.get("x-anon-id") || "").trim();
-    const lastStopTs = Number(req.headers.get("x-last-stop-ts") || "0"); // ms set by client on teardown
-    const within = graceSec > 0 && lastStopTs > 0 && (Date.now() - lastStopTs) <= graceSec * 1000;
-    const same = hdrAnon && hdrAnon === anon;
-    if (within && same) {
-      log(req, { op:"ice", phase:"grace", outcome:"204", anonId:anon, pairId, latencyMs:Date.now()-t0 });
-      return noStoreEmpty(req, 204);
-    }
-    log(req, { op:"ice", phase:"auth", outcome:"403-forbidden", anonId:anon, pairId, latencyMs:Date.now()-t0 });
-    return noStoreJson(req, { error:"forbidden" }, 403);
-  }
-
-  const dest = role === "caller" ? "b" : "a";
-  const key = `rtc:pair:${pairId}:ice:${dest}`;
-  try {
-    await lpush(key, JSON.stringify({ from: role === "caller" ? "a" : "b", cand: candidate }));
-    await expire(key, 150);
-    await expire(`rtc:pair:${pairId}`, 150);
-    log(req, { op:"ice", phase:"push", outcome:"204", anonId:anon, pairId, latencyMs:Date.now()-t0 });
-    return noStoreEmpty(req, 204);
-  } catch (e) {
-    log(req, { op:"ice", phase:"error", outcome:"500", msg:String(e) , latencyMs:Date.now()-t0 });
-    return noStoreJson(req, { error:"ice-post-fail" }, 500);
-  }
-}
-
-// -------- GET: pull ICE --------
 export async function GET(req: NextRequest) {
   const t0 = Date.now();
   await cookies();
 
   const anon = extractAnonId(req);
-  if (!anon) return noStoreJson(req, { error:"anon-required" }, 403);
+  if (!anon) return noStoreJson(req, { error: "anon-required" }, 403);
 
-  const pairId = String(new URL(req.url).searchParams.get("pairId") || "");
-  if (!pairId) return noStoreJson(req, { error:"bad-input" }, 400);
+  // NEW: read pairId from query OR header
+  const url = new URL(req.url);
+  const q = (url.searchParams.get("pairId") || "").trim();
+  const h = (req.headers.get("x-pair-id") || "").trim();
+  const pairId = q || h;
+  if (!pairId) return noStoreJson(req, { error: "pair-required" }, 400);
 
   const role = await auth(anon, pairId);
-  if (!role) return noStoreJson(req, { error:"forbidden" }, 403);
+  if (!role) return noStoreJson(req, { error: "forbidden" }, 403);
 
   const me = role === "caller" ? "a" : "b";
   const key = `rtc:pair:${pairId}:ice:${me}`;
@@ -138,16 +82,16 @@ export async function GET(req: NextRequest) {
   try {
     const items = await lrange(key, 0, 49);
     if (!items || items.length === 0) {
-      log(req, { op:"ice", phase:"poll", outcome:"204-empty", anonId:anon, pairId, latencyMs:Date.now()-t0 });
+      log(req, { op: "ice", phase: "poll", outcome: "204-empty", anonId: anon, pairId, latencyMs: Date.now() - t0 });
       return noStoreEmpty(req, 204);
     }
     await ltrim(key, items.length, -1);
     await expire(`rtc:pair:${pairId}`, 150);
-    const body = items.map(s => JSON.parse(s as string));
-    log(req, { op:"ice", phase:"poll", outcome:"200", count:body.length, anonId:anon, pairId, latencyMs:Date.now()-t0 });
+    const body = items.map((s) => JSON.parse(s as string));
+    log(req, { op: "ice", phase: "poll", outcome: "200", count: body.length, anonId: anon, pairId, latencyMs: Date.now() - t0 });
     return noStoreJson(req, body, 200);
   } catch (e) {
-    log(req, { op:"ice", phase:"error", outcome:"500", msg:String(e), anonId:anon, pairId, latencyMs:Date.now()-t0 });
-    return noStoreJson(req, { error:"ice-get-fail" }, 500);
+    log(req, { op: "ice", phase: "error", outcome: "500", msg: String(e), anonId: anon, pairId, latencyMs: Date.now() - t0 });
+    return noStoreJson(req, { error: "ice-get-fail" }, 500);
   }
 }
