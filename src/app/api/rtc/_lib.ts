@@ -97,3 +97,29 @@ export function logRTC(fields: Record<string, any>) {
     console.log(JSON.stringify({ ...base, ...fields }));
   } catch { /* no-op */ }
 }
+// ---- Compatibility shims for legacy imports (enqueue/others) ----
+import type { NextRequest, NextResponse } from "next/server";
+
+// OPTIONS handler returning 204 + no-store (legacy name)
+export function optionsHandler(req: NextRequest) {
+  return new Response(null, { status: 204, headers: hNoStore(req) });
+}
+
+// Attach no-store and echo x-req-id to an existing response (legacy name)
+export function withCommon(res: NextResponse, ridStr?: string) {
+  try {
+    res.headers.set("Cache-Control", "no-store");
+    if (ridStr) res.headers.set("x-req-id", ridStr);
+  } catch {}
+  return res;
+}
+
+// Logger alias (legacy name)
+export const logEvt = logRTC;
+
+// Get anon or throw (legacy name)
+export async function getAnonOrThrow(req: NextRequest): Promise<string> {
+  const a = await anonFrom(req);
+  if (!a) throw new Error("anon-required");
+  return a;
+}
