@@ -1,197 +1,99 @@
 // src/app/api/rtc/_lib.ts
+// Helper: Upstash wrapper + response helpers + anon extract + logging for RTC
+
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import {
-  set as rSet,
-  get as rGet,
-  del as rDel,
-  expire as rExpire,
-  zadd as rZadd,
-  zrange as rZrange,
-  zrem as rZrem,
-  setNxPx as rSetNxPx,
-} from "@/lib/rtc/upstash";
+import { createHmac } from "node:crypto";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-export const preferredRegion = ["fra1","iad1"]; // بدون as const
-
-export const ICE_GRACE_ENABLED = process.env.ICE_GRACE === "1";
-
-export type Role = "caller" | "callee";
-export type Gender = "m" | "f" | "u";
-export type Country = string;
-
-export interface Attrs { gender: Gender; country: Country; ts: number; }
-export interface Filters {
-  filterGenders: "all" | Gender[];
-  filterCountries: "ALL" | Country[];
-  ts: number;
+/* ---------- Headers / Responses (no-store + echo x-req-id) ---------- */
+export function rid(req: Request): string { return req.headers.get("x-req-id") || ""; }
+export function hNoStore(req: Request, extra?: Record<string, string>): Headers {
+  const h = new Headers({ "Cache-Control": "no-store", ...(extra || {}) });
+  const r = rid(req); if (r) h.set("x-req-id", r);
+  return h;
 }
-export interface Pair {
-  callerAnon: string;
-  calleeAnon: string;
-  createdAt: number;
-  active: 1 | 0;
-  offer?: { sdp: string; tag: string; at: number };
-  answer?: { sdp: string; tag: string; at: number };
-  iceCaller?: string[];
-  iceCallee?: string[];
+export function rjson(req: Request, body: any, status = 200) {
+  return new NextResponse(JSON.stringify(body), { status, headers: hNoStore(req, { "content-type": "application/json" }) });
+}
+export function rempty(req: Request, status = 204) {
+  return new NextResponse(null, { status, headers: hNoStore(req) });
 }
 
-// TTLs
-const ATTRS_TTL_S = 180;
-const FILTERS_TTL_S = 180;
-const MAP_TTL_MS = 300_000;   // لخريطتي الدور
-const PAIR_TTL_S = 600;
-const CLAIM_TTL_S = 10;
-const PREV_TTL_S = 600;
+/* ---------- Upstash Redis (REST, single-command POST body = ["CMD", ...]) ---------- */
+const RURL = process.env.UPSTASH_REDIS_REST_URL!;
+const RTOK = process.env.UPSTASH_REDIS_REST_TOKEN!;
 
-// مفاتيح
-export const kQ       = "rtc:q";
-export const kAttrs   = (anon: string)    => `rtc:attrs:${anon}`;
-export const kFilters = (anon: string)    => `rtc:filters:${anon}`;
-export const kPair    = (pairId: string)  => `rtc:pair:${pairId}`;
-export const kPairMap = (anon: string)    => `rtc:pair:map:${anon}`;
-export const kClaim   = (anon: string)    => `rtc:claim:${anon}`;
-export const kLast    = (anon: string)    => `rtc:last:${anon}`;
-export const kPrevFor = (anon: string)    => `rtc:prev-for:${anon}`;
-export const kIdem    = (pairId: string, role: Role, tag: string) =>
-  `rtc:idem:${pairId}:${role}:${tag}`;
-
-// ترويسات/ردود موحدة
-function ridFromHeaders() {
-  try { return crypto.getRandomValues(new Uint32Array(1))[0].toString(16); }
-  catch { return Math.random().toString(16).slice(2); }
-}
-export function withCommon(res: NextResponse, rid?: string) {
-  res.headers.set("Cache-Control", "no-store");
-  res.headers.set("x-req-id", rid || ridFromHeaders());
-  return res;
-}
-export function J(status: number, body: any, rid?: string) {
-  return withCommon(NextResponse.json(body, { status }), rid);
-}
-export function NC(status = 204, rid?: string) {
-  return withCommon(new NextResponse(null, { status }), rid);
-}
-export function BAD(msg = "bad request", rid?: string) { return J(400, { error: msg }, rid); }
-export function FORB(msg = "forbidden", rid?: string) { return J(403, { error: msg }, rid); }
-export function CONFLICT(msg = "conflict", rid?: string) { return J(409, { error: msg }, rid); }
-export function TOOLARGE(msg = "payload too large", rid?: string) { return J(413, { error: msg }, rid); }
-
-// لوج موحد
-export function logEvt(p: Partial<{
-  ts: string; route: string; status: number; rid: string;
-  anonId: string; pairId: string; role: Role;
-  phase: string; mapOK: boolean; pairExists: boolean; note: string;
-}>) {
-  const rec = { ts: new Date().toISOString(), ...p };
-  try { console.log(JSON.stringify(rec)); } catch {}
+async function rexec(cmd: (string | number)[]) {
+  const res = await fetch(RURL, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${RTOK}`, "Content-Type": "application/json" },
+    body: JSON.stringify(cmd)
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j?.error || res.statusText);
+  return j?.result;
 }
 
-// مصادقة anon
-export async function getAnonOrThrow(): Promise<string> {
-  const c = (await cookies()).get("anon")?.value;
-  if (!c) throw new Error("NO_ANON_COOKIE");
-  const anon = c.includes(".") ? c.split(".")[0] : c;
-  if (!anon || anon.length < 6) throw new Error("BAD_ANON_COOKIE");
-  return anon;
-}
+export const R = {
+  async get(key: string) { return await rexec(["GET", key]); },
+  async set(key: string, val: string) { return await rexec(["SET", key, val]); },
+  async del(key: string) { return await rexec(["DEL", key]); },
+  async exists(key: string) { return Number(await rexec(["EXISTS", key])) || 0; },
+  async expire(key: string, seconds: number) { return await rexec(["EXPIRE", key, seconds]); },
+  async hgetall(key: string): Promise<Record<string, string>> {
+    const arr = (await rexec(["HGETALL", key])) as any[] | null;
+    if (!Array.isArray(arr)) return {};
+    const out: Record<string, string> = {};
+    for (let i = 0; i < arr.length; i += 2) out[String(arr[i])] = String(arr[i + 1]);
+    return out;
+  },
+  async hset(key: string, fields: Record<string, any>) {
+    const args: (string | number)[] = ["HSET", key];
+    for (const [k, v] of Object.entries(fields)) args.push(k, typeof v === "string" ? v : JSON.stringify(v));
+    return await rexec(args);
+  },
+  async setNxPx(key: string, val: string, ttlMs: number) {
+    // SET key value NX PX ttl
+    return (await rexec(["SET", key, val, "NX", "PX", ttlMs])) === "OK";
+  },
+  async zcard(key: string) { return Number(await rexec(["ZCARD", key])) || 0; },
+  async lpush(key: string, val: string) { return await rexec(["LPUSH", key, val]); },
+  async lrange(key: string, start: number, stop: number) { return (await rexec(["LRANGE", key, start, stop])) as string[]; },
+  async ltrim(key: string, start: number, stop: number) { return await rexec(["LTRIM", key, start, stop]); },
+};
 
-// OPTIONS
-export function optionsHandler() {
-  const r = new NextResponse(null, { status: 204 });
-  r.headers.set("Cache-Control", "no-store");
-  return r;
-}
+/* ---------- anon extract (header or signed cookie) ---------- */
+export async function anonFrom(req: NextRequest): Promise<string | null> {
+  // Ensure cookie materialization
+  await cookies();
+  // 1) explicit header wins (useful in tests)
+  const hdr = (req.headers.get("x-anon-id") || "").trim();
+  if (hdr) return hdr;
 
-// Helpers
-export function normalizeAttrs(obj: any): Attrs {
-  const gender: Gender = (obj?.gender ?? "u") as Gender;
-  const country: Country = (obj?.country ?? "XX") as Country;
-  return { gender, country, ts: Date.now() };
-}
-export function normalizeFilters(obj: any): Filters {
-  const g = obj?.filterGenders ?? "all";
-  const c = obj?.filterCountries ?? "ALL";
-  const ng = g === "all" ? "all" : Array.isArray(g) ? g : [g];
-  const nc = c === "ALL" ? "ALL" : Array.isArray(c) ? c : [c];
-  return { filterGenders: ng, filterCountries: nc, ts: Date.now() };
-}
-export async function touchTTL(anon: string) {
-  await Promise.all([
-    rExpire(kAttrs(anon), ATTRS_TTL_S),
-    rExpire(kFilters(anon), FILTERS_TTL_S),
-  ]);
-}
-export function newPairId(): string {
-  const ts = Date.now().toString(36);
-  const r = crypto.getRandomValues(new Uint32Array(2));
-  return `p:${ts}:${(r[0].toString(36)+r[1].toString(36)).slice(0,8)}`;
-}
-export async function enqueueIntoQ(anon: string) {
-  await rZadd(kQ, Date.now(), anon);
-}
-
-// اختيار مرشح مع إزالة من الطابور لتقليل السباق
-export async function pickCandidate(selfAnon: string): Promise<string | null> {
-  const window = (await rZrange(kQ, 0, 19)) as string[];
-  if (!window?.length) return null;
-  for (const cand of window) {
-    if (cand === selfAnon) continue;
-    // claim بسيط
-    const ok = await rSetNxPx(kClaim(cand), `by:${selfAnon}`, CLAIM_TTL_S * 1000);
-    if (!ok) continue;
-    // جرّب إزالة المرشح من الطابور
-   try {
-  await rZrem(kQ, cand); // wrapper يُرجع void
-  return cand;
-} catch {}
+  // 2) cookie names commonly used
+  const cks = ["anon", "anonId", "aid", "ditona_anon"];
+  const jar = cookies();
+  for (const n of cks) {
+    const v = jar.get(n)?.value;
+    if (!v) continue;
+    // Accept plain or v1.<id>.<hmac>
+    const parts = v.split(".");
+    if (parts.length === 3 && parts[0] === "v1" && process.env.ANON_SIGNING_SECRET) {
+      const id = parts[1], sig = parts[2];
+      try {
+        const hs = createHmac("sha256", process.env.ANON_SIGNING_SECRET).update(id).digest("hex");
+        if (hs === sig) return id;
+      } catch { return id; }
+    }
+    return v;
   }
   return null;
 }
 
-// كتابة الزوج + خريطتي الطرفين + prev/last قبل إرجاع 200
-export async function createPairAndMap(callerAnon: string, calleeAnon: string) {
-  const pairId = newPairId();
-  const pair: Pair = { callerAnon, calleeAnon, createdAt: Date.now(), active: 1 };
-
-  await Promise.all([
-    // 1) تنظيف خرائط الدور القديمة
-    rDel(kPairMap(callerAnon)),
-    rDel(kPairMap(calleeAnon)),
-
-    // 2) كتابة الزوج + TTL
-    rSet(kPair(pairId), JSON.stringify(pair)),
-    rExpire(kPair(pairId), PAIR_TTL_S),
-
-    // 3) كتابة خريطتي الدور دائمًا مع TTL جديد
-    rSet(kPairMap(callerAnon), `${pairId}|caller`),
-    rExpire(kPairMap(callerAnon), Math.ceil(MAP_TTL_MS / 1000)),
-
-    rSet(kPairMap(calleeAnon), `${pairId}|callee`),
-    rExpire(kPairMap(calleeAnon), Math.ceil(MAP_TTL_MS / 1000)),
-
-    // 4) prev/last (اختياري)
-    rSet(kPrevFor(callerAnon), calleeAnon), rExpire(kPrevFor(callerAnon), PREV_TTL_S),
-    rSet(kPrevFor(calleeAnon), callerAnon), rExpire(kPrevFor(calleeAnon), PREV_TTL_S),
-    rSet(kLast(callerAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId })), rExpire(kLast(callerAnon), PREV_TTL_S),
-    rSet(kLast(calleeAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId })), rExpire(kLast(calleeAnon), PREV_TTL_S),
-  ]);
-
-  return { pairId };
-}
-
-export async function getPairAndRole(
-  anon: string,
-  pairId: string
-): Promise<{ pair: Pair|null; role: Role|null; peer: string|null }> {
-  const s = (await rGet(kPair(pairId))) as string | null;
-  if (!s) return { pair: null, role: null, peer: null };
-  const p = JSON.parse(s) as Pair;
-  if (p.callerAnon === anon) return { pair: p, role: "caller", peer: p.calleeAnon };
-  if (p.calleeAnon === anon) return { pair: p, role: "callee", peer: p.callerAnon };
-  return { pair: null, role: null, peer: null };
+/* ---------- uniform logging ---------- */
+export function logRTC(fields: Record<string, any>) {
+  try {
+    const base = { ts: new Date().toISOString(), mod: "rtc" };
+    console.log(JSON.stringify({ ...base, ...fields }));
+  } catch { /* no-op */ }
 }
