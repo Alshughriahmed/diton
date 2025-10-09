@@ -72,7 +72,7 @@ export async function anonFrom(req: NextRequest): Promise<string | null> {
 
   // 2) cookie names commonly used
   const cks = ["anon", "anonId", "aid", "ditona_anon"];
-  const jar = cookies();
+    const jar = await cookies();
   for (const n of cks) {
     const v = jar.get(n)?.value;
     if (!v) continue;
