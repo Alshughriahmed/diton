@@ -52,7 +52,14 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
   } catch { return `${kind}:${sdp.length}:0`; }
 }
 
+// ==== Matchmake polling jitter/backoff ====
+const MATCH_POLL_BASE_MS = 350;
+const MATCH_POLL_JITTER_MS = 150;
+const jitter = (base = MATCH_POLL_BASE_MS, j = MATCH_POLL_JITTER_MS) =>
+  base + Math.floor(Math.random() * j);
+
 async function ensureEnqueue() {
+  // TODO: replace placeholders with actual session filters when available
   const body = { gender: "u", country: "XX", filterGenders: "all", filterCountries: "ALL" };
   await apiSafeFetch("/api/rtc/enqueue", {
     method: "POST",
@@ -64,16 +71,21 @@ async function ensureEnqueue() {
 
 async function pollMatchmake(ac: AbortController) {
   // Poll until 200 {pairId,role}; on 400 => enqueue then retry
-  let back = 350;
+  let back = MATCH_POLL_BASE_MS;
   while (!ac.signal.aborted) {
     const r = await apiSafeFetch("/api/rtc/matchmake", { method: "GET", headers: rtcHeaders(), timeoutMs: 5000 }).catch(swallowAbort);
     if (r?.status === 200) {
       const j = await r.json().catch(() => ({}));
       if (j?.pairId && j?.role) return j as { pairId: string; role: Role; peerAnonId?: string };
     } else if (r?.status === 400) {
-      await ensureEnqueue();
+      const b = (await r.json().catch(() => ({}))) || {};
+      if (b?.error === "attrs-missing") {
+        await ensureEnqueue();
+      } else {
+        // treat other 400s with backoff
+      }
     }
-    await sleep(back + Math.floor(Math.random() * 200));
+    await sleep(jitter(back, MATCH_POLL_JITTER_MS + 50));
     back = Math.min(back * 1.3, 1400);
   }
   throw new DOMException("aborted", "AbortError");
@@ -130,7 +142,7 @@ async function icePump(currentSid: number) {
       }
       back = 300;
     }
-    await sleep(back + Math.floor(Math.random() * 250));
+    await sleep(jitter(back, 250));
     back = Math.min(back * 1.3, 1200);
   }
 }
@@ -199,7 +211,7 @@ export async function start(media: MediaStream | null, onPhaseCb: (p: Phase) => 
   state.phase = "searching"; onPhase("searching");
   state.ac = new AbortController();
 
-  // Ensure attrs in Redis
+  // Ensure attrs in Redis before polling
   await ensureEnqueue();
 
   const mm = await pollMatchmake(state.ac);
