@@ -5,7 +5,7 @@
 
 import apiSafeFetch from "@/app/chat/safeFetch";
 
-// Attach x-last-stop-ts for ICE grace
+// ========== helpers: headers, sleep, jitter ==========
 function markLastStopTs() {
   try { localStorage.setItem("ditona:lastStopTs", String(Date.now())); } catch {}
 }
@@ -19,9 +19,15 @@ function rtcHeaders(extra?: { pairId?: string | null; role?: string | null }) {
   return h;
 }
 
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+const MATCH_POLL_BASE_MS = 350;
+const MATCH_POLL_JITTER_MS = 150;
+const jitter = (base = MATCH_POLL_BASE_MS, j = MATCH_POLL_JITTER_MS) =>
+  base + Math.floor(Math.random() * j);
+
+// ========== types/state ==========
 export type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 type Role = "caller" | "callee";
-
 type State = {
   sid: number;
   phase: Phase;
@@ -33,17 +39,20 @@ type State = {
   polite: boolean;
   ac?: AbortController;
 };
-const state: State = { sid: 0, phase: "idle", pairId: null, role: null, pc: null, makingOffer: false, ignoreOffer: false, polite: false, ac: undefined };
+const state: State = {
+  sid: 0, phase: "idle", pairId: null, role: null,
+  pc: null, makingOffer: false, ignoreOffer: false, polite: false, ac: undefined
+};
 
 let onPhase: (p: Phase) => void = () => {};
 let cooldownNext = false;
 
-const ICE_SERVERS: RTCConfiguration = { iceServers: [] }; // TURN/ICE supplied elsewhere
+const ICE_SERVERS: RTCConfiguration = { iceServers: [] }; // TURN/ICE configured elsewhere
 
-function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function isAbort(e: any) { return !!(e?.name === "AbortError"); }
 function swallowAbort(e: any) { if (!isAbort(e)) console.warn(e); }
 
+// ========== SDP tagging ==========
 function sdpTagOf(sdp: string, kind: "offer" | "answer") {
   try {
     let x = 0;
@@ -52,51 +61,92 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
   } catch { return `${kind}:${sdp.length}:0`; }
 }
 
-// ==== Matchmake polling jitter/backoff ====
-const MATCH_POLL_BASE_MS = 350;
-const MATCH_POLL_JITTER_MS = 150;
-const jitter = (base = MATCH_POLL_BASE_MS, j = MATCH_POLL_JITTER_MS) =>
-  base + Math.floor(Math.random() * j);
-
-async function ensureEnqueue() {
-  // TODO: replace placeholders with actual session filters when available
-  const body = { gender: "u", country: "XX", filterGenders: "all", filterCountries: "ALL" };
-  await apiSafeFetch("/api/rtc/enqueue", {
-    method: "POST",
-    headers: { "content-type": "application/json", ...rtcHeaders() },
-    body: JSON.stringify(body),
-    timeoutMs: 5000,
-  }).catch(swallowAbort);
+// ========== session attrs ==========
+function getSessionAttrs() {
+  // حاول القراءة من التخزين إن كانت الواجهة تحفظها. افتراضات آمنة عند الغياب.
+  const get = (k: string, d: string) => {
+    try { return localStorage.getItem(k) || d; } catch { return d; }
+  };
+  const gender = get("ditona:gender", "u");           // u=unknown
+  const country = get("ditona:country", "XX");        // XX=unknown
+  const filterGenders = get("ditona:filterGenders", "all");
+  const filterCountries = get("ditona:filterCountries", "ALL");
+  return { gender, country, filterGenders, filterCountries };
 }
 
+// ========== enqueue with guarantee ==========
+async function ensureEnqueue(opts?: { retry?: boolean; max?: number }): Promise<boolean> {
+  const max = opts?.max ?? (opts?.retry ? 4 : 1);
+  for (let i = 0; i < max; i++) {
+    const body = getSessionAttrs();
+    const r = await apiSafeFetch("/api/rtc/enqueue", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...rtcHeaders() },
+      body: JSON.stringify(body),
+      timeoutMs: 5000,
+    }).catch(swallowAbort);
+
+    const status = r?.status ?? 0;
+    console.debug("[enqueue]", { try: i + 1, status });
+
+    // نجاح: 200 أو 204 كلاهما مقبول
+    if (status === 200 || status === 204) return true;
+
+    // 400 يعني غالبًا body ناقص؛ أعد المحاولة بعد جتر قصير
+    if (status === 400 || status === 429 || (status >= 500 && status < 600) || status === 0) {
+      await sleep(jitter(500, 300));
+      continue;
+    }
+
+    // أي حالة أخرى اعتبرها غير حرجة لكن غير ناجحة
+    await sleep(jitter(400, 200));
+  }
+  return false;
+}
+
+// ========== matchmake polling ==========
 async function pollMatchmake(ac: AbortController) {
-  // Poll until 200 {pairId,role}; on 400 => enqueue then retry
   let back = MATCH_POLL_BASE_MS;
   while (!ac.signal.aborted) {
-    const r = await apiSafeFetch("/api/rtc/matchmake", { method: "GET", headers: rtcHeaders(), timeoutMs: 5000 }).catch(swallowAbort);
-    if (r?.status === 200) {
-      const j = await r.json().catch(() => ({}));
+    const r = await apiSafeFetch("/api/rtc/matchmake", {
+      method: "GET",
+      headers: rtcHeaders(),
+      timeoutMs: 5000,
+    }).catch(swallowAbort);
+
+    const status = r?.status ?? 0;
+
+    if (status === 200) {
+      const j = await r!.json().catch(() => ({}));
       if (j?.pairId && j?.role) return j as { pairId: string; role: Role; peerAnonId?: string };
-    } else if (r?.status === 400) {
-      const b = (await r.json().catch(() => ({}))) || {};
+    } else if (status === 204) {
+      // لا شريك الآن
+    } else if (status === 400) {
+      const b = (await r!.json().catch(() => ({}))) || {};
       if (b?.error === "attrs-missing") {
-        await ensureEnqueue();
-      } else {
-        // treat other 400s with backoff
+        // أصل المشكلة في لقطتك: لم يسبق enqueue. نضمنه الآن.
+        await ensureEnqueue({ retry: true, max: 4 });
       }
+    } else if (status === 429) {
+      back = Math.min(back * 1.5, 1600);
+    } else {
+      // شبكة/5xx
+      back = Math.min(back * 1.3, 1600);
     }
+
     await sleep(jitter(back, MATCH_POLL_JITTER_MS + 50));
-    back = Math.min(back * 1.3, 1400);
   }
   throw new DOMException("aborted", "AbortError");
 }
 
+// ========== negotiation guards ==========
 function guardNegotiationNeeded(currentSid: number) {
   if (!state.pc || state.ac?.signal.aborted || currentSid !== state.sid) return false;
   if (!state.pairId || !state.role) return false;
   return true;
 }
 
+// ========== RTC handlers ==========
 function attachHandlers(pc: RTCPeerConnection, currentSid: number) {
   pc.onnegotiationneeded = async () => {
     if (!guardNegotiationNeeded(currentSid)) return;
@@ -107,11 +157,15 @@ function attachHandlers(pc: RTCPeerConnection, currentSid: number) {
       await pc.setLocalDescription(offer);
       await apiSafeFetch("/api/rtc/offer", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-ditona-sdp-tag": sdpTagOf(JSON.stringify(offer), "offer"), ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
+        headers: {
+          "content-type": "application/json",
+          "x-ditona-sdp-tag": sdpTagOf(JSON.stringify(offer), "offer"),
+          ...rtcHeaders({ pairId: state.pairId, role: state.role }),
+        },
         body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
         timeoutMs: 8000,
       }).catch(swallowAbort);
-    } catch (e) { console.warn("[rtc] onnegotiationneeded error", e); }
+    } catch (e) { console.warn("[rtc] onnegotiationneeded", e); }
     finally { state.makingOffer = false; }
   };
 
@@ -183,13 +237,17 @@ async function calleeFlow(currentSid: number) {
         state.ignoreOffer = state.role !== "callee" && collision; // impolite ignores
         try {
           if (!state.ignoreOffer) {
-            if (collision) { try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {} }
+            if (collision) { try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {}
             await state.pc!.setRemoteDescription(offer);
             const answer = await state.pc!.createAnswer();
             await state.pc!.setLocalDescription(answer);
             await apiSafeFetch("/api/rtc/answer", {
               method: "POST",
-              headers: { "content-type": "application/json", "x-ditona-sdp-tag": sdpTagOf(JSON.stringify(answer), "answer"), ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
+              headers: {
+                "content-type": "application/json",
+                "x-ditona-sdp-tag": sdpTagOf(JSON.stringify(answer), "answer"),
+                ...rtcHeaders({ pairId: state.pairId, role: state.role }),
+              },
               body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(answer) }),
               timeoutMs: 8000,
             }).catch(swallowAbort);
@@ -203,7 +261,7 @@ async function calleeFlow(currentSid: number) {
   }
 }
 
-/* Public API */
+// ========== Public API ==========
 export async function start(media: MediaStream | null, onPhaseCb: (p: Phase) => void) {
   stop(); // hard reset
   onPhase = onPhaseCb;
@@ -211,13 +269,20 @@ export async function start(media: MediaStream | null, onPhaseCb: (p: Phase) => 
   state.phase = "searching"; onPhase("searching");
   state.ac = new AbortController();
 
-  // Ensure attrs in Redis before polling
-  await ensureEnqueue();
+  // 1) ضمان attrs قبل أي matchmake
+  const ok = await ensureEnqueue({ retry: true, max: 4 });
+  if (!ok) {
+    console.warn("[start] enqueue failed — aborting search");
+    stop("network");
+    return;
+  }
 
+  // 2) ابدأ البولنغ بجتر
   const mm = await pollMatchmake(state.ac);
   state.pairId = mm.pairId; state.role = mm.role as Role; state.polite = state.role === "callee";
   state.phase = "matched"; onPhase("matched");
 
+  // 3) أنشئ RTCPeerConnection
   state.pc = new RTCPeerConnection(ICE_SERVERS);
   if (media) for (const t of media.getTracks()) state.pc.addTrack(t, media);
   attachHandlers(state.pc, state.sid);
