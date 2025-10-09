@@ -1,111 +1,30 @@
 // src/app/chat/safeFetch.ts
-// Hardening: x-req-id, no-store, include, keepalive, 8s timeout, no-throw.
-
-export type ApiSafeResp<T = any> = {
-  ok: boolean;
-  status: number;
-  headers: Headers;
-  reqId: string;
-  raw: Response | null;
-  json: () => Promise<T | null>;
-  text: () => Promise<string>;
-  error?: unknown;
-};
-
-const uuidv4 = (): string => {
-  try {
-    const g: any = globalThis as any;
-    if (g && g.crypto && typeof g.crypto.randomUUID === "function") {
-      return g.crypto.randomUUID();
-    }
-  } catch {}
-  // RFC4122 v4 fallback
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-};
-
-type InitExt = RequestInit & { timeoutMs?: number; reqId?: string };
-
-export async function apiSafeFetch<T = any>(
+// فرض إرسال الكوكي دائمًا + no-store + x-req-id + مهلة اختيارية
+export default async function apiSafeFetch(
   input: RequestInfo | URL,
-  init: InitExt = {}
-): Promise<ApiSafeResp<T>> {
-  const timeoutMs = init.timeoutMs ?? 8000;
-
+  init: (RequestInit & { timeoutMs?: number }) = {}
+): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    try {
-      controller.abort(new DOMException("timeout", "AbortError"));
-    } catch {
-      // no-op
-    }
-  }, timeoutMs);
+  const t = setTimeout(() => controller.abort(), init.timeoutMs ?? 12000);
 
-  const headers = new Headers(init.headers || undefined);
-
-  // Ensure x-req-id
-  const reqId = init.reqId || headers.get("x-req-id") || uuidv4();
-  headers.set("x-req-id", reqId);
-
-  // Default Accept
-  if (!headers.has("accept")) headers.set("accept", "application/json");
-
-  // Do not force Content-Type unless body exists and not set
-  if (init.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-
-  const finalInit: RequestInit = {
-    ...init,
-    headers,
-    // Network behavior hardening
-    cache: "no-store",
-    credentials: "include",
-    keepalive: true as any,
-    signal: controller.signal,
-  };
+  // رؤوس موحّدة
+  const h = new Headers(init.headers || {});
+  if (!h.has("x-req-id")) h.set("x-req-id", genId());
+  // طلبات العميل ليست مُخزّنة لكن نُصرّح بنية عدم التخزين
+  if (!h.has("cache-control")) h.set("cache-control", "no-store");
 
   try {
-    const res = await fetch(input, finalInit);
-    clearTimeout(timer);
-    const wrap: ApiSafeResp<T> = {
-      ok: res.ok,
-      status: res.status,
-      headers: res.headers,
-      reqId,
-      raw: res,
-      json: async () => {
-        try {
-          return (await res.json()) as T;
-        } catch {
-          return null;
-        }
-      },
-      text: async () => {
-        try {
-          return await res.text();
-        } catch {
-          return "";
-        }
-      },
-    };
-    return wrap;
-  } catch (error) {
-    clearTimeout(timer);
-    return {
-      ok: false,
-      status: 0,
-      headers: new Headers(),
-      reqId,
-      raw: null,
-      json: async () => null,
-      text: async () => "",
-      error,
-    };
+    const res = await fetch(input, {
+      ...init,
+      cache: "no-store",
+      credentials: "include",   // << ضمان الكوكي
+      keepalive: true,
+      signal: controller.signal,
+      headers: h,
+    });
+    return res;
+  } finally {
+    clearTimeout(t);
   }
 }
-
-export default apiSafeFetch;
+function genId() { return Math.random().toString(36).slice(2) + Date.now().toString(36).slice(-4); }
