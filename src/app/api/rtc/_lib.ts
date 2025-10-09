@@ -145,10 +145,10 @@ export async function pickCandidate(selfAnon: string): Promise<string | null> {
     const ok = await rSetNxPx(kClaim(cand), `by:${selfAnon}`, CLAIM_TTL_S * 1000);
     if (!ok) continue;
     // جرّب إزالة المرشح من الطابور
-    try {
-      const removed = await rZrem(kQ, cand);
-      if (removed) return cand;
-    } catch {}
+   try {
+  await rZrem(kQ, cand); // wrapper يُرجع void
+  return cand;
+} catch {}
   }
   return null;
 }
