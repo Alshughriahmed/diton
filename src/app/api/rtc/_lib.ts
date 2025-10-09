@@ -157,24 +157,30 @@ export async function pickCandidate(selfAnon: string): Promise<string | null> {
 export async function createPairAndMap(callerAnon: string, calleeAnon: string) {
   const pairId = newPairId();
   const pair: Pair = { callerAnon, calleeAnon, createdAt: Date.now(), active: 1 };
+
   await Promise.all([
+    // 1) تنظيف خرائط الدور القديمة
+    rDel(kPairMap(callerAnon)),
+    rDel(kPairMap(calleeAnon)),
+
+    // 2) كتابة الزوج + TTL
     rSet(kPair(pairId), JSON.stringify(pair)),
     rExpire(kPair(pairId), PAIR_TTL_S),
 
-    // اكتب الخريطة بشكل صريح مع TTL جديد دائماً
+    // 3) كتابة خريطتي الدور دائمًا مع TTL جديد
     rSet(kPairMap(callerAnon), `${pairId}|caller`),
     rExpire(kPairMap(callerAnon), Math.ceil(MAP_TTL_MS / 1000)),
 
     rSet(kPairMap(calleeAnon), `${pairId}|callee`),
     rExpire(kPairMap(calleeAnon), Math.ceil(MAP_TTL_MS / 1000)),
 
-
-    // prev/last الاختيارية
+    // 4) prev/last (اختياري)
     rSet(kPrevFor(callerAnon), calleeAnon), rExpire(kPrevFor(callerAnon), PREV_TTL_S),
     rSet(kPrevFor(calleeAnon), callerAnon), rExpire(kPrevFor(calleeAnon), PREV_TTL_S),
     rSet(kLast(callerAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId })), rExpire(kLast(callerAnon), PREV_TTL_S),
     rSet(kLast(calleeAnon), JSON.stringify({ ts: Date.now(), note: "paired", pairId })), rExpire(kLast(calleeAnon), PREV_TTL_S),
   ]);
+
   return { pairId };
 }
 
