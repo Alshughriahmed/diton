@@ -161,9 +161,13 @@ export async function createPairAndMap(callerAnon: string, calleeAnon: string) {
     rSet(kPair(pairId), JSON.stringify(pair)),
     rExpire(kPair(pairId), PAIR_TTL_S),
 
-    // خريطتا الدور لنفس الزوج
-    rSetNxPx(kPairMap(callerAnon), `${pairId}|caller`, MAP_TTL_MS),
-    rSetNxPx(kPairMap(calleeAnon), `${pairId}|callee`, MAP_TTL_MS),
+    // اكتب الخريطة بشكل صريح مع TTL جديد دائماً
+    rSet(kPairMap(callerAnon), `${pairId}|caller`),
+    rExpire(kPairMap(callerAnon), Math.ceil(MAP_TTL_MS / 1000)),
+
+    rSet(kPairMap(calleeAnon), `${pairId}|callee`),
+    rExpire(kPairMap(calleeAnon), Math.ceil(MAP_TTL_MS / 1000)),
+
 
     // prev/last الاختيارية
     rSet(kPrevFor(callerAnon), calleeAnon), rExpire(kPrevFor(callerAnon), PREV_TTL_S),
