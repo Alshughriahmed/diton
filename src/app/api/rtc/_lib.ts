@@ -168,8 +168,10 @@ export const logEvt = logRTC;
 /* -----------------------------------------------------------------------------
    Legacy shims expected by existing routes
 ----------------------------------------------------------------------------- */
-export function optionsHandler(req: NextRequest) {
-  return new Response(null, { status: 204, headers: hNoStore(req) });
+export function optionsHandler(req?: NextRequest) {
+  if (req) return new Response(null, { status: 204, headers: hNoStore(req) });
+  // استدعاء قديم بدون req
+  return new Response(null, { status: 204, headers: new Headers({ "Cache-Control": "no-store" }) });
 }
 export function withCommon(res: NextResponse, ridStr?: string) {
   try {
