@@ -5,7 +5,7 @@
 
 import apiSafeFetch from "@/app/chat/safeFetch";
 
-// ========== helpers: headers, sleep, jitter ==========
+// ========= helpers =========
 function markLastStopTs() {
   try { localStorage.setItem("ditona:lastStopTs", String(Date.now())); } catch {}
 }
@@ -18,14 +18,15 @@ function rtcHeaders(extra?: { pairId?: string | null; role?: string | null }) {
   if (extra?.pairId) h["x-pair-id"] = String(extra.pairId);
   return h;
 }
-
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 const MATCH_POLL_BASE_MS = 350;
 const MATCH_POLL_JITTER_MS = 150;
 const jitter = (base = MATCH_POLL_BASE_MS, j = MATCH_POLL_JITTER_MS) =>
   base + Math.floor(Math.random() * j);
+function isAbort(e: any) { return e?.name === "AbortError"; }
+function swallowAbort(e: any) { if (!isAbort(e)) console.warn(e); }
 
-// ========== types/state ==========
+// ========= types/state =========
 export type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 type Role = "caller" | "callee";
 type State = {
@@ -40,19 +41,22 @@ type State = {
   ac?: AbortController;
 };
 const state: State = {
-  sid: 0, phase: "idle", pairId: null, role: null,
-  pc: null, makingOffer: false, ignoreOffer: false, polite: false, ac: undefined
+  sid: 0,
+  phase: "idle",
+  pairId: null,
+  role: null,
+  pc: null,
+  makingOffer: false,
+  ignoreOffer: false,
+  polite: false,
+  ac: undefined,
 };
-
 let onPhase: (p: Phase) => void = () => {};
 let cooldownNext = false;
 
-const ICE_SERVERS: RTCConfiguration = { iceServers: [] }; // TURN/ICE configured elsewhere
+const ICE_SERVERS: RTCConfiguration = { iceServers: [] }; // TURN/ICE elsewhere
 
-function isAbort(e: any) { return !!(e?.name === "AbortError"); }
-function swallowAbort(e: any) { if (!isAbort(e)) console.warn(e); }
-
-// ========== SDP tagging ==========
+// ========= SDP tag =========
 function sdpTagOf(sdp: string, kind: "offer" | "answer") {
   try {
     let x = 0;
@@ -61,20 +65,19 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
   } catch { return `${kind}:${sdp.length}:0`; }
 }
 
-// ========== session attrs ==========
+// ========= session attrs =========
 function getSessionAttrs() {
-  // حاول القراءة من التخزين إن كانت الواجهة تحفظها. افتراضات آمنة عند الغياب.
   const get = (k: string, d: string) => {
     try { return localStorage.getItem(k) || d; } catch { return d; }
   };
-  const gender = get("ditona:gender", "u");           // u=unknown
-  const country = get("ditona:country", "XX");        // XX=unknown
+  const gender = get("ditona:gender", "u");
+  const country = get("ditona:country", "XX");
   const filterGenders = get("ditona:filterGenders", "all");
   const filterCountries = get("ditona:filterCountries", "ALL");
   return { gender, country, filterGenders, filterCountries };
 }
 
-// ========== enqueue with guarantee ==========
+// ========= enqueue with guarantee =========
 async function ensureEnqueue(opts?: { retry?: boolean; max?: number }): Promise<boolean> {
   const max = opts?.max ?? (opts?.retry ? 4 : 1);
   for (let i = 0; i < max; i++) {
@@ -89,22 +92,17 @@ async function ensureEnqueue(opts?: { retry?: boolean; max?: number }): Promise<
     const status = r?.status ?? 0;
     console.debug("[enqueue]", { try: i + 1, status });
 
-    // نجاح: 200 أو 204 كلاهما مقبول
     if (status === 200 || status === 204) return true;
-
-    // 400 يعني غالبًا body ناقص؛ أعد المحاولة بعد جتر قصير
-    if (status === 400 || status === 429 || (status >= 500 && status < 600) || status === 0) {
+    if (status === 400 || status === 429 || status === 0 || (status >= 500 && status < 600)) {
       await sleep(jitter(500, 300));
       continue;
     }
-
-    // أي حالة أخرى اعتبرها غير حرجة لكن غير ناجحة
     await sleep(jitter(400, 200));
   }
   return false;
 }
 
-// ========== matchmake polling ==========
+// ========= matchmake polling =========
 async function pollMatchmake(ac: AbortController) {
   let back = MATCH_POLL_BASE_MS;
   while (!ac.signal.aborted) {
@@ -120,17 +118,15 @@ async function pollMatchmake(ac: AbortController) {
       const j = await r!.json().catch(() => ({}));
       if (j?.pairId && j?.role) return j as { pairId: string; role: Role; peerAnonId?: string };
     } else if (status === 204) {
-      // لا شريك الآن
+      // no partner yet
     } else if (status === 400) {
       const b = (await r!.json().catch(() => ({}))) || {};
       if (b?.error === "attrs-missing") {
-        // أصل المشكلة في لقطتك: لم يسبق enqueue. نضمنه الآن.
         await ensureEnqueue({ retry: true, max: 4 });
       }
     } else if (status === 429) {
       back = Math.min(back * 1.5, 1600);
     } else {
-      // شبكة/5xx
       back = Math.min(back * 1.3, 1600);
     }
 
@@ -139,18 +135,18 @@ async function pollMatchmake(ac: AbortController) {
   throw new DOMException("aborted", "AbortError");
 }
 
-// ========== negotiation guards ==========
+// ========= negotiation guard =========
 function guardNegotiationNeeded(currentSid: number) {
   if (!state.pc || state.ac?.signal.aborted || currentSid !== state.sid) return false;
   if (!state.pairId || !state.role) return false;
   return true;
 }
 
-// ========== RTC handlers ==========
+// ========= RTC handlers =========
 function attachHandlers(pc: RTCPeerConnection, currentSid: number) {
   pc.onnegotiationneeded = async () => {
     if (!guardNegotiationNeeded(currentSid)) return;
-    if (state.role !== "caller") return; // caller only
+    if (state.role !== "caller") return;
     try {
       state.makingOffer = true;
       const offer = await pc.createOffer();
@@ -165,8 +161,11 @@ function attachHandlers(pc: RTCPeerConnection, currentSid: number) {
         body: JSON.stringify({ pairId: state.pairId, sdp: JSON.stringify(offer) }),
         timeoutMs: 8000,
       }).catch(swallowAbort);
-    } catch (e) { console.warn("[rtc] onnegotiationneeded", e); }
-    finally { state.makingOffer = false; }
+    } catch (e) {
+      console.warn("[rtc] onnegotiationneeded", e);
+    } finally {
+      state.makingOffer = false;
+    }
   };
 
   pc.onicecandidate = async (e) => {
@@ -234,10 +233,12 @@ async function calleeFlow(currentSid: number) {
       if (sdp) {
         const offer = JSON.parse(String(sdp));
         const collision = offer?.type === "offer" && (state.makingOffer || state.pc!.signalingState !== "stable");
-        state.ignoreOffer = state.role !== "callee" && collision; // impolite ignores
+        state.ignoreOffer = state.role !== "callee" && collision;
         try {
           if (!state.ignoreOffer) {
-            if (collision) { try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {}
+            if (collision) {
+              try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {}
+            }
             await state.pc!.setRemoteDescription(offer);
             const answer = await state.pc!.createAnswer();
             await state.pc!.setLocalDescription(answer);
@@ -252,7 +253,9 @@ async function calleeFlow(currentSid: number) {
               timeoutMs: 8000,
             }).catch(swallowAbort);
           }
-        } catch (e) { console.warn("[rtc] calleeFlow", e); }
+        } catch (e) {
+          console.warn("[rtc] calleeFlow", e);
+        }
         return;
       }
     }
@@ -261,15 +264,14 @@ async function calleeFlow(currentSid: number) {
   }
 }
 
-// ========== Public API ==========
+// ========= Public API =========
 export async function start(media: MediaStream | null, onPhaseCb: (p: Phase) => void) {
-  stop(); // hard reset
+  stop();
   onPhase = onPhaseCb;
   state.sid = (state.sid + 1) | 0;
   state.phase = "searching"; onPhase("searching");
   state.ac = new AbortController();
 
-  // 1) ضمان attrs قبل أي matchmake
   const ok = await ensureEnqueue({ retry: true, max: 4 });
   if (!ok) {
     console.warn("[start] enqueue failed — aborting search");
@@ -277,33 +279,32 @@ export async function start(media: MediaStream | null, onPhaseCb: (p: Phase) => 
     return;
   }
 
-  // 2) ابدأ البولنغ بجتر
   const mm = await pollMatchmake(state.ac);
-  state.pairId = mm.pairId; state.role = mm.role as Role; state.polite = state.role === "callee";
+  state.pairId = mm.pairId;
+  state.role = mm.role as Role;
+  state.polite = state.role === "callee";
   state.phase = "matched"; onPhase("matched");
 
-  // 3) أنشئ RTCPeerConnection
   state.pc = new RTCPeerConnection(ICE_SERVERS);
   if (media) for (const t of media.getTracks()) state.pc.addTrack(t, media);
   attachHandlers(state.pc, state.sid);
   icePump(state.sid).catch(swallowAbort);
 
-  if (state.role === "caller") await callerFlow(state.sid); else await calleeFlow(state.sid);
+  if (state.role === "caller") await callerFlow(state.sid);
+  else await calleeFlow(state.sid);
 
   state.pc.onconnectionstatechange = () => {
-    if (!state.pc) return;
-    if (state.pc.connectionState === "connected") { state.phase = "connected"; onPhase("connected"); }
-    if (state.pc.connectionState === "closed") { stop(); }
+    const s = state.pc?.connectionState;
+    if (s === "connected") { state.phase = "connected"; onPhase("connected"); }
+    if (s === "closed") { stop(); }
   };
 }
 
-export function stop(mode: "full"|"network" = "full") {
+export function stop(mode: "full" | "network" = "full") {
   try { markLastStopTs(); } catch {}
   try { state.ac?.abort(); } catch {}
   state.ac = undefined;
-
   try { state.pc?.close(); } catch {} finally { state.pc = null; }
-
   if (mode === "full") {
     state.pairId = null; state.role = null; state.phase = "stopped";
     try { localStorage.removeItem("ditona_pair"); } catch {}
@@ -320,4 +321,5 @@ export async function next() {
     await start(null, onPhase);
   } finally { cooldownNext = false; }
 }
+
 export async function prev() { return next(); }
