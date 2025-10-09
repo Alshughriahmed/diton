@@ -110,3 +110,52 @@ export function logRTC(fields: Record<string, any>) {
     console.log(JSON.stringify({ ts: new Date().toISOString(), mod: "rtc", ...fields }));
   } catch {}
 }
+/* ---------- compatibility shims for routes that import helpers ---------- */
+
+// خطأ HTTP صريح ليلتقطه withCommon
+class HttpError extends Error {
+  status: number;
+  body: any;
+  constructor(status: number, body: any) {
+    super(typeof body === "string" ? body : JSON.stringify(body));
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/** يلفّ أي handler ويضمن ردود no-store + x-req-id، ويلتقط الأخطاء القياسية */
+export function withCommon(
+  handler: (req: NextRequest) => Promise<Response> | Response
+) {
+  return async (req: NextRequest): Promise<Response> => {
+    try {
+      const res = await handler(req);
+      // تأكيد x-req-id على الاستجابة إن توفّر في الطلب
+      const rid = reqId(req);
+      if (rid && (res as any)?.headers?.set) {
+        try { (res as any).headers.set("x-req-id", rid); } catch {}
+      }
+      return res;
+    } catch (e: any) {
+      if (e instanceof HttpError) {
+        return rjson(req, e.body, e.status);
+      }
+      return rjson(req, { error: "internal-error" }, 500);
+    }
+  };
+}
+
+/** مخصص للـOPTIONS في الملفات التي تفعل: export const OPTIONS = optionsHandler */
+export function optionsHandler(req: NextRequest) {
+  return rempty(req, 204);
+}
+
+/** توافق مع الاسم القديم؛ يوجه إلى مسجلنا الحالي */
+export const logEvt = logRTC;
+
+/** يعيد anon أو يرمي 401 ليُلتقط داخل withCommon */
+export async function getAnonOrThrow(req: NextRequest): Promise<string> {
+  const id = await anonFrom(req);
+  if (id) return id;
+  throw new HttpError(401, { error: "anon-missing" });
+}
