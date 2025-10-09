@@ -1,30 +1,42 @@
-import { NextResponse } from "next/server";
+// src/app/api/health/route.ts
+
+import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const preferredRegion = ["fra1", "iad1"] as string[];
 
-const H = {
-  "cache-control": "no-store",
-  "referrer-policy": "no-referrer",
-} as const;
-
-function withReqId(res: NextResponse, req?: Request): NextResponse {
-  try {
-    const incoming = req?.headers?.get("x-req-id") ?? "";
-    const id =
-      incoming || (globalThis.crypto?.randomUUID?.() ?? String(Date.now()));
-    res.headers.set("x-req-id", id);
-    if (!res.headers.has("cache-control")) res.headers.set("cache-control", "no-store");
-    if (!res.headers.has("referrer-policy")) res.headers.set("referrer-policy", "no-referrer");
-  } catch {}
-  return res;
+function rid(req: NextRequest): string {
+  const h = req.headers.get("x-req-id");
+  // @ts-ignore crypto exists in edge/node runtimes
+  return h || (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 }
 
-export async function GET(req: Request) {
-  return withReqId(NextResponse.json({ ok: true }, { headers: H }), req);
+function json(req: NextRequest, body: any, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "x-req-id": rid(req),
+    },
+  });
 }
 
-export async function OPTIONS(req: Request) {
-  return withReqId(new NextResponse(null, { status: 204, headers: H }), req);
+export async function GET(req: NextRequest) {
+  return json(req, {
+    ok: true,
+    ts: Date.now(),
+    env: "health",
+  });
+}
+
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      "Cache-Control": "no-store",
+      "x-req-id": rid(req),
+    },
+  });
 }
