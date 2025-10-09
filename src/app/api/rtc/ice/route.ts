@@ -1,145 +1,93 @@
-// Route: /api/rtc/ice
-// Policies: preferredRegion, runtime/dynamic/revalidate, await cookies(), no-store, OPTIONS=204, echo x-req-id
+import { NextRequest } from "next/server";
+import { cookies } from "next/headers";
+import { R, rjson, rempty, hNoStore, anonFrom, logRTC } from "../_lib";
+
 export const preferredRegion = ["fra1","iad1"];
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-import { cookies } from "next/headers";
-import { NextRequest, NextResponse } from "next/server";
-import { extractAnonId } from "@/lib/rtc/auth";
-import { get, lpush, lrange, ltrim, expire } from "@/lib/rtc/upstash";
+const MAX_CAND_BYTES = 4 * 1024;
+const ICE_MAX = 100;
+const PAIR_TTL_S = 150;
+const GRACE_MS = (process.env.ICE_GRACE ?? "1") === "0" ? 0 : 5000; // ICE_GRACE≤5s
 
-// -------- helpers --------
-const H_NO_STORE: Record<string,string> = { "Cache-Control":"no-store" };
-
-function noStoreJson(req: Request, body: any, init?: number|ResponseInit) {
-  const r = NextResponse.json(body, typeof init==="number"?{status:init}:init);
-  r.headers.set("Cache-Control","no-store");
-  const rid = req.headers.get("x-req-id"); if (rid) r.headers.set("x-req-id", rid);
-  return r;
-}
-function noStoreEmpty(req: Request, status: number) {
-  const r = new NextResponse(null, { status });
-  r.headers.set("Cache-Control","no-store");
-  const rid = req.headers.get("x-req-id"); if (rid) r.headers.set("x-req-id", rid);
-  return r;
-}
-function headersWithReqId(req: Request, extra?: Record<string,string>) {
-  const rid = req.headers.get("x-req-id") || "";
-  return new Headers({ ...H_NO_STORE, ...(extra||{}), ...(rid?{ "x-req-id": rid }:{}) });
-}
-function log(req: Request, data: Record<string,unknown>) {
-  const rid = req.headers.get("x-req-id") || "";
-  console.log(JSON.stringify({ reqId: rid, role: "server", ...data }));
-}
-function parseIceGraceSec(): number {
-  const v = process.env.ICE_GRACE;
-  if (!v) return 0;
-  const n = Number.parseInt(v, 10);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.min(n, 5); // ≤5s
-}
 function sizeOk(candidate: any): boolean {
   try {
     const s = JSON.stringify(candidate);
-    return Buffer.byteLength(s, "utf8") <= 4 * 1024; // ICE ≤ ~4KB
+    return Buffer.byteLength(s, "utf8") <= MAX_CAND_BYTES;
   } catch { return false; }
 }
-async function auth(anon: string, pairId: string) {
-  const map = await get(`rtc:pair:map:${anon}`);
+
+async function myRoleFor(anon: string, pairId: string) {
+  const map = await R.get(`rtc:pair:map:${anon}`);
   if (!map) return null;
   const [pid, role] = String(map).split("|");
   return pid === pairId ? (role as "caller"|"callee") : null;
 }
 
-// -------- OPTIONS --------
 export async function OPTIONS(req: NextRequest) {
   await cookies();
-  return new Response(null, { status: 204, headers: headersWithReqId(req) });
+  return new Response(null, { status: 204, headers: hNoStore(req) });
 }
 
-// -------- POST: push ICE to peer --------
+// push my candidate to the peer (store inside pair hash)
 export async function POST(req: NextRequest) {
-  const t0 = Date.now();
   await cookies();
+  const anon = await anonFrom(req);
+  if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
-  const anon = extractAnonId(req);
-  if (!anon) return noStoreJson(req, { error: "anon-required" }, 403);
+  const b: any = await req.json().catch(() => ({}));
+  const pairId = String(b?.pairId || "");
+  const role   = String(b?.role || "");
+  const cand   = b?.candidate;
 
-  let body: any = {};
-  try { body = await req.json(); } catch {}
-  const pairId = String(body?.pairId || "").trim();
-  const candidate = body?.candidate;
+  if (!pairId || !role || !cand) return rjson(req, { error: "bad-input" }, 400);
+  if (!sizeOk(cand)) return rjson(req, { error: "too-large" }, 413);
 
-  if (!pairId || !candidate) return noStoreJson(req, { error: "bad-input" }, 400);
-  if (!sizeOk(candidate))  return noStoreJson(req, { error: "too-large" }, 413);
+  const myRole = await myRoleFor(anon, pairId);
+  if (!myRole || myRole !== role) return rjson(req, { error: "forbidden" }, 403);
 
-  const role = await auth(anon, pairId);
+  const dstField = myRole === "caller" ? "ice_b" : "ice_a"; // push to the peer
+  const pair = await R.hgetall(`rtc:pair:${pairId}`);
+  const arr: any[] = pair?.[dstField] ? JSON.parse(String(pair[dstField])) : [];
+  arr.push(cand);
+  if (arr.length > ICE_MAX) arr.splice(0, arr.length - ICE_MAX);
 
-  // ICE grace: ضمن النافذة نعيد 204 بدلاً من 403
-  if (!role) {
-    const graceSec = parseIceGraceSec();
-    if (graceSec > 0) {
-      const last = Number(req.headers.get("x-last-stop-ts") || "0");
-      const now = Date.now();
-      if (last > 0 && (now - last) <= graceSec * 1000) {
-        log(req, { op:"ice", phase:"post", outcome:"204-grace", anonId:anon, pairId, latencyMs: Date.now()-t0 });
-        return noStoreEmpty(req, 204);
-      }
-    }
-    return noStoreJson(req, { error: "forbidden" }, 403);
-  }
+  await R.hset(`rtc:pair:${pairId}`, { [dstField]: JSON.stringify(arr) });
+  await R.expire(`rtc:pair:${pairId}`, PAIR_TTL_S);
 
-  const dest = role === "caller" ? "b" : "a";
-  const from = role === "caller" ? "a" : "b";
-  const key  = `rtc:pair:${pairId}:ice:${dest}`;
-
-  try {
-    await lpush(key, JSON.stringify({ from, cand: candidate }));
-    await expire(key, 150);
-    await expire(`rtc:pair:${pairId}`, 150);
-    log(req, { op:"ice", phase:"post", outcome:"204-ok", anonId:anon, pairId, latencyMs: Date.now()-t0 });
-    return noStoreEmpty(req, 204);
-  } catch (e) {
-    log(req, { op:"ice", phase:"post", outcome:"500", msg:String(e), anonId:anon, pairId, latencyMs: Date.now()-t0 });
-    return noStoreJson(req, { error: "ice-post-fail" }, 500);
-  }
+  logRTC({ route: "/api/rtc/ice", status: 204, rid: req.headers.get("x-req-id"), anonId: anon, pairId, role, phase: "push" });
+  return rempty(req, 204);
 }
 
-// -------- GET: poll ICE destined to me --------
+// poll candidates destined to me (with ICE-Grace)
 export async function GET(req: NextRequest) {
-  const t0 = Date.now();
   await cookies();
-
-  const anon = extractAnonId(req);
-  if (!anon) return noStoreJson(req, { error: "anon-required" }, 403);
+  const anon = await anonFrom(req);
+  if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
   const url = new URL(req.url);
-  const q = (url.searchParams.get("pairId") || "").trim();
-  const h = (req.headers.get("x-pair-id") || "").trim();
-  const pairId = q || h;
-  if (!pairId) return noStoreJson(req, { error: "pair-required" }, 400);
+  const pairId = (url.searchParams.get("pairId") || req.headers.get("x-pair-id") || "").trim();
+  if (!pairId) return rjson(req, { error: "pair-required" }, 400);
 
-  const role = await auth(anon, pairId);
-  if (!role) return noStoreJson(req, { error: "forbidden" }, 403);
-
-  const me  = role === "caller" ? "a" : "b";
-  const key = `rtc:pair:${pairId}:ice:${me}`;
-
-  try {
-    const items = await lrange(key, 0, 49);
-    if (!items || items.length === 0) {
-      log(req, { op:"ice", phase:"poll", outcome:"204-empty", anonId:anon, pairId, latencyMs: Date.now()-t0 });
-      return noStoreEmpty(req, 204);
-    }
-    await ltrim(key, items.length, -1);
-    await expire(`rtc:pair:${pairId}`, 150);
-    const out = items.map((s) => JSON.parse(String(s)));
-    log(req, { op:"ice", phase:"poll", outcome:"200", count: out.length, anonId:anon, pairId, latencyMs: Date.now()-t0 });
-    return noStoreJson(req, out, 200);
-  } catch (e) {
-    log(req, { op:"ice", phase:"poll", outcome:"500", msg:String(e), anonId:anon, pairId, latencyMs: Date.now()-t0 });
-    return noStoreJson(req, { error: "ice-get-fail" }, 500);
+  const role = await myRoleFor(anon, pairId);
+  if (!role) {
+    const lastStopTs = Number(req.headers.get("x-last-stop-ts") || 0);
+    const graceApplied = GRACE_MS > 0 && lastStopTs > 0 && (Date.now() - lastStopTs) <= GRACE_MS;
+    logRTC({ route: "/api/rtc/ice", status: graceApplied ? 204 : 403, rid: req.headers.get("x-req-id"), anonId: anon, pairId, phase: "grace-check", graceApplied });
+    if (graceApplied) return rempty(req, 204);
+    return rjson(req, { error: "forbidden" }, 403);
   }
+
+  const myField = role === "caller" ? "ice_a" : "ice_b";
+  const pair = await R.hgetall(`rtc:pair:${pairId}`);
+  const arr: any[] = pair?.[myField] ? JSON.parse(String(pair[myField])) : [];
+  if (!arr.length) return rempty(req, 204);
+
+  await R.hset(`rtc:pair:${pairId}`, { [myField]: JSON.stringify([]) });
+  await R.expire(`rtc:pair:${pairId}`, PAIR_TTL_S);
+
+  logRTC({ route: "/api/rtc/ice", status: 200, rid: req.headers.get("x-req-id"), anonId: anon, pairId, role, phase: "poll", count: arr.length });
+  return rjson(req, arr, 200);
 }
