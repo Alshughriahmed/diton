@@ -159,3 +159,78 @@ export async function getAnonOrThrow(req: NextRequest): Promise<string> {
   if (id) return id;
   throw new HttpError(401, { error: "anon-missing" });
 }
+/* ---------- attrs/filters normalization + redis key helpers ---------- */
+
+type Attrs = { gender: string; country: string };
+type Filters = { filterGenders: string; filterCountries: string };
+
+const G_MAP: Record<string, string> = {
+  m: "m", male: "m",
+  f: "f", female: "f",
+  c: "c", couple: "c",
+  l: "l", lgbt: "l", LGBT: "l",
+  u: "u", unknown: "u", x: "u", any: "u",
+};
+
+function canonGender(v: any): string {
+  if (!v) return "u";
+  const s = String(v).toLowerCase().trim();
+  return G_MAP[s] || "u";
+}
+
+function canonCountry2(v: any): string {
+  if (!v) return "XX";
+  const s = String(v).trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(s) ? s : "XX";
+}
+
+function uniqCsvUpper(csv: string): string {
+  const set = new Set<string>();
+  for (const p of String(csv).split(",")) {
+    const s = p.trim().toUpperCase();
+    if (s) set.add(s);
+  }
+  return Array.from(set).join(",");
+}
+
+/** يحوّل مدخلات الواجهة إلى attrs قانونية */
+export function normalizeAttrs(input: any): Attrs {
+  return {
+    gender: canonGender(input?.gender),
+    country: canonCountry2(input?.country),
+  };
+}
+
+/** يحوّل مدخلات الواجهة إلى فلاتر قانونية */
+export function normalizeFilters(input: any): Filters {
+  // filterGenders: "all" أو CSV من m,f,c,l
+  let fg = String(input?.filterGenders ?? "all").trim().toLowerCase();
+  if (fg !== "all") {
+    const set = new Set<string>();
+    for (const p of fg.split(",")) {
+      const g = G_MAP[String(p).toLowerCase().trim()] || "";
+      if (g && g !== "u") set.add(g);
+    }
+    fg = set.size ? Array.from(set).join(",") : "all";
+  }
+
+  // filterCountries: "ALL" أو CSV ISO2
+  let fc = String(input?.filterCountries ?? "ALL").trim();
+  if (fc.toUpperCase() !== "ALL") {
+    const list = uniqCsvUpper(fc)
+      .split(",")
+      .filter(c => /^[A-Z]{2}$/.test(c));
+    fc = list.length ? list.join(",") : "ALL";
+  } else {
+    fc = "ALL";
+  }
+
+  return { filterGenders: fg, filterCountries: fc };
+}
+
+/* ---------- redis key builders (ضمن النطاق المسموح) ---------- */
+export const kAttrs = (anon: string) => `rtc:attrs:${anon}`;
+export const kFilters = (anon: string) => `rtc:filters:${anon}`;
+export const kPairMap = (anon: string) => `rtc:pair:map:${anon}`;
+export const kClaim = (anon: string) => `rtc:claim:${anon}`;
+export const kLast = (anon: string) => `rtc:last:${anon}`;
