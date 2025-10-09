@@ -1,78 +1,76 @@
-// src/app/api/rtc/matchmake/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import {
-  optionsHandler,
-  withCommon,
-  logEvt,
-  getAnonOrThrow,
-  kAttrs, kPair, kPairMap, kQ,
-  pickCandidate,
-  createPairAndMap,
-  NC, J,
-} from "../_lib";
-import {
-  get as rGet,
-  del as rDel,
-  zrem as rZrem,
-} from "@/lib/rtc/upstash";
+import { R, rjson, rempty, hNoStore, anonFrom, logRTC } from "../_lib";
+import { matchmake } from "@/lib/rtc/mm"; // موجود لديكم ويقوم بالاختيار/الإنشاء
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const preferredRegion = ["fra1","iad1"]; // بدون as const
+export const preferredRegion = ["fra1","iad1"];
+
+async function fastPath(anon: string) {
+  const map = await R.get(`rtc:pair:map:${anon}`);
+  if (!map) return null;
+  const [pairId, role] = String(map).split("|");
+  if (!pairId || !role) {
+    await R.del(`rtc:pair:map:${anon}`);
+    return null;
+  }
+  const pairExists = await R.exists(`rtc:pair:${pairId}`);
+  if (!pairExists) {
+    await R.del(`rtc:pair:map:${anon}`);
+    return null;
+  }
+  const p = await R.hgetall(`rtc:pair:${pairId}`);
+  const a = p?.a || p?.callerAnon, b = p?.b || p?.calleeAnon;
+  const ok = (a === anon && (role === "caller" || p?.role_a === "caller")) ||
+             (b === anon && (role === "callee" || p?.role_b === "callee"));
+  if (!ok) {
+    await R.del(`rtc:pair:map:${anon}`);
+    return null;
+  }
+  const peerAnonId = a === anon ? b : a;
+  return { pairId, role, peerAnonId, pairExists: true };
+}
 
 async function handle(req: NextRequest) {
-  await cookies(); // القاعدة
-  const rid = req.headers.get("x-req-id") || "";
   const t0 = Date.now();
+  await cookies();
+  const anon = await anonFrom(req);
+  if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
-  try {
-    const anon = await getAnonOrThrow();
-
-    // 1) وجود attrs إجباري
-    const attrsRaw = (await rGet(kAttrs(anon))) as string | null;
-    if (!attrsRaw) {
-      logEvt({ route: "/api/rtc/matchmake", status: 400, rid, anonId: anon, note: "no-attrs" });
-      return withCommon(NextResponse.json({ error: "no-attrs" }, { status: 400 }), rid);
-    }
-
-    // 2) fast-path مع تحقق الزوج، وإلا تنظيف الخريطة الراكدة
-    const mapped = (await rGet(kPairMap(anon))) as string | null;
-    if (mapped) {
-      const [pid, role] = String(mapped).split("|");
-      const s = (await rGet(kPair(pid))) as string | null;
-      if (s && (role === "caller" || role === "callee")) {
-        logEvt({ route: "/api/rtc/matchmake", status: 200, rid, anonId: anon, pairId: pid, role: role as any, phase: "fast-path", pairExists: true, mapOK: true });
-        return withCommon(NextResponse.json({ pairId: pid, role }, { status: 200 }), rid);
-      }
-      await rDel(kPairMap(anon)); // خريطة راكدة
-    }
-
-    // 3) مرشح من الطابور
-    const cand = await pickCandidate(anon);
-    if (!cand) {
-      logEvt({ route: "/api/rtc/matchmake", status: 204, rid, anonId: anon, phase: "no-candidate" });
-      return NC(204, rid);
-    }
-
-    // 4) إنشاء الزوج + الخريطتين، ثم إزالة الطرفين من الطابور
-    const { pairId } = await createPairAndMap(anon, cand);
-    await Promise.allSettled([ rZrem(kQ, anon), rZrem(kQ, cand) ]);
-
-    logEvt({ route: "/api/rtc/matchmake", status: 200, rid, anonId: anon, pairId, role: "caller", phase: "new-pair" });
-    return withCommon(NextResponse.json({ pairId, role: "caller", peerAnonId: cand }, { status: 200 }), rid);
-  } catch (e: any) {
-    logEvt({ route: "/api/rtc/matchmake", status: 401, rid, note: String(e?.message || e) });
-    return J(401, { error: "matchmake-failed" }, rid);
-  } finally {
-    logEvt({ route: "/api/rtc/matchmake", status: 200, rid, note: `ms=${Date.now() - t0}` });
+  // 1) Fast-path (تحقق من الخريطة + وجود الزوج)
+  const fp = await fastPath(anon);
+  if (fp) {
+    logRTC({ route: "/api/rtc/matchmake", status: 200, rid: req.headers.get("x-req-id"), anonId: anon, ...fp, phase: "fast-path" });
+    return rjson(req, { pairId: fp.pairId, role: fp.role, peerAnonId: fp.peerAnonId }, 200);
   }
+
+  // 2) attrs guard: غياب attrs => 400 (حالتكم الحالية إذا كان Redis مُعطلاً)
+  const attrs = await R.get(`rtc:attrs:${anon}`);
+  if (!attrs) {
+    logRTC({ route: "/api/rtc/matchmake", status: 400, rid: req.headers.get("x-req-id"), anonId: anon, phase: "no-attrs" });
+    return rjson(req, { error: "attrs-missing" }, 400);
+  }
+
+  // 3) المسار العادي عبر طبقتكم (قفل/عدالة/إنشاء زوج وكتابة الخرائط)
+  const out = await matchmake(anon); // يُفترض أن يعيد {status, body}
+  logRTC({
+    route: "/api/rtc/matchmake",
+    status: out?.status ?? 204,
+    rid: req.headers.get("x-req-id"),
+    anonId: anon,
+    phase: "mm",
+    latencyMs: Date.now() - t0,
+  });
+
+  if (!out?.status || out.status === 204) return rempty(req, 204);
+  return rjson(req, out.body || {}, out.status);
 }
 
 export async function OPTIONS(req: NextRequest) {
   await cookies();
-  return optionsHandler();
+  return new Response(null, { status: 204, headers: hNoStore(req) });
 }
-export async function POST(req: NextRequest) { return handle(req); }
-export async function GET(req: NextRequest)  { return handle(req); }
+export const GET = handle;
+export const POST = handle;
