@@ -9,6 +9,7 @@ import {
   normalizeAttrs,
   normalizeFilters,
   kAttrs, kFilters, kPairMap, kClaim, kLast, // مفاتيح ضمن نطاقكم
+  rjson,
 } from "../_lib";
 import { set as rSet, del as rDel, expire as rExpire } from "@/lib/rtc/upstash";
 import { zadd as rZadd } from "@/lib/rtc/upstash";
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
     ]);
 
     logEvt({ route: "/api/rtc/enqueue", status: 200, rid, anonId: anon, phase: "enqueue", note: "ok" });
-    return withCommon(NextResponse.json({ ok: true }, { status: 200 }), rid);
+    return rjson(req, { ok: true }, 200);
   } catch (e: any) {
     logEvt({ route: "/api/rtc/enqueue", status: 401, rid, phase: "auth|parse", note: String(e?.message || e) });
     // لا نُرجع تفاصيل إضافية
@@ -63,4 +64,5 @@ export async function POST(req: NextRequest) {
     logEvt({ route: "/api/rtc/enqueue", status: 200, rid, note: `ms=${Date.now() - t0}` });
   }
 }
+
 
