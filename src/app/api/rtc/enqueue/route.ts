@@ -20,7 +20,7 @@ export const preferredRegion = ["fra1","iad1"]; // بدون as const
 
 export async function OPTIONS(_req: NextRequest) {
   await cookies();
-  return optionsHandler();
+  return optionsHandler(_req);
 }
 
 export async function POST(req: NextRequest) {
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
 
   try {
     await cookies(); // التزام القاعدة
-    const anon = await getAnonOrThrow();
+    const anon = await getAnonOrThrow(req);
 
     // خصائص/مرشحات مع افتراضيات آمنة
     const body = await req.json().catch(() => ({}));
@@ -63,3 +63,4 @@ export async function POST(req: NextRequest) {
     logEvt({ route: "/api/rtc/enqueue", status: 200, rid, note: `ms=${Date.now() - t0}` });
   }
 }
+
