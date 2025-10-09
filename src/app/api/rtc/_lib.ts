@@ -97,7 +97,6 @@ export function logRTC(fields: Record<string, any>) {
   } catch { /* no-op */ }
 }
 // ---- Compatibility shims for legacy imports (enqueue/others) ----
-import type { NextRequest, NextResponse } from "next/server";
 
 // OPTIONS handler returning 204 + no-store (legacy name)
 export function optionsHandler(req: NextRequest) {
