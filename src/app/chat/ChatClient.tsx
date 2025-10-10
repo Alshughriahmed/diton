@@ -518,8 +518,9 @@ try{
         
         // Start RTC matchmaking after media is ready
         if (localRef.current?.srcObject) {
-          rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase);
-        }
+        const _m = await rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase).catch(()=>undefined);
+       // _m قد يحوي {pairId, role}. التدفق الحالي يضبط setRtcPhase('matched') داخليًا.
+      }
       }
       setReady(true);
     }).catch(()=>{});
@@ -743,33 +744,29 @@ useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
                           localRef.current.muted = true; 
                           localRef.current.play().catch(()=>{}); 
                           
-                          // Start RTC matchmaking after media is ready
-                          if (localRef.current?.srcObject) {
-                            rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase);
-                          }
+                         // Start RTC matchmaking after media is ready
+                        if (localRef.current?.srcObject) {
+                         const m = await rtc
+                         .start(localRef.current.srcObject as MediaStream, setRtcPhase)
+                         .catch(() => undefined);
+
+                          if (m?.pairId && m?.role) {
+                         window.dispatchEvent(new CustomEvent("rtc:matched", { detail: m }));
                         }
-                        setReady(true);
+                     }
+
+                                  setReady(true);
                       }).catch((error) => {
-                        console.warn('Retry failed:', error);
-                        if (error?.name === 'NotAllowedError') {
-                          setCameraPermissionHint('قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح');
-                        } else if (error?.name === 'NotReadableError' || error?.name === 'AbortError') {
-                          setCameraPermissionHint('قم بإغلاق التبويب الثاني أو اسمح للكاميرا');
-                        } else {
-                          setCameraPermissionHint('خطأ في الوصول للكاميرا - تأكد من الأذونات');
-                        }
-                      });
-                    }}
-                    className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
-                  >
-                    إعادة المحاولة
-                  </button>
-                </>
-              ) : (
-                <div>Requesting camera/mic…</div>
-              )}
-            </div>
-          )}
+                     console.warn("Retry failed:", error);
+                  if (error?.name === "NotAllowedError") {
+                setCameraPermissionHint("قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح");
+              } else if (error?.name === "NotReadableError" || error?.name === "AbortError") {
+                  setCameraPermissionHint("قم بإغلاق التبويب الثاني أو اسمح للكاميرا");
+             } else {
+               setCameraPermissionHint("خطأ في الوصول للكاميرا - تأكد من الأذونات");
+               }
+                 });
+
 
           {/* My Controls - Top Right */}
           <MyControls />
