@@ -155,6 +155,11 @@ export const R = {
   async ttl(key: string): Promise<number> {
     return await upstash(["TTL", key]);
   },
+    // conditional set: NX + PX <ms>  (idempotency helper)
+  async setNxPx(key: string, val: string, pxMs: number): Promise<boolean> {
+    const res = await upstash(["SET", key, val, "NX", "PX", pxMs]);
+    return res === "OK";
+  },
 
   // hashes
   async hset(key: string, obj: Record<string, string | number>): Promise<number> {
