@@ -284,18 +284,37 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
         window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: state.pairId, role: state.role } }));
       }
 
-      // PC + ميديا
-      state.pc = new RTCPeerConnection(ICE_SERVERS);
-      attachPnHandlers(state.pc, state.sid);
-      if (media) for (const t of media.getTracks()) state.pc.addTrack(t, media);
+      // التعرّف على الـ MediaStream القادم من ChatClient (إن وُجد)
+const media: MediaStream | null =
+  (arg1 && typeof MediaStream !== "undefined" && arg1 instanceof MediaStream)
+    ? (arg1 as MediaStream)
+    : null;
 
-      state.pc.ontrack = (ev) => {
-        const [s] = ev.streams || [];
-        if (s && typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: s } }));
-        }
-      };
+state.pc = new RTCPeerConnection(ICE_SERVERS);
+attachPnHandlers(state.pc, state.sid);
 
+// اربط مسارات الميديا (هذا ما يفجّر onnegotiationneeded)
+if (media) {
+  for (const track of media.getTracks()) {
+    try { state.pc.addTrack(track, media); } catch {}
+  }
+} else {
+  // في حال لم يُمرَّر MediaStream لأي سبب، فعّل PN باستقبالات صامتة
+  try { state.pc.addTransceiver("audio", { direction: "recvonly" }); } catch {}
+  try { state.pc.addTransceiver("video", { direction: "recvonly" }); } catch {}
+}
+
+// مرّر الستريم القادم إلى الواجهة
+state.pc.ontrack = (ev) => {
+  try {
+    const stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream } }));
+    }
+  } catch {}
+};
+
+      
       // ICE pump
       iceExchange(state.sid).catch(swallowAbort);
 
