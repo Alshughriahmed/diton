@@ -5,7 +5,7 @@
 
 import apiSafeFetch from "@/app/chat/safeFetch";
 
-// ملاحظة: إن كان عندك ملف rtcHeaders/markLastStopTs استخدمه؛
+/* === headers helpers (محلية وخفيفة) === */
 function rtcHeaders(extra?: { pairId?: string | null; role?: string | null }) {
   const h = new Headers();
   if (extra?.pairId) h.set("x-pair-id", String(extra.pairId));
@@ -16,6 +16,7 @@ function markLastStopTs() {
   try { (window as any).__ditona_last_stop_ts = Date.now(); } catch {}
 }
 
+/* === types/state === */
 export type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 type Role = "caller" | "callee";
 
@@ -29,7 +30,7 @@ type State = {
   makingOffer: boolean;
   ignoreOffer: boolean;
   polite: boolean;
-  ac?: AbortController; // يُنشأ داخليًا فقط
+  ac?: AbortController;
 };
 
 const state: State = {
@@ -45,26 +46,26 @@ const state: State = {
   ac: undefined,
 };
 
+let inflightStart: Promise<{ pairId: string | null; role: Role | null } | null> | null = null;
 let onPhaseCallback: (p: Phase) => void = () => {};
 let cooldownNext = false;
 
-const ICE_SERVERS: RTCConfiguration = { iceServers: [] }; // لا تغييرات على TURN من هنا
+const ICE_SERVERS: RTCConfiguration = { iceServers: [] };
 
-function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
-function isAbort(e: any) { return !!(e?.name === "AbortError"); }
+/* === utils === */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const isAbort = (e: any) => !!(e?.name === "AbortError");
 function swallowAbort(e: any) { if (!isAbort(e)) console.warn(e); }
 function logRtc(event: string, status = 200, extra: any = {}) {
   try { console.log(JSON.stringify({ ts: new Date().toISOString(), route: "/chat/rtcFlow", event, status, ...extra })); } catch {}
 }
 function checkSession(sid: number) { return sid === state.sid; }
 
+/* === bootstrap === */
 async function initAnon() {
-  // وجود /api/rtc/init اختياري؛ إن لم يكن موجودًا لن يضر
   await apiSafeFetch("/api/rtc/init", { method: "GET", timeoutMs: 6000 }).catch(swallowAbort);
 }
-
 async function ensureEnqueue() {
-  // أقل قيم لازمة؛ السيرفر يُطبِّع عبر normalize*
   await apiSafeFetch("/api/rtc/enqueue", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -78,6 +79,7 @@ async function ensureEnqueue() {
   }).catch(swallowAbort);
 }
 
+/* === signaling helpers === */
 function sdpTagOf(sdp: string, kind: "offer" | "answer") {
   try {
     let x = 0;
@@ -248,74 +250,90 @@ async function calleeFlow(sessionId: number) {
 /* ========================= public API ========================= */
 
 /**
- * start — يقبل التوقيعين التاليين للمحافظة على التوافق:
- * 1) start() أو start(undefined) — (الاستخدام الجديد) يُنشئ AbortController داخليًا.
- * 2) start(aborter?: AbortController) — (التوقيع القديم) يتم **تجاهل** aborter الخارجي ويُنشأ AC داخلي لضمان الثبات.
- * كما يمكن تمرير (media, onPhase) دون كسر؛ وسيتم تجاهلهما إن لم تكن بنية مشروعك تستخدمهما.
+ * start(media, onPhase?)
+ * يمنع الإقلاع المتوازي. ينشئ AbortController داخليًا دائمًا.
  */
-export async function start(arg1?: any, onPhase?: (phase: Phase) => void) {
-  try {
-    stop(); // تنظيف أي جلسة سابقة
+export async function start(media?: MediaStream | null, onPhase?: (phase: Phase) => void) {
+  if (inflightStart) return inflightStart;
 
-    // دعم تمرير onPhase اختياريًا
-    if (typeof onPhase === "function") onPhaseCallback = onPhase;
+  inflightStart = (async () => {
+    try {
+      // أوقف الشبكة القديمة فقط
+      stop("network");
 
-    state.sid = (state.sid + 1) | 0;
-    state.phase = "searching";
-    try { onPhaseCallback("searching"); } catch {}
+      if (typeof onPhase === "function") onPhaseCallback = onPhase;
 
-    // ننشئ AbortController داخليًا دائمًا (لا نعتمد على وسيط خارجي)
-    state.ac = new AbortController();
+      state.sid = (state.sid + 1) | 0;
+      state.phase = "searching";
+      try { onPhaseCallback("searching"); } catch {}
 
-    await initAnon();
-    await ensureEnqueue();
+      // AC داخلي
+      state.ac = new AbortController();
 
-    const mm = await pollMatchmake();
-    if (!mm?.pairId || !mm?.role) throw new Error("no-pair");
+      await initAnon();
+      await ensureEnqueue();
 
-    state.pairId = mm.pairId;
-    state.role = mm.role;
-    state.polite = mm.role === "callee";
-    try { onPhaseCallback("matched"); } catch {}
+      const mm = await pollMatchmake();
+      if (!mm?.pairId || !mm?.role) throw new Error("no-pair");
 
-    state.pc = new RTCPeerConnection(ICE_SERVERS);
-    attachPnHandlers(state.pc, state.sid);
-
-    // ربط مراقبة الحالة
-    state.pc.onconnectionstatechange = () => {
-      if (!checkSession(state.sid) || !state.pc) return;
-      const cs = state.pc.connectionState;
-      logRtc("connection-state", 200, { connectionState: cs });
-      if (cs === "connected") {
-        state.phase = "connected";
-        try { onPhaseCallback("connected"); } catch {}
-      } else if (cs === "closed") {
-        stop();
+      state.pairId = mm.pairId;
+      state.role = mm.role as Role;
+      state.polite = state.role === "callee";
+      try { onPhaseCallback("matched"); } catch {}
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: state.pairId, role: state.role } }));
       }
-    };
 
-    // بدء مضخة ICE
-    iceExchange(state.sid).catch(swallowAbort);
+      // PC + ميديا
+      state.pc = new RTCPeerConnection(ICE_SERVERS);
+      attachPnHandlers(state.pc, state.sid);
+      if (media) for (const t of media.getTracks()) state.pc.addTrack(t, media);
 
-    // سير الدور
-    if (state.role === "caller") await callerFlow(state.sid);
-    else await calleeFlow(state.sid);
+      state.pc.ontrack = (ev) => {
+        const [s] = ev.streams || [];
+        if (s && typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: s } }));
+        }
+      };
 
-    if (typeof window !== "undefined") { (window as any).ditonaPC = state.pc; }
+      // ICE pump
+      iceExchange(state.sid).catch(swallowAbort);
 
-    return { pairId: state.pairId, role: state.role };
-  } catch (e: any) {
-    if (isAbort(e)) logRtc("flow-aborted", 499);
-    else logRtc("flow-error", 500, { error: e?.message || String(e) });
-    stop();
-    return null;
-  }
+      // Perfect Negotiation
+      if (state.role === "caller") await callerFlow(state.sid);
+      else await calleeFlow(state.sid);
+
+      state.pc.onconnectionstatechange = () => {
+        if (!checkSession(state.sid) || !state.pc) return;
+        const cs = state.pc.connectionState;
+        logRtc("connection-state", 200, { connectionState: cs });
+        if (cs === "connected") {
+          state.phase = "connected";
+          try { onPhaseCallback("connected"); } catch {}
+          if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("ditona:phase", { detail: { phase: "connected", role: state.role } }));
+        } else if (cs === "closed") {
+          stop();
+        }
+      };
+
+      if (typeof window !== "undefined") (window as any).ditonaPC = state.pc;
+
+      return { pairId: state.pairId, role: state.role };
+    } catch (e) {
+      if (!isAbort(e)) console.warn("rtcFlow.start error", e);
+      stop();
+      return null;
+    } finally {
+      inflightStart = null;
+    }
+  })();
+
+  return inflightStart;
 }
 
 export function stop(mode: "full" | "network" = "full") {
   try { markLastStopTs(); } catch {}
 
-  // أوقف وألْغِ أي حلقات تعتمد على الـAC
   try { state.ac?.abort(); } catch {}
   state.ac = undefined;
 
@@ -334,13 +352,13 @@ export async function next() {
   if (cooldownNext) return;
   cooldownNext = true;
   try {
-    stop("network");        // يوقف مضخة ICE فورًا
-    await sleep(700);       // تبريد قصير
-    await start();          // ابحث مجددًا
+    stop("network");
+    await sleep(700);
+    await start(null, onPhaseCallback);
   } finally {
     cooldownNext = false;
   }
 }
 
 export async function prev() { return next(); }
-export const startRTCFlow = start; // alias للتوافق
+export const startRTCFlow = start;
