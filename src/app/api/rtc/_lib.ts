@@ -31,9 +31,10 @@ export function rempty(req: Request, status = 204) {
   return new NextResponse(null, { status, headers: hNoStore(req) });
 }
 
-// ===== anon cookie <-> header stabilization =====
+// ===== anon identity: cookie <-> header =====
 const ANON_COOKIE = "anon";
 const ALG = "sha256";
+
 function hmac(data: string): string {
   const key = process.env.ANON_SIGNING_SECRET || "";
   return crypto.createHmac(ALG, key).update(data).digest("base64url");
@@ -46,13 +47,16 @@ function unpackSigned(raw?: string | null): string | null {
   if (!raw) return null;
   const s = String(raw);
   const dot = s.lastIndexOf(".");
-  if (dot <= 0) return s; // accept legacy plain value
+  if (dot <= 0) return s; // قبول القيمة القديمة غير الموقعة
   const id = s.slice(0, dot);
   const sig = s.slice(dot + 1);
   try {
     if (sig && hmac(id) === sig) return id;
   } catch {}
   return null;
+}
+function newAnonId() {
+  return crypto.randomUUID();
 }
 
 /** Prefer x-anon-id, else signed anon cookie, else null. */
@@ -63,6 +67,46 @@ export function anonFrom(req: NextRequest): string | null {
   const id = unpackSigned(ck);
   if (id && id.trim()) return id.trim();
   return null;
+}
+
+/** Ensure anon cookie exists. Returns anonId. Optionally writes Set-Cookie into resHeaders. */
+export async function ensureAnonCookie(
+  req: NextRequest,
+  resHeaders?: Headers
+): Promise<string> {
+  await cookies();
+  // prefer header if valid
+  const headerId = (req.headers.get("x-anon-id") || "").trim();
+  const cookieRaw = req.cookies.get(ANON_COOKIE)?.value || "";
+  const cookieId = unpackSigned(cookieRaw) || "";
+
+  let chosen = cookieId || headerId;
+  if (!chosen) chosen = newAnonId();
+
+  const signed = packSigned(chosen);
+  // set both server cookie store (best-effort) and response header for reliability
+  try {
+    const jar = cookies();
+    jar.set(ANON_COOKIE, signed, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: true,
+      maxAge: 60 * 60 * 24 * 30,
+    });
+  } catch {}
+  if (resHeaders) {
+    const parts = [
+      `${ANON_COOKIE}=${signed}`,
+      "Path=/",
+      "HttpOnly",
+      "SameSite=Lax",
+      "Secure",
+      `Max-Age=${60 * 60 * 24 * 30}`,
+    ];
+    resHeaders.append("Set-Cookie", parts.join("; "));
+  }
+  return chosen;
 }
 
 /** If header present and differs from cookie, overwrite cookie to header (signed). */
@@ -88,6 +132,16 @@ export async function stabilizeAnonCookieToHeader(
     `Max-Age=${60 * 60 * 24 * 30}`,
   ];
   resHeaders.append("Set-Cookie", parts.join("; "));
+  try {
+    const jar = cookies();
+    jar.set(ANON_COOKIE, signed, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: true,
+      maxAge: 60 * 60 * 24 * 30,
+    });
+  } catch {}
   return headerId;
 }
 
@@ -213,7 +267,6 @@ function pickPrimitives(obj: any): Record<string, string | number | boolean> {
 /** Normalize user attrs for rtc:attrs:<anon>. Adds ts. */
 export function normalizeAttrs(input: any, nowMs = Date.now()) {
   const base = pickPrimitives(input);
-  // gender normalization
   const g = String((base["gender"] ?? "")).toLowerCase();
   const gender =
     g === "male" || g === "m"
@@ -225,26 +278,20 @@ export function normalizeAttrs(input: any, nowMs = Date.now()) {
       : g === "lgbt"
       ? "lgbt"
       : "u";
-  // country normalization (2+ letters upper)
   const countryRaw = String(base["country"] ?? "").trim();
   const country = countryRaw ? countryRaw.toUpperCase() : "";
-
   return { ...base, gender, country, ts: nowMs };
 }
 
 /** Normalize filters for rtc:filters:<anon>. */
 export function normalizeFilters(input: any) {
   const base = pickPrimitives(input);
-  // allow single or array values; store arrays as comma-joined strings for simplicity
   const g = base["gender"] as any;
   const gender =
     Array.isArray(g) ? g.map(String) : g ? [String(g)] : [];
-
   const c = base["country"] as any;
   const country =
     Array.isArray(c) ? c.map((s) => String(s).toUpperCase()) : c ? [String(c).toUpperCase()] : [];
-
-  // keep other primitives
   return { ...base, gender, country };
 }
 
@@ -257,11 +304,6 @@ export function getAnonOrThrow(req: NextRequest): string {
   throw new Error("anon-missing");
 }
 
-/**
- * withCommon:
- * - يثبت الكوكي إلى قيمة x-anon-id إن وُجدت
- * - يمرر Headers للإضافة على الاستجابة (مثل Set-Cookie)
- */
 // ===== withCommon: يدعم نمطين =====
 // 1) withCommon(req, (resHeaders)=>NextResponse)
 // 2) withCommon((req, resHeaders)=>NextResponse)  // دالّة عليا تعاد كـ POST/GET handler
@@ -276,32 +318,31 @@ export function withCommon(
 ):
   | Promise<NextResponse>
   | ((req: NextRequest) => Promise<NextResponse>) {
-  // نمط الدالّة العليا: withCommon(handler)
   if (typeof arg1 === "function") {
     const handler = arg1;
     return async (req: NextRequest) => {
       const h = new Headers();
       await stabilizeAnonCookieToHeader(req, h);
+      // إن احتاج المسار ضمان الهوية أصلًا
+      await ensureAnonCookie(req, h);
       const resp = await handler(req, h);
       const sc = h.get("Set-Cookie");
       if (sc) resp.headers.append("Set-Cookie", sc);
       return resp;
     };
   }
-
-  // النمط القديم: withCommon(req, handler)
   const req = arg1 as NextRequest;
   const handler = maybeHandler!;
   return (async () => {
     const h = new Headers();
     await stabilizeAnonCookieToHeader(req, h);
+    await ensureAnonCookie(req, h);
     const resp = await handler(h);
     const sc = h.get("Set-Cookie");
     if (sc) resp.headers.append("Set-Cookie", sc);
     return resp;
   })();
 }
-
 
 // logEvt: كائن واحد
 export function logEvt(fields: Record<string, unknown>) {
