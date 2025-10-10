@@ -91,8 +91,7 @@ export async function start(aborter?: AbortController) {
 export const startRTCFlow = start;
 
 /** next/prev تعيد تشغيل البحث بنفس الآلية (teardown خارجيًا). */
-export async function next(aborter: AbortController) { return await start(aborter); }
-export async function prev(aborter: AbortController) { return await start(aborter); }
-
+export async function next(aborter?: AbortController) { return await start(aborter); }
+export async function prev(aborter?: AbortController) { return await start(aborter); }
 /** stop يسجّل x-last-stop-ts لدعم ICE-Grace على السيرفر. */
 export function stop() { markLastStopTs(); }
