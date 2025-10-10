@@ -262,17 +262,46 @@ export function getAnonOrThrow(req: NextRequest): string {
  * - يثبت الكوكي إلى قيمة x-anon-id إن وُجدت
  * - يمرر Headers للإضافة على الاستجابة (مثل Set-Cookie)
  */
-export async function withCommon(
-  req: NextRequest,
-  handler: (resHeaders?: Headers) => Promise<NextResponse> | NextResponse
-): Promise<NextResponse> {
-  const h = new Headers();
-  await stabilizeAnonCookieToHeader(req, h);
-  const resp = await handler(h);
-  const sc = h.get("Set-Cookie");
-  if (sc) resp.headers.append("Set-Cookie", sc);
-  return resp;
+// ===== withCommon: يدعم نمطين =====
+// 1) withCommon(req, (resHeaders)=>NextResponse)
+// 2) withCommon((req, resHeaders)=>NextResponse)  // دالّة عليا تعاد كـ POST/GET handler
+export function withCommon(
+  arg1:
+    | NextRequest
+    | ((
+        req: NextRequest,
+        resHeaders?: Headers
+      ) => Promise<NextResponse> | NextResponse),
+  maybeHandler?: (resHeaders?: Headers) => Promise<NextResponse> | NextResponse
+):
+  | Promise<NextResponse>
+  | ((req: NextRequest) => Promise<NextResponse>) {
+  // نمط الدالّة العليا: withCommon(handler)
+  if (typeof arg1 === "function") {
+    const handler = arg1;
+    return async (req: NextRequest) => {
+      const h = new Headers();
+      await stabilizeAnonCookieToHeader(req, h);
+      const resp = await handler(req, h);
+      const sc = h.get("Set-Cookie");
+      if (sc) resp.headers.append("Set-Cookie", sc);
+      return resp;
+    };
+  }
+
+  // النمط القديم: withCommon(req, handler)
+  const req = arg1 as NextRequest;
+  const handler = maybeHandler!;
+  return (async () => {
+    const h = new Headers();
+    await stabilizeAnonCookieToHeader(req, h);
+    const resp = await handler(h);
+    const sc = h.get("Set-Cookie");
+    if (sc) resp.headers.append("Set-Cookie", sc);
+    return resp;
+  })();
 }
+
 
 // logEvt: كائن واحد
 export function logEvt(fields: Record<string, unknown>) {
