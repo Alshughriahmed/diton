@@ -97,19 +97,16 @@ export async function options204(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: hNoStore(req) });
 }
 
-// ===== minimal logger =====
+// ===== flexible logger (supports 1-arg or 2-args) =====
 type LogFields = Record<string, unknown>;
-export function logRTC(route: string, f: LogFields) {
+export function logRTC(arg1: string | LogFields, f?: LogFields) {
+  const fields =
+    typeof arg1 === "string" ? { route: arg1, ...(f || {}) } : (arg1 || {});
   try {
-    console.log(
-      JSON.stringify({
-        ts: Date.now(),
-        route,
-        ...f,
-      })
-    );
+    console.log(JSON.stringify({ ts: Date.now(), ...fields }));
   } catch {}
 }
+
 
 // ===== Minimal Upstash REST client (R) =====
 const U = process.env.UPSTASH_REDIS_REST_URL || "";
