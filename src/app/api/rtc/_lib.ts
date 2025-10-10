@@ -1,132 +1,172 @@
-// Shared RTC API helpers + inline Upstash client and route shims.
+// Shared RTC API helpers + inline Upstash REST client (pipeline).
+// Named exports only. No new ENV. No external deps.
+// Conforms to k.md shims and current project imports.  (see citations)
 
+// ----------------- imports -----------------
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
-// ===== runtime flags =====
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-export const preferredRegion = ["fra1", "iad1"];
+// ----------------- constants -----------------
+const ANON_COOKIE = "anon";
+const HMAC_ALG = "sha256";
+const ONE_YEAR = 60 * 60 * 24 * 365;
 
-// ===== req-id + no-store =====
+// ----------------- req-id + no-store -----------------
 export function reqId(req: Request): string {
   return req.headers.get("x-req-id") || "";
 }
+
 export function hNoStore(req: Request, extra?: Record<string, string>) {
-  const rid = reqId(req);
   const base: Record<string, string> = { "Cache-Control": "no-store" };
+  const rid = reqId(req);
   if (rid) base["x-req-id"] = rid;
   return new Headers({ ...base, ...(extra || {}) });
 }
+
 export function rjson(req: Request, body: any, status = 200) {
   return new NextResponse(JSON.stringify(body ?? {}), {
     status,
     headers: hNoStore(req, { "content-type": "application/json" }),
   });
 }
+
 export function rempty(req: Request, status = 204) {
   return new NextResponse(null, { status, headers: hNoStore(req) });
 }
 
-// ===== anon identity: cookie <-> header =====
-const ANON_COOKIE = "anon";
-const ALG = "sha256";
-
+// ----------------- anon identity -----------------
 function hmac(data: string): string {
   const key = process.env.ANON_SIGNING_SECRET || "";
-  return crypto.createHmac(ALG, key).update(data).digest("base64url");
+  return crypto.createHmac(HMAC_ALG, key).update(data).digest("base64url");
 }
-function packSigned(id: string) {
-  if (!id) return "";
-  return `${id}.${hmac(id)}`;
-}
+
+/** Accepts legacy (plain id), "id.sig", or "v1.id.sig". Returns id or null. */
 function unpackSigned(raw?: string | null): string | null {
   if (!raw) return null;
-  const s = String(raw);
-  const dot = s.lastIndexOf(".");
-  if (dot <= 0) return s; // accept legacy plain value
-  const id = s.slice(0, dot);
-  const sig = s.slice(dot + 1);
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  // Accept "v1.<id>.<sig>" or "<id>.<sig>" or plain id
+  const parts = s.startsWith("v1.") ? s.split(".").slice(1) : s.split(".");
+  if (parts.length === 1) return parts[0] || null; // legacy plain id
+
+  const id = parts[0] || "";
+  const sig = parts[1] || "";
   try {
-    if (sig && hmac(id) === sig) return id;
+    if (id && sig && hmac(id) === sig) return id;
   } catch {}
   return null;
 }
-function newAnonId() {
-  return crypto.randomUUID();
+
+/** Pack as "v1.<id>.<sig>" */
+function packSigned(id: string): string {
+  return `v1.${id}.${hmac(id)}`;
 }
 
-/** Prefer x-anon-id, else signed anon cookie, else null. */
+/** Prefer x-anon-id header; else signed cookie; else null. */
 export function anonFrom(req: NextRequest): string | null {
-  const hdr = req.headers.get("x-anon-id");
-  if (hdr && hdr.trim()) return hdr.trim();
-  const ck = req.cookies.get(ANON_COOKIE)?.value;
+  const hdr = (req.headers.get("x-anon-id") || "").trim();
+  if (hdr) return hdr;
+
+  const ck = req.cookies.get(ANON_COOKIE)?.value || "";
   const id = unpackSigned(ck);
-  if (id && id.trim()) return id.trim();
+  if (id) return id;
+
   return null;
 }
 
-/** Build Set-Cookie value for anon. */
-function anonSetCookieValue(id: string) {
+/** Build a Set-Cookie string for the anon cookie (no domain; valid for all hosts). */
+function buildAnonSetCookie(id: string): string {
   const signed = packSigned(id);
-  return [
+  const parts = [
     `${ANON_COOKIE}=${signed}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     "Secure",
-    `Max-Age=${60 * 60 * 24 * 30}`,
-  ].join("; ");
+    `Max-Age=${ONE_YEAR}`,
+  ];
+  return parts.join("; ");
 }
 
-/** Ensure anon cookie exists and return anonId. Writes Set-Cookie if resHeaders provided. */
+/**
+ * Ensure anon cookie exists (or align it to header if header provided).
+ * Returns anonId. If resHeaders is provided, writes Set-Cookie into it.
+ * Never uses cookies().set() — write via Set-Cookie only (per project rule).
+ */
 export async function ensureAnonCookie(
   req: NextRequest,
   resHeaders?: Headers
 ): Promise<string> {
-  await cookies(); // project rule
+  await cookies(); // required by project rule
+
   const headerId = (req.headers.get("x-anon-id") || "").trim();
   const cookieRaw = req.cookies.get(ANON_COOKIE)?.value || "";
   const cookieId = unpackSigned(cookieRaw) || "";
-  const chosen = cookieId || headerId || newAnonId();
-  if (resHeaders) resHeaders.append("Set-Cookie", anonSetCookieValue(chosen));
+
+  // choose id: prefer header if present, else existing cookie, else new
+  const chosen = headerId || cookieId || crypto.randomUUID();
+
+  // set cookie only if missing or mismatched
+  if (!cookieId || cookieId !== chosen) {
+    if (resHeaders) resHeaders.append("Set-Cookie", buildAnonSetCookie(chosen));
+  }
   return chosen;
 }
 
-/** If header present and differs from cookie, overwrite cookie to header (signed). */
+/**
+ * If header present and differs from cookie → overwrite cookie to header (signed).
+ * Writes Set-Cookie into resHeaders. Returns chosen id (header or cookie) or null.
+ */
 export async function stabilizeAnonCookieToHeader(
   req: NextRequest,
   resHeaders: Headers
 ): Promise<string | null> {
-  await cookies(); // project rule
+  await cookies(); // required by project rule
+
   const headerId = (req.headers.get("x-anon-id") || "").trim();
   const cookieRaw = req.cookies.get(ANON_COOKIE)?.value || "";
   const cookieId = unpackSigned(cookieRaw) || "";
-  if (!headerId) return cookieId || null;
-  if (cookieId === headerId) return headerId;
-  resHeaders.append("Set-Cookie", anonSetCookieValue(headerId));
-  return headerId;
+
+  if (headerId && headerId !== cookieId) {
+    resHeaders.append("Set-Cookie", buildAnonSetCookie(headerId));
+    return headerId;
+  }
+  return headerId || cookieId || null;
 }
 
-// ===== unified OPTIONS =====
+export function getAnonOrThrow(req: NextRequest): string {
+  const id = anonFrom(req);
+  if (id && id.trim()) return id.trim();
+  throw new Error("anon-missing");
+}
+
+// ----------------- OPTIONS handler shims -----------------
 export async function options204(req: NextRequest) {
-  await cookies();
+  await cookies(); // project rule
   return new NextResponse(null, { status: 204, headers: hNoStore(req) });
 }
+export const optionsHandler = options204;
 
-// ===== flexible logger (1-arg or 2-args) =====
+// ----------------- logging -----------------
 type LogFields = Record<string, unknown>;
-export function logRTC(arg1: string | LogFields, f?: LogFields) {
-  const fields =
-    typeof arg1 === "string" ? { route: arg1, ...(f || {}) } : (arg1 || {});
+
+/** Flexible logger: logRTC("route", {...}) or logRTC({ route:"/api/...", status:200 }) */
+export function logRTC(arg1: string | LogFields, fields?: LogFields) {
+  const base =
+    typeof arg1 === "string" ? { route: arg1, ...(fields || {}) } : (arg1 || {});
   try {
-    console.log(JSON.stringify({ ts: Date.now(), ...fields }));
+    console.log(JSON.stringify({ ts: new Date().toISOString(), ...base }));
   } catch {}
 }
 
-// ===== Minimal Upstash REST client (R) =====
+/** Convenience alias used by routes */
+export function logEvt(fields: LogFields) {
+  logRTC(fields);
+}
+
+// ----------------- Upstash REST /pipeline client -----------------
 const U = process.env.UPSTASH_REDIS_REST_URL || "";
 const T = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 
@@ -147,9 +187,10 @@ async function upstash(cmd: (string | number)[]) {
   if (it.error) throw new Error(it.error);
   return it.result ?? null;
 }
-function flatObject(o: Record<string, string | number>) {
+
+function flatten(obj: Record<string, string | number>) {
   const a: (string | number)[] = [];
-  for (const k of Object.keys(o)) a.push(k, o[k]!);
+  for (const k of Object.keys(obj)) a.push(k, obj[k]!);
   return a;
 }
 
@@ -159,7 +200,9 @@ export const R = {
     return await upstash(["GET", key]);
   },
   async set(key: string, val: string, exSec?: number): Promise<"OK" | null> {
-    return exSec ? await upstash(["SET", key, val, "EX", exSec]) : await upstash(["SET", key, val]);
+    return exSec
+      ? await upstash(["SET", key, val, "EX", exSec])
+      : await upstash(["SET", key, val]);
   },
   async del(key: string): Promise<number> {
     return await upstash(["DEL", key]);
@@ -170,21 +213,24 @@ export const R = {
   async ttl(key: string): Promise<number> {
     return await upstash(["TTL", key]);
   },
-  // conditional set: NX + PX <ms> (idempotency)
   async setNxPx(key: string, val: string, pxMs: number): Promise<boolean> {
-    const res = await upstash(["SET", key, val, "NX", "PX", pxMs]);
-    return res === "OK";
+    const r = await upstash(["SET", key, val, "NX", "PX", pxMs]);
+    return r === "OK";
+  },
+  async exists(key: string): Promise<boolean> {
+    const n = Number(await upstash(["EXISTS", key])) || 0;
+    return n > 0;
   },
 
   // hashes
   async hset(key: string, obj: Record<string, string | number>): Promise<number> {
-    return await upstash(["HSET", key, ...flatObject(obj)]);
+    return await upstash(["HSET", key, ...flatten(obj)]);
   },
   async hget(key: string, field: string): Promise<string | null> {
     return await upstash(["HGET", key, field]);
   },
   async hgetall(key: string): Promise<Record<string, string> | null> {
-    const res = (await upstash(["HGETALL", key])) as Array<string> | null;
+    const res = (await upstash(["HGETALL", key])) as string[] | null;
     if (!res) return null;
     const out: Record<string, string> = {};
     for (let i = 0; i < res.length; i += 2) out[res[i]] = res[i + 1];
@@ -201,25 +247,39 @@ export const R = {
   async zcard(key: string): Promise<number> {
     return await upstash(["ZCARD", key]);
   },
-  async zrange(key: string, start: number, stop: number, withScores = false): Promise<any> {
-    return withScores ? await upstash(["ZRANGE", key, start, stop, "WITHSCORES"]) : await upstash(["ZRANGE", key, start, stop]);
+  async zrange(
+    key: string,
+    start: number,
+    stop: number,
+    withScores = false
+  ): Promise<any> {
+    return withScores
+      ? await upstash(["ZRANGE", key, start, stop, "WITHSCORES"])
+      : await upstash(["ZRANGE", key, start, stop]);
   },
-  async zrevrange(key: string, start: number, stop: number, withScores = false): Promise<any> {
-    return withScores ? await upstash(["ZREVRANGE", key, start, stop, "WITHSCORES"]) : await upstash(["ZREVRANGE", key, start, stop]);
+  async zrevrange(
+    key: string,
+    start: number,
+    stop: number,
+    withScores = false
+  ): Promise<any> {
+    return withScores
+      ? await upstash(["ZREVRANGE", key, start, stop, "WITHSCORES"])
+      : await upstash(["ZREVRANGE", key, start, stop]);
   },
   async zscore(key: string, member: string): Promise<string | null> {
     return await upstash(["ZSCORE", key, member]);
   },
 };
 
-// ===== keys helpers (scoped) =====
-export const kAttrs   = (anon: string) => `rtc:attrs:${anon}`;
+// ----------------- Redis key helpers -----------------
+export const kAttrs = (anon: string) => `rtc:attrs:${anon}`;
 export const kFilters = (anon: string) => `rtc:filters:${anon}`;
 export const kPairMap = (anon: string) => `rtc:pair:map:${anon}`;
-export const kClaim   = (anon: string) => `rtc:claim:${anon}`;
-export const kLast    = (anon: string) => `rtc:last:${anon}`;
+export const kClaim = (anon: string) => `rtc:claim:${anon}`;
+export const kLast = (anon: string) => `rtc:last:${anon}`;
 
-// ===== normalization helpers =====
+// ----------------- normalizers -----------------
 function pickPrimitives(obj: any): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
   if (!obj || typeof obj !== "object") return out;
@@ -229,10 +289,10 @@ function pickPrimitives(obj: any): Record<string, string | number | boolean> {
   return out;
 }
 
-/** Normalize user attrs for rtc:attrs:<anon>. Adds ts. */
+/** Ensure { gender in ["male","female","couple","lgbt","u"], country UPPER, ts }. */
 export function normalizeAttrs(input: any, nowMs = Date.now()) {
   const base = pickPrimitives(input);
-  const g = String((base["gender"] ?? "")).toLowerCase();
+  const g = String(base["gender"] ?? "").toLowerCase();
   const gender =
     g === "male" || g === "m"
       ? "male"
@@ -245,70 +305,82 @@ export function normalizeAttrs(input: any, nowMs = Date.now()) {
       : "u";
   const countryRaw = String(base["country"] ?? "").trim();
   const country = countryRaw ? countryRaw.toUpperCase() : "";
+
   return { ...base, gender, country, ts: nowMs };
 }
 
-/** Normalize filters for rtc:filters:<anon>. */
+/** Filters: coerce gender/country to string arrays; keep other primitives only. */
 export function normalizeFilters(input: any) {
   const base = pickPrimitives(input);
-  const g = base["gender"] as any;
-  const gender =
-    Array.isArray(g) ? g.map(String) : g ? [String(g)] : [];
-  const c = base["country"] as any;
-  const country =
-    Array.isArray(c) ? c.map((s) => String(s).toUpperCase()) : c ? [String(c).toUpperCase()] : [];
+  const g = (base["gender"] as any) ?? (base["genders"] as any);
+  const c = (base["country"] as any) ?? (base["countries"] as any);
+
+  const gender = Array.isArray(g) ? g.map(String) : g ? [String(g)] : [];
+  const country = Array.isArray(c)
+    ? c.map((s) => String(s).toUpperCase())
+    : c
+    ? [String(c).toUpperCase()]
+    : [];
+
+  // remove possible alias fields to avoid duplication
+  delete (base as any)["genders"];
+  delete (base as any)["countries"];
+
   return { ...base, gender, country };
 }
 
-// ===== compatibility shims for existing routes =====
-export const optionsHandler = options204;
-
-export function getAnonOrThrow(req: NextRequest): string {
-  const id = anonFrom(req);
-  if (id && id.trim()) return id.trim();
-  throw new Error("anon-missing");
+// ----------------- withCommon (two-call styles) -----------------
+function forwardSetCookies(from: Headers, to: Headers) {
+  from.forEach((val, key) => {
+    if (key.toLowerCase() === "set-cookie") to.append("Set-Cookie", val);
+  });
 }
 
-// withCommon supports two styles:
-// 1) withCommon(req, (resHeaders)=>NextResponse)
-// 2) withCommon((req, resHeaders)=>NextResponse)  // HOF
+/** Internal runner used by both withCommon forms. */
+async function runWithCommon(
+  req: NextRequest,
+  handler:
+    | ((resHeaders: Headers) => Promise<NextResponse> | NextResponse)
+    | ((req: NextRequest, resHeaders: Headers) => Promise<NextResponse> | NextResponse)
+): Promise<NextResponse> {
+  await cookies(); // project rule
+  const resHeaders = new Headers();
+
+  // Ensure anon is stable before route logic
+  await stabilizeAnonCookieToHeader(req, resHeaders);
+  await ensureAnonCookie(req, resHeaders);
+
+  // Call handler in either (resHeaders) or (req, resHeaders) form
+  const resp =
+    handler.length >= 2
+      ? await (handler as any)(req, resHeaders)
+      : await (handler as any)(resHeaders);
+
+  // Forward Set-Cookie from resHeaders into the actual response
+  forwardSetCookies(resHeaders, resp.headers);
+  return resp;
+}
+
+/**
+ * withCommon(req, (resHeaders)=>NextResponse|Promise)
+ * withCommon((req, resHeaders)=>NextResponse|Promise)  -> returns handler
+ */
 export function withCommon(
   arg1:
     | NextRequest
     | ((
         req: NextRequest,
-        resHeaders?: Headers
+        resHeaders: Headers
       ) => Promise<NextResponse> | NextResponse),
-  maybeHandler?: (resHeaders?: Headers) => Promise<NextResponse> | NextResponse
-):
-  | Promise<NextResponse>
-  | ((req: NextRequest) => Promise<NextResponse>) {
+  maybeHandler?: (resHeaders: Headers) => Promise<NextResponse> | NextResponse
+): any {
   if (typeof arg1 === "function") {
-    const handler = arg1;
-    return async (req: NextRequest) => {
-      const h = new Headers();
-      await stabilizeAnonCookieToHeader(req, h);
-      await ensureAnonCookie(req, h);
-      const resp = await handler(req, h);
-      const sc = h.get("Set-Cookie");
-      if (sc) resp.headers.append("Set-Cookie", sc);
-      return resp;
-    };
+    // curry: return a route handler
+    return async (req: NextRequest) => runWithCommon(req, arg1 as any);
   }
+  // immediate call with (req, cb(resHeaders))
   const req = arg1 as NextRequest;
-  const handler = maybeHandler!;
-  return (async () => {
-    const h = new Headers();
-    await stabilizeAnonCookieToHeader(req, h);
-    await ensureAnonCookie(req, h);
-    const resp = await handler(h);
-    const sc = h.get("Set-Cookie");
-    if (sc) resp.headers.append("Set-Cookie", sc);
-    return resp;
-  })();
-}
-
-// logEvt: single object
-export function logEvt(fields: Record<string, unknown>) {
-  logRTC(fields);
+  const cb =
+    maybeHandler as (resHeaders: Headers) => Promise<NextResponse> | NextResponse;
+  return runWithCommon(req, cb as any);
 }
