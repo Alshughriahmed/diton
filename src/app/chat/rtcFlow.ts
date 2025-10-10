@@ -50,7 +50,15 @@ let inflightStart: Promise<{ pairId: string | null; role: Role | null } | null> 
 let onPhaseCallback: (p: Phase) => void = () => {};
 let cooldownNext = false;
 
-const ICE_SERVERS: RTCConfiguration = { iceServers: [] };
+const ICE_SERVERS: RTCConfiguration = {
+  iceServers: [
+    { urls: ["stun:stun.l.google.com:19302", "stun:global.stun.twilio.com:3478"] },
+  ],
+  iceCandidatePoolSize: 4,
+  bundlePolicy: "balanced",
+  rtcpMuxPolicy: "require",
+};
+
 
 /* === utils === */
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
