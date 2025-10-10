@@ -1,5 +1,5 @@
-// Shared RTC API helpers + inline Upstash client.
-// No external re-exports. Named exports only.
+// Shared RTC API helpers + inline Upstash client and route shims.
+// Named exports فقط.
 
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
@@ -97,7 +97,7 @@ export async function options204(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: hNoStore(req) });
 }
 
-// ===== flexible logger (supports 1-arg or 2-args) =====
+// ===== flexible logger (1-arg or 2-args) =====
 type LogFields = Record<string, unknown>;
 export function logRTC(arg1: string | LogFields, f?: LogFields) {
   const fields =
@@ -106,7 +106,6 @@ export function logRTC(arg1: string | LogFields, f?: LogFields) {
     console.log(JSON.stringify({ ts: Date.now(), ...fields }));
   } catch {}
 }
-
 
 // ===== Minimal Upstash REST client (R) =====
 const U = process.env.UPSTASH_REDIS_REST_URL || "";
@@ -152,7 +151,7 @@ export const R = {
   async ttl(key: string): Promise<number> {
     return await upstash(["TTL", key]);
   },
-    // conditional set: NX + PX <ms>  (idempotency helper)
+  // conditional set: NX + PX <ms> (idempotency)
   async setNxPx(key: string, val: string, pxMs: number): Promise<boolean> {
     const res = await upstash(["SET", key, val, "NX", "PX", pxMs]);
     return res === "OK";
@@ -193,12 +192,65 @@ export const R = {
     return await upstash(["ZSCORE", key, member]);
   },
 };
-// ===== compatibility shims for existing routes =====
 
-// alias: OPTIONS handler
+// ===== keys helpers (scoped) =====
+export const kAttrs   = (anon: string) => `rtc:attrs:${anon}`;
+export const kFilters = (anon: string) => `rtc:filters:${anon}`;
+export const kPairMap = (anon: string) => `rtc:pair:map:${anon}`;
+export const kClaim   = (anon: string) => `rtc:claim:${anon}`;
+export const kLast    = (anon: string) => `rtc:last:${anon}`;
+
+// ===== normalization helpers =====
+function pickPrimitives(obj: any): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  if (!obj || typeof obj !== "object") return out;
+  for (const [k, v] of Object.entries(obj)) {
+    if (["string", "number", "boolean"].includes(typeof v)) out[k] = v as any;
+  }
+  return out;
+}
+
+/** Normalize user attrs for rtc:attrs:<anon>. Adds ts. */
+export function normalizeAttrs(input: any, nowMs = Date.now()) {
+  const base = pickPrimitives(input);
+  // gender normalization
+  const g = String((base["gender"] ?? "")).toLowerCase();
+  const gender =
+    g === "male" || g === "m"
+      ? "male"
+      : g === "female" || g === "f"
+      ? "female"
+      : g === "couple"
+      ? "couple"
+      : g === "lgbt"
+      ? "lgbt"
+      : "u";
+  // country normalization (2+ letters upper)
+  const countryRaw = String(base["country"] ?? "").trim();
+  const country = countryRaw ? countryRaw.toUpperCase() : "";
+
+  return { ...base, gender, country, ts: nowMs };
+}
+
+/** Normalize filters for rtc:filters:<anon>. */
+export function normalizeFilters(input: any) {
+  const base = pickPrimitives(input);
+  // allow single or array values; store arrays as comma-joined strings for simplicity
+  const g = base["gender"] as any;
+  const gender =
+    Array.isArray(g) ? g.map(String) : g ? [String(g)] : [];
+
+  const c = base["country"] as any;
+  const country =
+    Array.isArray(c) ? c.map((s) => String(s).toUpperCase()) : c ? [String(c).toUpperCase()] : [];
+
+  // keep other primitives
+  return { ...base, gender, country };
+}
+
+// ===== compatibility shims for existing routes =====
 export const optionsHandler = options204;
 
-// get anon or throw (string)
 export function getAnonOrThrow(req: NextRequest): string {
   const id = anonFrom(req);
   if (id && id.trim()) return id.trim();
@@ -209,9 +261,6 @@ export function getAnonOrThrow(req: NextRequest): string {
  * withCommon:
  * - يثبت الكوكي إلى قيمة x-anon-id إن وُجدت
  * - يمرر Headers للإضافة على الاستجابة (مثل Set-Cookie)
- * - يضمن no-store وecho x-req-id ضمن ردّك عبر rjson/rempty في المعالجات
- *
- * الاستعمال المتوقّع: return withCommon(req, async (resHeaders) => { ... return rjson(req, {...}); })
  */
 export async function withCommon(
   req: NextRequest,
@@ -220,13 +269,12 @@ export async function withCommon(
   const h = new Headers();
   await stabilizeAnonCookieToHeader(req, h);
   const resp = await handler(h);
-  // دمج أي Set-Cookie مُضافة داخل h
   const sc = h.get("Set-Cookie");
   if (sc) resp.headers.append("Set-Cookie", sc);
   return resp;
 }
 
-// logEvt: غلاف بسيط فوق logRTC يقبل كائن واحد
+// logEvt: كائن واحد
 export function logEvt(fields: Record<string, unknown>) {
   logRTC(fields);
 }
