@@ -80,12 +80,14 @@ async function pollMatchmake(signal: AbortSignal) {
 
 // ---- public API ----
 /** الواجهة المتوقعة: start/next/prev/stop */
-export async function start(aborter: AbortController) {
+export async function start(aborter?: AbortController) {
+  const ac = aborter ?? new AbortController();
   console.info("RTC_FLOW_VERSION=%s", RTC_FLOW_VERSION);
   await initAnon();
   await ensureEnqueue();
-  return await pollMatchmake(aborter.signal);
+  return await pollMatchmake(ac.signal);
 }
+
 export const startRTCFlow = start;
 
 /** next/prev تعيد تشغيل البحث بنفس الآلية (teardown خارجيًا). */
