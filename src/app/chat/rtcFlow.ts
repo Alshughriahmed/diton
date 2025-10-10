@@ -7,6 +7,8 @@ import apiSafeFetch from "./safeFetch";
 import { setAnonId } from "./anonState";
 
 type Role = "caller" | "callee";
+type SetPhase = (phase: string, payload?: any) => void;
+
 export const RTC_FLOW_VERSION = "S1.4";
 
 // ---- helpers ----
@@ -81,8 +83,8 @@ async function pollMatchmake(signal: AbortSignal) {
 // ---- public API ----
 /** الواجهة المتوقعة: start/next/prev/stop */
 export async function start(
-  arg1?: AbortController | MediaStream,
-  _arg2?: unknown,
+  arg1?: AbortController | MediaStream,   // متوافق مع الواجهة القديمة
+  setPhase?: SetPhase,                    // يُمرَّر من ChatClient.tsx
   arg3?: AbortController
 ) {
   const aborter =
@@ -91,16 +93,20 @@ export async function start(
     undefined;
 
   const ac = aborter ?? new AbortController();
+
   console.info("RTC_FLOW_VERSION=%s", RTC_FLOW_VERSION);
   await initAnon();
+  if (typeof setPhase === "function") setPhase("searching");
   await ensureEnqueue();
-  return await pollMatchmake(ac.signal);
+  const m = await pollMatchmake(ac.signal);
+  if (typeof setPhase === "function") setPhase("matched", { pairId: m.pairId, role: m.role });
+  return m;
 }
-
 export const startRTCFlow = start;
 
 /** next/prev تعيد تشغيل البحث بنفس الآلية (teardown خارجيًا). */
-export async function next(...args: unknown[]) { return await start(...args as []); }
-export async function prev(...args: unknown[]) { return await start(...args as []); }
+export async function next(...args: any[]) { return await start(...args as [any]); }
+export async function prev(...args: any[]) { return await start(...args as [any]); }
+
 /** stop يسجّل x-last-stop-ts لدعم ICE-Grace على السيرفر. */
 export function stop() { markLastStopTs(); }
