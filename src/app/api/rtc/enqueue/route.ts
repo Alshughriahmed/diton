@@ -1,5 +1,5 @@
 // src/app/api/rtc/enqueue/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import {
   optionsHandler,
@@ -24,7 +24,7 @@ export async function OPTIONS(_req: NextRequest) {
   return optionsHandler(_req);
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withCommon(async (req: NextRequest) => {
   const rid = req.headers.get("x-req-id") || "";
   const t0 = Date.now();
 
@@ -34,8 +34,8 @@ export async function POST(req: NextRequest) {
 
     // خصائص/مرشحات مع افتراضيات آمنة
     const body = await req.json().catch(() => ({}));
-    const attrs = normalizeAttrs(body);          // {gender:"m|f|u", country:"XX", ts}
-    const filters = normalizeFilters(body);      // {filterGenders:"all"|[], filterCountries:"ALL"|[], ts}
+    const attrs = normalizeAttrs(body);     // {gender:"m|f|c|l|u", country:"XX|ISO2"}
+    const filters = normalizeFilters(body); // {filterGenders:"all|csv", filterCountries:"ALL|csv"}
 
     // تنظيف خرائط قديمة قبل الإدراج
     await Promise.allSettled([
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       rDel(kClaim(anon)),
     ]);
 
-    // اكتب attrs/filters مع TTL واقعي، ثم أدرِج في الطابور العام وفق نطاقنا
+    // اكتب attrs/filters مع TTL واقعي، ثم أدرِج في الطابور العام
     await Promise.all([
       rSet(kAttrs(anon), JSON.stringify(attrs)),
       rExpire(kAttrs(anon), 180),
@@ -58,11 +58,8 @@ export async function POST(req: NextRequest) {
     return rjson(req, { ok: true }, 200);
   } catch (e: any) {
     logEvt({ route: "/api/rtc/enqueue", status: 401, rid, phase: "auth|parse", note: String(e?.message || e) });
-    // لا نُرجع تفاصيل إضافية
-    return withCommon(NextResponse.json({ error: "enqueue-failed" }, { status: 401 }), rid);
+    return rjson(req, { error: "enqueue-failed" }, 401);
   } finally {
     logEvt({ route: "/api/rtc/enqueue", status: 200, rid, note: `ms=${Date.now() - t0}` });
   }
-}
-
-
+});
