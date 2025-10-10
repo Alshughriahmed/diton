@@ -193,3 +193,40 @@ export const R = {
     return await upstash(["ZSCORE", key, member]);
   },
 };
+// ===== compatibility shims for existing routes =====
+
+// alias: OPTIONS handler
+export const optionsHandler = options204;
+
+// get anon or throw (string)
+export function getAnonOrThrow(req: NextRequest): string {
+  const id = anonFrom(req);
+  if (id && id.trim()) return id.trim();
+  throw new Error("anon-missing");
+}
+
+/**
+ * withCommon:
+ * - يثبت الكوكي إلى قيمة x-anon-id إن وُجدت
+ * - يمرر Headers للإضافة على الاستجابة (مثل Set-Cookie)
+ * - يضمن no-store وecho x-req-id ضمن ردّك عبر rjson/rempty في المعالجات
+ *
+ * الاستعمال المتوقّع: return withCommon(req, async (resHeaders) => { ... return rjson(req, {...}); })
+ */
+export async function withCommon(
+  req: NextRequest,
+  handler: (resHeaders?: Headers) => Promise<NextResponse> | NextResponse
+): Promise<NextResponse> {
+  const h = new Headers();
+  await stabilizeAnonCookieToHeader(req, h);
+  const resp = await handler(h);
+  // دمج أي Set-Cookie مُضافة داخل h
+  const sc = h.get("Set-Cookie");
+  if (sc) resp.headers.append("Set-Cookie", sc);
+  return resp;
+}
+
+// logEvt: غلاف بسيط فوق logRTC يقبل كائن واحد
+export function logEvt(fields: Record<string, unknown>) {
+  logRTC(fields);
+}
