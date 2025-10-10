@@ -1,5 +1,4 @@
 // Shared RTC API helpers + inline Upstash client and route shims.
-// Named exports فقط.
 
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
@@ -47,7 +46,7 @@ function unpackSigned(raw?: string | null): string | null {
   if (!raw) return null;
   const s = String(raw);
   const dot = s.lastIndexOf(".");
-  if (dot <= 0) return s; // قبول القيمة القديمة غير الموقعة
+  if (dot <= 0) return s; // accept legacy plain value
   const id = s.slice(0, dot);
   const sig = s.slice(dot + 1);
   try {
@@ -69,43 +68,30 @@ export function anonFrom(req: NextRequest): string | null {
   return null;
 }
 
-/** Ensure anon cookie exists. Returns anonId. Optionally writes Set-Cookie into resHeaders. */
+/** Build Set-Cookie value for anon. */
+function anonSetCookieValue(id: string) {
+  const signed = packSigned(id);
+  return [
+    `${ANON_COOKIE}=${signed}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Secure",
+    `Max-Age=${60 * 60 * 24 * 30}`,
+  ].join("; ");
+}
+
+/** Ensure anon cookie exists and return anonId. Writes Set-Cookie if resHeaders provided. */
 export async function ensureAnonCookie(
   req: NextRequest,
   resHeaders?: Headers
 ): Promise<string> {
-  await cookies();
-  // prefer header if valid
+  await cookies(); // project rule
   const headerId = (req.headers.get("x-anon-id") || "").trim();
   const cookieRaw = req.cookies.get(ANON_COOKIE)?.value || "";
   const cookieId = unpackSigned(cookieRaw) || "";
-
-  let chosen = cookieId || headerId;
-  if (!chosen) chosen = newAnonId();
-
-  const signed = packSigned(chosen);
-  // set both server cookie store (best-effort) and response header for reliability
-  try {
-    const jar = cookies();
-    jar.set(ANON_COOKIE, signed, {
-      path: "/",
-      httpOnly: true,
-      sameSite: "lax",
-      secure: true,
-      maxAge: 60 * 60 * 24 * 30,
-    });
-  } catch {}
-  if (resHeaders) {
-    const parts = [
-      `${ANON_COOKIE}=${signed}`,
-      "Path=/",
-      "HttpOnly",
-      "SameSite=Lax",
-      "Secure",
-      `Max-Age=${60 * 60 * 24 * 30}`,
-    ];
-    resHeaders.append("Set-Cookie", parts.join("; "));
-  }
+  const chosen = cookieId || headerId || newAnonId();
+  if (resHeaders) resHeaders.append("Set-Cookie", anonSetCookieValue(chosen));
   return chosen;
 }
 
@@ -114,34 +100,13 @@ export async function stabilizeAnonCookieToHeader(
   req: NextRequest,
   resHeaders: Headers
 ): Promise<string | null> {
-  await cookies();
+  await cookies(); // project rule
   const headerId = (req.headers.get("x-anon-id") || "").trim();
   const cookieRaw = req.cookies.get(ANON_COOKIE)?.value || "";
   const cookieId = unpackSigned(cookieRaw) || "";
-
   if (!headerId) return cookieId || null;
   if (cookieId === headerId) return headerId;
-
-  const signed = packSigned(headerId);
-  const parts = [
-    `${ANON_COOKIE}=${signed}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    "Secure",
-    `Max-Age=${60 * 60 * 24 * 30}`,
-  ];
-  resHeaders.append("Set-Cookie", parts.join("; "));
-  try {
-    const jar = cookies();
-    jar.set(ANON_COOKIE, signed, {
-      path: "/",
-      httpOnly: true,
-      sameSite: "lax",
-      secure: true,
-      maxAge: 60 * 60 * 24 * 30,
-    });
-  } catch {}
+  resHeaders.append("Set-Cookie", anonSetCookieValue(headerId));
   return headerId;
 }
 
@@ -304,9 +269,9 @@ export function getAnonOrThrow(req: NextRequest): string {
   throw new Error("anon-missing");
 }
 
-// ===== withCommon: يدعم نمطين =====
+// withCommon supports two styles:
 // 1) withCommon(req, (resHeaders)=>NextResponse)
-// 2) withCommon((req, resHeaders)=>NextResponse)  // دالّة عليا تعاد كـ POST/GET handler
+// 2) withCommon((req, resHeaders)=>NextResponse)  // HOF
 export function withCommon(
   arg1:
     | NextRequest
@@ -323,7 +288,6 @@ export function withCommon(
     return async (req: NextRequest) => {
       const h = new Headers();
       await stabilizeAnonCookieToHeader(req, h);
-      // إن احتاج المسار ضمان الهوية أصلًا
       await ensureAnonCookie(req, h);
       const resp = await handler(req, h);
       const sc = h.get("Set-Cookie");
@@ -344,7 +308,7 @@ export function withCommon(
   })();
 }
 
-// logEvt: كائن واحد
+// logEvt: single object
 export function logEvt(fields: Record<string, unknown>) {
   logRTC(fields);
 }
