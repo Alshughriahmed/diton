@@ -80,7 +80,16 @@ async function pollMatchmake(signal: AbortSignal) {
 
 // ---- public API ----
 /** الواجهة المتوقعة: start/next/prev/stop */
-export async function start(aborter?: AbortController) {
+export async function start(
+  arg1?: AbortController | MediaStream,
+  _arg2?: unknown,
+  arg3?: AbortController
+) {
+  const aborter =
+    arg1 instanceof AbortController ? arg1 :
+    arg3 instanceof AbortController ? arg3 :
+    undefined;
+
   const ac = aborter ?? new AbortController();
   console.info("RTC_FLOW_VERSION=%s", RTC_FLOW_VERSION);
   await initAnon();
@@ -91,7 +100,7 @@ export async function start(aborter?: AbortController) {
 export const startRTCFlow = start;
 
 /** next/prev تعيد تشغيل البحث بنفس الآلية (teardown خارجيًا). */
-export async function next(aborter?: AbortController) { return await start(aborter); }
-export async function prev(aborter?: AbortController) { return await start(aborter); }
+export async function next(...args: unknown[]) { return await start(...args as []); }
+export async function prev(...args: unknown[]) { return await start(...args as []); }
 /** stop يسجّل x-last-stop-ts لدعم ICE-Grace على السيرفر. */
 export function stop() { markLastStopTs(); }
