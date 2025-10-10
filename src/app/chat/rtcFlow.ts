@@ -87,21 +87,32 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
 }
 
 /** بولنغ matchmake مع حارس AC صارم */
-async function pollMatchmake(ac: AbortController) {
+async function pollMatchmake() {
+  const ac = state.ac;
+  if (!ac || !ac.signal) throw new DOMException("aborted", "AbortError");
+
   let back = 400;
   for (;;) {
-    if (!ac || ac.signal.aborted) throw new DOMException("aborted", "AbortError");
+    if (ac.signal.aborted) throw new DOMException("aborted", "AbortError");
 
-    const r = await apiSafeFetch("/api/rtc/matchmake", { method: "GET", timeoutMs: 6000 }).catch(swallowAbort);
+    const r = await apiSafeFetch("/api/rtc/matchmake", {
+      method: "GET",
+      headers: rtcHeaders(),
+      timeoutMs: 4500,
+    }).catch(() => undefined);
+
     if (!r) { await sleep(back); back = Math.min(back * 1.5, 1500); continue; }
 
     if (r.status === 200) {
-      const j = await r.json().catch(() => ({}));
+      const j = await r.json().catch(() => ({} as any));
       if (j?.pairId && j?.role) return j as { pairId: string; role: Role; peerAnonId?: string };
+    } else if (r.status === 204) {
+      // لا شيء
     } else if (r.status === 400) {
       // attrs مفقودة فعليًا → أعد enqueue
       await ensureEnqueue();
     }
+
     await sleep(back + Math.floor(Math.random() * 150));
     back = Math.min(back * 1.3, 1200);
   }
