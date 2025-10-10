@@ -111,7 +111,7 @@ async function handleMM(req: NextRequest): Promise<MMOut> {
   await cookies();
 
   // ثبّت الكوكي على قيمة Header إن وُجد اختلاف
-  await stabilizeAnonCookieToHeader(req);
+  await stabilizeAnonCookieToHeader(req, req.headers);
   const anon = await anonFrom(req);
   const rid = req.headers.get("x-req-id") || "";
   if (!anon) return { status: 400, body: { error: "anon-required" } };
