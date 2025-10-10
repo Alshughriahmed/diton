@@ -1,9 +1,11 @@
 // src/app/chat/rtcFlow.ts
 // Robust WebRTC flow: PN + attrs enqueue + strict gating + teardown/retry/backoff
-
 "use client";
 
 import apiSafeFetch from "@/app/chat/safeFetch";
+
+console.info("RTC_FLOW_VERSION=S1.3"); // ← إضافة للتحقق أن الباندل هو الأحدث
+
 
 // ========= helpers =========
 function markLastStopTs() {
@@ -79,6 +81,7 @@ function getSessionAttrs() {
 
 // ========= enqueue with guarantee =========
 async function ensureEnqueue(opts?: { retry?: boolean; max?: number }): Promise<boolean> {
+  console.debug("[enqueue] start");                 // ← سطر جديد
   const max = opts?.max ?? (opts?.retry ? 4 : 1);
   for (let i = 0; i < max; i++) {
     const body = getSessionAttrs();
@@ -273,12 +276,16 @@ export async function start(media: MediaStream | null, onPhaseCb: (p: Phase) => 
   state.ac = new AbortController();
 
   const ok = await ensureEnqueue({ retry: true, max: 4 });
+  console.debug("[enqueue] done =", ok);              // ← يؤكد النتيجة
+await apiSafeFetch("/api/rtc/diag/attrs", { method: "GET", timeoutMs: 4000 })
+  .then(r => r.json())
+  .then(j => console.debug("[diag/attrs]", j))      // ← يجب أن ترى exists:true
+  .catch(() => {});
   if (!ok) {
     console.warn("[start] enqueue failed — aborting search");
     stop("network");
     return;
   }
-
   const mm = await pollMatchmake(state.ac);
   state.pairId = mm.pairId;
   state.role = mm.role as Role;
