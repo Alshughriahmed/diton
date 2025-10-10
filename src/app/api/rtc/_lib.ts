@@ -1,17 +1,18 @@
 // src/app/api/rtc/_lib.ts
 // Shared RTC API helpers: runtime/dynamic headers, anon identity stabilization,
-// no-store responses with x-req-id echo, and OPTIONS handler.
+// no-store responses with x-req-id echo, OPTIONS handler, and legacy re-exports.
 
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
+// ===== runtime flags (project rules) =====
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const preferredRegion = ["fra1","iad1"]; // no "as const"
 
-// ---------- req-id + no-store ----------
+// ===== req-id + no-store =====
 export function reqId(req: Request): string {
   return req.headers.get("x-req-id") || "";
 }
@@ -31,7 +32,7 @@ export function rempty(req: Request, status = 204) {
   return new NextResponse(null, { status, headers: noStoreHeaders(req) });
 }
 
-// ---------- anon cookie <-> header stabilization ----------
+// ===== anon cookie <-> header stabilization =====
 const ANON_COOKIE = "anon";
 const ALG = "sha256";
 function hmac(data: string): string {
@@ -55,28 +56,17 @@ function unpackSigned(raw: string | undefined | null): string | null {
   return null;
 }
 
-/**
- * Extract anon id from:
- * 1) x-anon-id header if present
- * 2) signed anon cookie
- * Accepts legacy plain cookie values as a fallback.
- */
+/** Prefer x-anon-id, else signed anon cookie, else null. */
 export function anonFrom(req: NextRequest): string | null {
   const hdr = req.headers.get("x-anon-id");
   if (hdr && hdr.trim()) return hdr.trim();
-
-  // read cookie
   const ck = req.cookies.get(ANON_COOKIE)?.value;
   const id = unpackSigned(ck);
   if (id && id.trim()) return id.trim();
   return null;
 }
 
-/**
- * If x-anon-id is present and differs from anon cookie,
- * re-write the cookie to the header value (signed).
- * Returns the chosen anon id and mutates provided Headers with Set-Cookie.
- */
+/** If header present and differs from cookie, overwrite cookie to header (signed). */
 export async function stabilizeAnonCookieToHeader(
   req: NextRequest,
   resHeaders: Headers
@@ -86,15 +76,10 @@ export async function stabilizeAnonCookieToHeader(
   const cookieRaw = req.cookies.get(ANON_COOKIE)?.value || "";
   const cookieId = unpackSigned(cookieRaw) || "";
 
-  // If header missing, keep cookie as source of truth.
-  if (!headerId) return cookieId || null;
+  if (!headerId) return cookieId || null;      // header missing -> keep cookie
+  if (cookieId === headerId) return headerId;  // already in sync
 
-  // If header equals cookie, nothing to do.
-  if (cookieId === headerId) return headerId;
-
-  // Overwrite cookie to header id (signed).
   const signed = packSigned(headerId);
-  // 30 days. HttpOnly. Secure. SameSite=Lax.
   const parts = [
     `${ANON_COOKIE}=${signed}`,
     "Path=/",
@@ -107,8 +92,14 @@ export async function stabilizeAnonCookieToHeader(
   return headerId;
 }
 
-// ---------- OPTIONS unified ----------
+// ===== unified OPTIONS =====
 export async function options204(req: NextRequest) {
-  await cookies(); // comply with project rule
+  await cookies();
   return new NextResponse(null, { status: 204, headers: noStoreHeaders(req) });
 }
+
+// ===== legacy compatibility re-exports =====
+// Keep existing imports working without touching other files.
+export { R } from "@/lib/rtc/upstash";       // Upstash REST wrapper
+export { logRTC } from "@/lib/rtc/logger";   // structured logger
+export const hNoStore = noStoreHeaders;      // alias
