@@ -270,7 +270,7 @@ export async function start(arg1?: any, onPhase?: (phase: Phase) => void) {
     await initAnon();
     await ensureEnqueue();
 
-    const mm = await pollMatchmake(state.ac);
+    const mm = await pollMatchmake();
     if (!mm?.pairId || !mm?.role) throw new Error("no-pair");
 
     state.pairId = mm.pairId;
