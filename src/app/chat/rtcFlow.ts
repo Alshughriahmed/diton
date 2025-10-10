@@ -109,9 +109,8 @@ async function pollMatchmake() {
       const j = await r.json().catch(() => ({} as any));
       if (j?.pairId && j?.role) return j as { pairId: string; role: Role; peerAnonId?: string };
     } else if (r.status === 204) {
-      // لا شيء
+      // no-op
     } else if (r.status === 400) {
-      // attrs مفقودة فعليًا → أعد enqueue
       await ensureEnqueue();
     }
 
@@ -122,7 +121,6 @@ async function pollMatchmake() {
 
 function attachPnHandlers(pc: RTCPeerConnection, currentSession: number) {
   pc.onnegotiationneeded = async () => {
-    // caller فقط هو من يبدأ offer
     if (!checkSession(currentSession) || !state.ac || state.ac.signal.aborted || !state.pc || state.role !== "caller") return;
     try {
       state.makingOffer = true;
@@ -220,9 +218,7 @@ async function calleeFlow(sessionId: number) {
           const offerCollision = offer?.type === "offer" && (state.makingOffer || state.pc!.signalingState !== "stable");
           state.ignoreOffer = !state.polite && offerCollision;
           if (!state.ignoreOffer) {
-            if (offerCollision) {
-              try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {}
-            }
+            if (offerCollision) { try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {} }
             await state.pc!.setRemoteDescription(offer);
             const answer = await state.pc!.createAnswer();
             await state.pc!.setLocalDescription(answer);
@@ -284,37 +280,32 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
         window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: state.pairId, role: state.role } }));
       }
 
-      // التعرّف على الـ MediaStream القادم من ChatClient (إن وُجد)
-const media: MediaStream | null =
-  (arg1 && typeof MediaStream !== "undefined" && arg1 instanceof MediaStream)
-    ? (arg1 as MediaStream)
-    : null;
+      // إنشاء الـ RTCPeerConnection
+      state.pc = new RTCPeerConnection(ICE_SERVERS);
+      attachPnHandlers(state.pc, state.sid);
 
-state.pc = new RTCPeerConnection(ICE_SERVERS);
-attachPnHandlers(state.pc, state.sid);
+      // اربط مسارات الميديا (هذا ما يفجّر onnegotiationneeded)
+      const m = media ?? null;
+      if (m) {
+        for (const track of m.getTracks()) {
+          try { state.pc.addTrack(track, m); } catch {}
+        }
+      } else {
+        // في حال لم يُمرَّر MediaStream لأي سبب، فعّل PN باستقبالات صامتة
+        try { state.pc.addTransceiver("audio", { direction: "recvonly" }); } catch {}
+        try { state.pc.addTransceiver("video", { direction: "recvonly" }); } catch {}
+      }
 
-// اربط مسارات الميديا (هذا ما يفجّر onnegotiationneeded)
-if (media) {
-  for (const track of media.getTracks()) {
-    try { state.pc.addTrack(track, media); } catch {}
-  }
-} else {
-  // في حال لم يُمرَّر MediaStream لأي سبب، فعّل PN باستقبالات صامتة
-  try { state.pc.addTransceiver("audio", { direction: "recvonly" }); } catch {}
-  try { state.pc.addTransceiver("video", { direction: "recvonly" }); } catch {}
-}
+      // مرّر الستريم القادم إلى الواجهة
+      state.pc.ontrack = (ev) => {
+        try {
+          const stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream } }));
+          }
+        } catch {}
+      };
 
-// مرّر الستريم القادم إلى الواجهة
-state.pc.ontrack = (ev) => {
-  try {
-    const stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream } }));
-    }
-  } catch {}
-};
-
-      
       // ICE pump
       iceExchange(state.sid).catch(swallowAbort);
 
