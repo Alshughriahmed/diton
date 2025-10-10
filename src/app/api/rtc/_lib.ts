@@ -98,8 +98,3 @@ export async function options204(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: noStoreHeaders(req) });
 }
 
-// ===== legacy compatibility re-exports =====
-// Keep existing imports working without touching other files.
-export { R } from "@/lib/rtc/upstash";       // Upstash REST wrapper
-export { logRTC } from "@/lib/rtc/logger";   // structured logger
-export const hNoStore = noStoreHeaders;      // alias
