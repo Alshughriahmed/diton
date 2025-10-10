@@ -16,7 +16,8 @@ export async function POST(req: NextRequest) {
   await cookies();
 
   // ثبّت الكوكي على قيمة الـHeader إن وُجد اختلاف
-  await stabilizeAnonCookieToHeader(req, cookies());
+  // ثبّت الكوكي على قيمة الـHeader إن وُجد اختلاف
+  await stabilizeAnonCookieToHeader(req, req.headers);
   const anon = await anonFrom(req);
   if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
@@ -43,4 +44,5 @@ export async function POST(req: NextRequest) {
   logRTC({ route: "/api/rtc/enqueue", status: 200, anonId: anon, phase: "write-attrs+q" });
   return rjson(req, { ok: true }, 200);
 }
+
 
