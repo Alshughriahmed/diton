@@ -1,6 +1,5 @@
 "use client";
-
-import LiveKitTest from "../chat/livekit"; // عدّل المسار إذا الملف بمكان آخر
+import LiveKitTest from "../chat/livekit";
 
 export default function Page() {
   return <LiveKitTest roomName="lobby" />;
