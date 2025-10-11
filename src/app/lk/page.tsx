@@ -1,7 +1,6 @@
-import dynamic from "next/dynamic";
+"use client";
 
-const LiveKitTest = dynamic(() => import("../chat/livekit"), { ssr: false });
-// لو وضعت المكوّن في مسار آخر عدّل المسار أعلاه accordingly
+import LiveKitTest from "../chat/livekit"; // عدّل المسار إذا الملف بمكان آخر
 
 export default function Page() {
   return <LiveKitTest roomName="lobby" />;
