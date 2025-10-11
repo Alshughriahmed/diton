@@ -1,61 +1,52 @@
-"use client";
+// src/app/chat/safeFetch.ts
+export type SafeOpts = RequestInit & { timeoutMs?: number };
 
-// نحافظ على توقيع الاستيراد الحالي إن كان مستخدمًا في مواضع أخرى:
-import { getAnonId } from "./anonState";
-
-/**
- * apiSafeFetch: توحيد إعدادات fetch لنداءات /api/rtc/*
- * - cache: "no-store"
- * - credentials: "include"
- * - keepalive: true
- * - timeoutMs افتراضي 12s
- * - حقن x-req-id دائمًا
- * - حقن x-anon-id إن كان متوفرًا من anonState
- */
-export default async function apiSafeFetch(
-  input: RequestInfo | URL,
-  init: (RequestInit & { timeoutMs?: number }) = {}
-): Promise<Response> {
-  const controller = new AbortController();
-  const to = setTimeout(() => controller.abort(), init.timeoutMs ?? 12000);
-
-  const headers = new Headers(init.headers || {});
-  if (!headers.has("x-req-id")) headers.set("x-req-id", genId());
-
-  const aid = safeAnon();
-  if (aid && !headers.has("x-anon-id")) headers.set("x-anon-id", aid);
-
+function rid() {
   try {
-    return await fetch(input, {
-      ...init,
-      cache: "no-store",
-      credentials: "include",
-      keepalive: true,
-      signal: controller.signal,
-      headers,
-    });
-  } finally {
-    clearTimeout(to);
+    const a = new Uint32Array(3);
+    crypto.getRandomValues(a);
+    return Array.from(a, x => x.toString(36)).join("-");
+  } catch {
+    return Math.random().toString(36).slice(2);
   }
 }
 
-function genId() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36).slice(-4);
-}
+export default async function apiSafeFetch(input: string, opts: SafeOpts = {}) {
+  const ctrl = new AbortController();
+  const t = setTimeout(
+    () => ctrl.abort(new DOMException("timeout", "AbortError")),
+    opts.timeoutMs ?? 10000
+  );
 
-function safeAnon(): string | null {
+  const headers = new Headers(opts.headers || {});
+  headers.set("x-req-id", rid());
+  headers.set("accept", "application/json, text/plain, */*");
+
+  // أضف anonId إن وُجد
   try {
-    const a = getAnonId?.();
-    if (a) return String(a);
+    const anon =
+      localStorage.getItem("anonId") || localStorage.getItem("ditona_anon");
+    if (anon) headers.set("x-anon-id", anon);
   } catch {}
-  // fallback من الكوكي عند الضرورة (تحاشيًا لأي قطع في anonState)
+
+  const init: RequestInit = {
+    ...opts,
+    headers,
+    credentials: opts.credentials ?? "include",
+    cache: "no-store",
+    signal: ctrl.signal,
+  };
+
   try {
-    const m = document.cookie.match(/(?:^|;\s*)anon=([^;]+)/);
-    if (m) {
-      const raw = decodeURIComponent(m[1]);
-      const parts = raw.split(".");
-      return parts.length === 3 ? parts[1] : raw;
+    const res = await fetch(input, init);
+    return res;
+  } catch (e) {
+    // لا نرمي أخطاء الشبكة كي لا نكسر الـ flow الأعلى
+    if ((e as any)?.name !== "AbortError") {
+      console.warn("safeFetch network error:", e);
     }
-  } catch {}
-  return null;
+    return undefined as any;
+  } finally {
+    clearTimeout(t);
+  }
 }
