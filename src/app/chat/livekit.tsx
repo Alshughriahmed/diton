@@ -3,77 +3,65 @@
 import { Room, RoomEvent, RemoteTrackPublication, Track } from "livekit-client";
 import { useEffect, useRef } from "react";
 
-type Props = { roomName: string };
-
-export default function LiveKitMinimal({ roomName }: Props) {
+export default function LiveKitMinimal({ roomName }: { roomName: string }) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let room: Room | null = null;
-    let stopped = false;
 
     (async () => {
       try {
-        // خذ التوكن من روت الخادم
-        const me = Math.random().toString(36).slice(2, 10);
-        const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(roomName)}&user=${me}`);
-        const { token, url } = await r.json();
+        // استخدم عنوان WebSocket العلني من المتغيرات
+        const wsUrl = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL as string;
+        const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(roomName)}`, {
+          credentials: "include",
+        });
+        const { token } = await r.json();
 
         room = new Room();
-        await room.connect(url, token);
+        await room.connect(wsUrl, token);
 
-        // فعّل مايك وكام
+        // فعّل الصوت والفيديو
         await room.localParticipant.setMicrophoneEnabled(true);
-        await room.localParticipant.setCameraEnabled(true);
+        const camTrack = await room.localParticipant.setCameraEnabled(true); // LocalVideoTrack
 
-        // اعرض الكام المحلي
-        if (localVideoRef.current) {
-          const pubs = room.localParticipant.videoTracks;
-          const pub = Array.from(pubs.values())[0];
-          const track = pub?.videoTrack;
-          if (track) {
-            track.attach(localVideoRef.current);
-            localVideoRef.current.muted = true;
-            localVideoRef.current.playsInline = true;
-          }
+        // عرض الكاميرا المحلية
+        if (localVideoRef.current && camTrack) {
+          camTrack.attach(localVideoRef.current);
+          localVideoRef.current.muted = true;
+          localVideoRef.current.playsInline = true;
+          localVideoRef.current.autoplay = true;
         }
 
-        // عند الاشتراك بأي تراك عن بُعد
+        // عرض المسارات البعيدة
         room.on(RoomEvent.TrackSubscribed, (_track, pub: RemoteTrackPublication, participant) => {
           if (!remoteWrapRef.current) return;
           const el = document.createElement(pub.kind === Track.Kind.Video ? "video" : "audio");
           el.setAttribute("data-participant", participant.identity);
-          el.playsInline = true;
-          if (pub.kind === Track.Kind.Video) (el as HTMLVideoElement).autoplay = true;
-          pub.track?.attach(el);
+          (el as any).autoplay = true;
+          (el as any).playsInline = true;
+          pub.track?.attach(el as any);
           remoteWrapRef.current.appendChild(el);
         });
 
-        // تنظيف عند إلغاء الاشتراك
         room.on(RoomEvent.TrackUnsubscribed, (track) => {
           track.detach().forEach((el) => el.remove());
         });
-
       } catch (e) {
-        console.error("livekit error", e);
+        console.error("livekit connect error", e);
       }
     })();
 
     return () => {
-      stopped = true;
-      try {
-        if (room) {
-          room.disconnect();
-          room = null;
-        }
-      } catch {}
+      try { room?.disconnect(); } catch {}
+      room = null;
     };
   }, [roomName]);
 
   return (
     <div className="p-4 grid gap-4">
-      <video ref={localVideoRef} className="w-full max-w-md rounded" autoPlay />
+      <video ref={localVideoRef} className="w-full max-w-md rounded" />
       <div ref={remoteWrapRef} className="grid grid-cols-2 gap-2" />
     </div>
   );
