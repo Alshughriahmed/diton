@@ -1,29 +1,31 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import { LiveKitRoom, VideoConference } from "@livekit/components-react";
 import "@livekit/components-styles";
 
-export default function LiveKitTest({ roomName = "lobby" }: { roomName?: string }) {
-  const [wsUrl, setWsUrl] = useState<string>();
-  const [token, setToken] = useState<string>();
+export default function LiveKitTest({ roomName }: { roomName: string }) {
+  const [token, setToken] = useState<string>("");
 
   useEffect(() => {
+    let alive = true;
     (async () => {
-      const r = await fetch("/api/livekit/token", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ roomName }),
-      });
-      const j = await r.json();
-      setWsUrl(j.wsUrl);
-      setToken(j.token);
+      try {
+        const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(roomName)}`, { credentials: "include" });
+        const j = await r.json();
+        if (alive) setToken(j?.token || "");
+      } catch {
+        setToken("");
+      }
     })();
+    return () => { alive = false; };
   }, [roomName]);
 
-  if (!wsUrl || !token) return <div>Connecting…</div>;
+  if (!token) return <div style={{ padding: 12 }}>Getting LiveKit token…</div>;
 
+  const url = process.env.NEXT_PUBLIC_LIVEKIT_URL as string;
   return (
-    <LiveKitRoom serverUrl={wsUrl} token={token} connect>
+    <LiveKitRoom serverUrl={url} token={token} connect>
       <VideoConference />
     </LiveKitRoom>
   );
