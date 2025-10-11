@@ -6,36 +6,20 @@
 import apiSafeFetch from "@/app/chat/safeFetch";
 
 /* === headers helpers (محلية وخفيفة) === */
-// (1-أ) تضمين x-last-stop-ts من window/localStorage + الحفاظ على pair/role
 function rtcHeaders(extra?: { pairId?: string | null; role?: string | null }) {
   const h = new Headers();
-  try {
-    const ts =
-      (window as any).__ditona_last_stop_ts ??
-      window.localStorage?.getItem("ditona:lastStopTs");
-    if (ts) h.set("x-last-stop-ts", String(ts));
-  } catch {}
   if (extra?.pairId) h.set("x-pair-id", String(extra.pairId));
   if (extra?.role) h.set("x-role", String(extra.role));
   return Object.fromEntries(h.entries());
 }
-// (1-أ) حفظ آخر وقت إيقاف ليفيده السيرفر
 function markLastStopTs() {
-  const ts = Date.now();
-  try { (window as any).__ditona_last_stop_ts = ts; } catch {}
-  try { window.localStorage?.setItem("ditona:lastStopTs", String(ts)); } catch {}
+  try { (window as any).__ditona_last_stop_ts = Date.now(); } catch {}
 }
 
-/* (1-ب) مُسجّل لوجات بسيط + تخزين آخر السجلات في window.__rtcLog للنسخ */
-const RTCD = (...a: any[]) => {
-  try {
-    console.log("[rtc]", ...a);
-    const buf = ((window as any).__rtcLog || []) as any[];
-    buf.push(a);
-    // حافظ على آخر ~200 سطر فقط
-    if (buf.length > 200) buf.splice(0, buf.length - 200);
-    (window as any).__rtcLog = buf;
-  } catch {}
+/* لكل طلبات الـ RTC حتى تُرفَق الكوكيز دائمًا */
+const AUTH_FETCH_OPTS = {
+  credentials: "include" as RequestCredentials,
+  cache: "no-store" as RequestCache,
 };
 
 /* === types/state === */
@@ -72,6 +56,7 @@ let inflightStart: Promise<{ pairId: string | null; role: Role | null } | null> 
 let onPhaseCallback: (p: Phase) => void = () => {};
 let cooldownNext = false;
 
+/* STUN أساسية — لا تغييرات على TURN من هنا */
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: ["stun:stun.l.google.com:19302", "stun:global.stun.twilio.com:3478"] },
@@ -92,12 +77,18 @@ function checkSession(sid: number) { return sid === state.sid; }
 
 /* === bootstrap === */
 async function initAnon() {
-  await apiSafeFetch("/api/rtc/init", { method: "GET", timeoutMs: 6000 }).catch(swallowAbort);
+  // تفعيل السماح بالعمر ثم إنشاء هوية مجهولة — مع تمرير الكوكيز
+  await apiSafeFetch("/api/age/allow", { method: "POST", ...AUTH_FETCH_OPTS })
+    .catch(() => undefined);
+  await apiSafeFetch("/api/anon/init", { method: "POST", ...AUTH_FETCH_OPTS })
+    .catch(() => undefined);
 }
+
 async function ensureEnqueue() {
   await apiSafeFetch("/api/rtc/enqueue", {
     method: "POST",
-    headers: { "content-type": "application/json", ...rtcHeaders() },
+    ...AUTH_FETCH_OPTS,
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({
       gender: "u",
       country: "XX",
@@ -105,7 +96,7 @@ async function ensureEnqueue() {
       filterCountries: "ALL",
     }),
     timeoutMs: 6000,
-  }).catch(swallowAbort);
+  }).catch(() => undefined);
 }
 
 /* === signaling helpers === */
@@ -128,6 +119,7 @@ async function pollMatchmake() {
 
     const r = await apiSafeFetch("/api/rtc/matchmake", {
       method: "GET",
+      ...AUTH_FETCH_OPTS,
       headers: rtcHeaders(),
       timeoutMs: 4500,
     }).catch(() => undefined);
@@ -156,9 +148,9 @@ function attachPnHandlers(pc: RTCPeerConnection, currentSession: number) {
       const offer = await state.pc.createOffer();
       await state.pc.setLocalDescription(offer);
       const s = JSON.stringify(offer);
-      RTCD("pn:offer:create");
       await apiSafeFetch("/api/rtc/offer", {
         method: "POST",
+        ...AUTH_FETCH_OPTS,
         headers: {
           "content-type": "application/json",
           "x-ditona-sdp-tag": sdpTagOf(s, "offer"),
@@ -167,7 +159,6 @@ function attachPnHandlers(pc: RTCPeerConnection, currentSession: number) {
         body: JSON.stringify({ pairId: state.pairId, sdp: s }),
         timeoutMs: 8000,
       }).catch(swallowAbort);
-      RTCD("pn:offer:sent");
     } finally {
       state.makingOffer = false;
     }
@@ -176,10 +167,9 @@ function attachPnHandlers(pc: RTCPeerConnection, currentSession: number) {
   pc.onicecandidate = async (e) => {
     if (!e.candidate || !checkSession(currentSession) || !state.ac || state.ac.signal.aborted) return;
     if (!state.pairId || !state.role) return;
-    // (1-ج) لوج مفيد لأنواع المرشّحات
-    RTCD("pc:ice:cand", { have: !!e.candidate, type: (e.candidate as any)?.type, proto: (e.candidate as any)?.protocol });
     await apiSafeFetch("/api/rtc/ice", {
       method: "POST",
+      ...AUTH_FETCH_OPTS,
       headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
       body: JSON.stringify({ pairId: state.pairId, role: state.role, candidate: e.candidate }),
     }).catch(swallowAbort);
@@ -192,6 +182,7 @@ async function iceExchange(sessionId: number) {
   while (checkSession(sessionId) && state.ac && !state.ac.signal.aborted && state.pairId && state.role) {
     const r = await apiSafeFetch(`/api/rtc/ice?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
+      ...AUTH_FETCH_OPTS,
       headers: rtcHeaders({ pairId: state.pairId, role: state.role }),
       timeoutMs: 5000,
     }).catch(swallowAbort);
@@ -214,6 +205,7 @@ async function callerFlow(sessionId: number) {
   while (checkSession(sessionId) && state.ac && !state.ac.signal.aborted && state.pairId && state.role === "caller") {
     const r = await apiSafeFetch(`/api/rtc/answer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
+      ...AUTH_FETCH_OPTS,
       headers: rtcHeaders({ pairId: state.pairId, role: state.role }),
       timeoutMs: 6000,
     }).catch(swallowAbort);
@@ -224,7 +216,6 @@ async function callerFlow(sessionId: number) {
         try {
           const desc = JSON.parse(String(sdp));
           await state.pc!.setRemoteDescription(desc);
-          RTCD("pn:answer:set");
           return;
         } catch (e) { logRtc("callerFlow-remote-desc", 500, { e: String(e) }); }
       }
@@ -240,6 +231,7 @@ async function calleeFlow(sessionId: number) {
   while (checkSession(sessionId) && state.ac && !state.ac.signal.aborted && state.pairId && state.role === "callee") {
     const r = await apiSafeFetch(`/api/rtc/offer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
+      ...AUTH_FETCH_OPTS,
       headers: rtcHeaders({ pairId: state.pairId, role: state.role }),
       timeoutMs: 6000,
     }).catch(swallowAbort);
@@ -252,15 +244,14 @@ async function calleeFlow(sessionId: number) {
           const offerCollision = offer?.type === "offer" && (state.makingOffer || state.pc!.signalingState !== "stable");
           state.ignoreOffer = !state.polite && offerCollision;
           if (!state.ignoreOffer) {
-            if (offerCollision) {
-              try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {}
-            }
+            if (offerCollision) { try { await state.pc!.setLocalDescription({ type: "rollback" } as any); } catch {} }
             await state.pc!.setRemoteDescription(offer);
             const answer = await state.pc!.createAnswer();
             await state.pc!.setLocalDescription(answer);
             const s = JSON.stringify(answer);
             await apiSafeFetch("/api/rtc/answer", {
               method: "POST",
+              ...AUTH_FETCH_OPTS,
               headers: {
                 "content-type": "application/json",
                 "x-ditona-sdp-tag": sdpTagOf(s, "answer"),
@@ -269,7 +260,6 @@ async function calleeFlow(sessionId: number) {
               body: JSON.stringify({ pairId: state.pairId, sdp: s }),
               timeoutMs: 8000,
             }).catch(swallowAbort);
-            RTCD("pn:answer:sent");
           }
           return;
         } catch (e) { logRtc("calleeFlow-error", 500, { e: String(e) }); }
@@ -299,7 +289,6 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
       state.sid = (state.sid + 1) | 0;
       state.phase = "searching";
       try { onPhaseCallback("searching"); } catch {}
-      RTCD("phase", "searching"); // (1-ج) لوج المرحلة
 
       // AC داخلي
       state.ac = new AbortController();
@@ -307,44 +296,20 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
       await initAnon();
       await ensureEnqueue();
 
-      RTCD("mm:polling"); // (1-ج) قبل البولنغ
       const mm = await pollMatchmake();
-      RTCD("mm:ok", mm); // (1-ج) بعد النجاح
-
       if (!mm?.pairId || !mm?.role) throw new Error("no-pair");
 
       state.pairId = mm.pairId;
       state.role = mm.role as Role;
       state.polite = state.role === "callee";
       try { onPhaseCallback("matched"); } catch {}
-
-      // (1-ج) لوج الزوج + تخزينه للاختبار السريع
-      RTCD("pair", { pairId: state.pairId, role: state.role });
       if (typeof window !== "undefined") {
-        (window as any).__pair = { pairId: state.pairId, role: state.role };
         window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: state.pairId, role: state.role } }));
       }
 
       // إنشاء الـ RTCPeerConnection
       state.pc = new RTCPeerConnection(ICE_SERVERS);
       attachPnHandlers(state.pc, state.sid);
-
-      // مراقبة حالات الاتصال/ICE (1-ج)
-      state.pc.onconnectionstatechange = () => {
-        const cs = state.pc?.connectionState;
-        RTCD("pc:connectionState", cs);
-        if (!checkSession(state.sid) || !state.pc) return;
-        if (cs === "connected") {
-          state.phase = "connected";
-          try { onPhaseCallback("connected"); } catch {}
-          if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("ditona:phase", { detail: { phase: "connected", role: state.role } }));
-        } else if (cs === "closed") {
-          stop();
-        }
-      };
-      state.pc.oniceconnectionstatechange = () => {
-        RTCD("pc:iceConnectionState", state.pc?.iceConnectionState);
-      };
 
       // اربط مسارات الميديا (هذا ما يفجّر onnegotiationneeded)
       const m = media ?? null;
@@ -353,15 +318,15 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
           try { state.pc.addTrack(track, m); } catch {}
         }
       } else {
+        // في حال لم يُمرَّر MediaStream لأي سبب، فعّل PN باستقبالات صامتة
         try { state.pc.addTransceiver("audio", { direction: "recvonly" }); } catch {}
         try { state.pc.addTransceiver("video", { direction: "recvonly" }); } catch {}
       }
 
-      // مرّر الستريم القادم إلى الواجهة + لوج
+      // مرّر الستريم القادم إلى الواجهة
       state.pc.ontrack = (ev) => {
         try {
           const stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
-          RTCD("pc:ontrack", { tracks: stream.getTracks().length });
           if (typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream } }));
           }
@@ -374,6 +339,19 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
       // Perfect Negotiation
       if (state.role === "caller") await callerFlow(state.sid);
       else await calleeFlow(state.sid);
+
+      state.pc.onconnectionstatechange = () => {
+        if (!checkSession(state.sid) || !state.pc) return;
+        const cs = state.pc.connectionState;
+        logRtc("connection-state", 200, { connectionState: cs });
+        if (cs === "connected") {
+          state.phase = "connected";
+          try { onPhaseCallback("connected"); } catch {}
+          if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("ditona:phase", { detail: { phase: "connected", role: state.role } }));
+        } else if (cs === "closed") {
+          stop();
+        }
+      };
 
       if (typeof window !== "undefined") (window as any).ditonaPC = state.pc;
 
