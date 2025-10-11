@@ -1,6 +1,6 @@
 "use client";
-import LiveKitTest from "../chat/livekit";
+import LiveKitMinimal from "../chat/livekit";
 
 export default function Page() {
-  return <LiveKitTest roomName="lobby" />;
+  return <LiveKitMinimal roomName="lobby" />;
 }
