@@ -1,16 +1,11 @@
-// src/app/api/rtc/session/route.ts
 import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import { rjson, hNoStore, logRTC } from "../_lib";
-import { randomUUID } from "node:crypto";
+import { hNoStore, anonFrom, rjson } from "../_lib";
 
 export const preferredRegion = ["fra1","iad1"];
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-const COOKIE_NAME = "anon";
-const MAX_AGE = 60 * 60 * 24 * 180; // 180 يوم
 
 export async function OPTIONS(req: NextRequest) {
   await cookies();
@@ -18,25 +13,22 @@ export async function OPTIONS(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const jar = await cookies();
-  let anon = jar.get(COOKIE_NAME)?.value;
-
+  await cookies();
+  const anon = await anonFrom(req);
   if (!anon) {
-    anon = randomUUID();
-    jar.set({
-      name: COOKIE_NAME,
-      value: anon,
-      httpOnly: true,
-      sameSite: "lax",
-      secure: true,
-      path: "/",
-      maxAge: MAX_AGE,
+    return new Response(JSON.stringify({ error: "anon-required" }), {
+      status: 403,
+      headers: hNoStore(req),
     });
-    logRTC({ route: "/api/rtc/session", status: 200, phase: "issued", anonId: anon });
-  } else {
-    logRTC({ route: "/api/rtc/session", status: 200, phase: "existing", anonId: anon });
   }
-return new Response(JSON.stringify({ ok: true, anonId: anon }), {
-  status: 200,
-  headers: hNoStore(req),
-});
+
+  return new Response(JSON.stringify({ ok: true, anonId: anon }), {
+    status: 200,
+    headers: hNoStore(req),
+  });
+}
+
+export async function POST(req: NextRequest) {
+  // اختياري: نفس GET
+  return GET(req);
+}
