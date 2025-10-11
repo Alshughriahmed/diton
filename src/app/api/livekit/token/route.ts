@@ -1,6 +1,6 @@
 // /src/app/api/livekit/token/route.ts
 import { NextRequest } from "next/server";
-import { AccessToken, VideoGrant } from "livekit-server-sdk";
+import { AccessToken } from "livekit-server-sdk";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,15 +21,14 @@ export async function GET(req: NextRequest) {
 
   const identity = crypto.randomUUID();
 
-  // ✅ التوقيع الصحيح
+  // v2: مرّر المنح ككائن مباشرة، لا تستخدم VideoGrant كقيمة
   const at = new AccessToken(apiKey, apiSecret, { identity });
-  const grant = new VideoGrant({
+  at.addGrant({
     room,
     roomJoin: true,
     canPublish: true,
     canSubscribe: true,
   });
-  at.addGrant(grant);
 
   const token = await at.toJwt();
 
