@@ -1,4 +1,4 @@
-// /api/rtc/offer
+// /api/rtc/offer/route.ts
 import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { R, rjson, rempty, hNoStore, anonFrom, logRTC } from "../_lib";
@@ -27,17 +27,17 @@ async function roleOf(anon: string, pairId: string) {
 
 export async function OPTIONS(req: NextRequest) {
   await cookies();
+  // فقط OPTIONS نعيد معه no-store
   return new Response(null, { status: 204, headers: hNoStore(req) });
 }
 
 export async function POST(req: NextRequest) {
   await cookies();
 
-  const hdrs = hNoStore(req);
   const anon = await anonFrom(req);
-  if (!anon) return rjson(req, { error: "anon-required" }, 403, hdrs);
+  if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
-  // نجمع pairId من عدة أماكن لتفادي اختلافات العميل
+  // اجلب pairId من body أو الهيدر أو الكويري
   const url = new URL(req.url);
   const pairFromQuery = url.searchParams.get("pairId");
   const pairFromHdr = req.headers.get("x-pair-id");
@@ -47,19 +47,18 @@ export async function POST(req: NextRequest) {
     (body?.pairId || pairFromHdr || pairFromQuery || "").trim();
   const sdp: string = String(body?.sdp || "");
 
-  if (!pairId || !sdp) return rjson(req, { error: "bad-input" }, 400, hdrs);
+  if (!pairId || !sdp) return rjson(req, { error: "bad-input" }, 400);
   if (Buffer.byteLength(sdp, "utf8") > MAX_SDP)
-    return rjson(req, { error: "too-large" }, 413, hdrs);
+    return rjson(req, { error: "too-large" }, 413);
 
   const role = await roleOf(anon, pairId);
-  if (role !== "caller") return rjson(req, { error: "only-caller" }, 403, hdrs);
+  if (role !== "caller") return rjson(req, { error: "only-caller" }, 403);
 
-  // وسم SDP (من الهيدر إن وُجد أو محسوبًا)
   const tagFromHdr = req.headers.get("x-ditona-sdp-tag") || undefined;
   const tag = tagFromHdr || sdpTag(sdp, "offer");
   const idemKey = `rtc:idem:${pairId}:${role}:${tag}`;
 
-  // اديمبوتنسي: إذا رأينا نفس الوسم مؤخرًا نعيد 204 (لا تغيير)
+  // اديمبوتنسي
   const idemHit = !(await R.setNxPx(idemKey, "1", IDEM_TTL_MS));
   if (idemHit) {
     logRTC({
@@ -72,10 +71,9 @@ export async function POST(req: NextRequest) {
       phase: "idem-hit",
       tag,
     });
-    return rempty(req, 204, hdrs);
+    return rempty(req, 204);
   }
 
-  // خزّن الـ offer وجدد TTL
   await R.hset(`rtc:pair:${pairId}`, { offer: String(sdp) });
   await R.expire(`rtc:pair:${pairId}`, PAIR_TTL_S);
 
@@ -90,15 +88,14 @@ export async function POST(req: NextRequest) {
     tag,
   });
 
-  return rjson(req, { ok: true }, 200, hdrs);
+  return rjson(req, { ok: true }, 200);
 }
 
 export async function GET(req: NextRequest) {
   await cookies();
 
-  const hdrs = hNoStore(req);
   const anon = await anonFrom(req);
-  if (!anon) return rjson(req, { error: "anon-required" }, 403, hdrs);
+  if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
   const url = new URL(req.url);
   const pairId = (
@@ -106,15 +103,15 @@ export async function GET(req: NextRequest) {
     req.headers.get("x-pair-id") ||
     ""
   ).trim();
-  if (!pairId) return rjson(req, { error: "pair-required" }, 400, hdrs);
+  if (!pairId) return rjson(req, { error: "pair-required" }, 400);
 
   const role = await roleOf(anon, pairId);
-  if (role !== "callee") return rjson(req, { error: "only-callee" }, 403, hdrs);
+  if (role !== "callee") return rjson(req, { error: "only-callee" }, 403);
 
   const pair = await R.hgetall(`rtc:pair:${pairId}`);
   const sdp = pair?.offer;
-  if (!sdp) return rempty(req, 204, hdrs);
+  if (!sdp) return rempty(req, 204);
 
   await R.expire(`rtc:pair:${pairId}`, PAIR_TTL_S);
-  return rjson(req, { sdp: String(sdp) }, 200, hdrs);
+  return rjson(req, { sdp: String(sdp) }, 200);
 }
