@@ -1,19 +1,20 @@
+// src/app/api/rtc/answer/route.ts
 import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { R, rjson, rempty, hNoStore, anonFrom, logRTC } from "../_lib";
 import { createHash } from "node:crypto";
 
-export const preferredRegion = ["fra1","iad1"];
+export const preferredRegion = ["fra1", "iad1"];
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const MAX_SDP = 200_000;
-const IDEM_TTL_MS = 45_000;
-const PAIR_TTL_S = 150;
+const MAX_SDP = 200_000;     // ~200KB
+const IDEM_TTL_MS = 45_000;  // اديمبوتنسي لكل وسم SDP
+const PAIR_TTL_S = 150;      // TTL لسجل الزوج
 
-function sdpTag(sdp: string, kind: "offer"|"answer") {
-  const h = createHash("sha1").update(sdp).digest("hex").slice(0,12);
+function sdpTag(sdp: string, kind: "offer" | "answer") {
+  const h = createHash("sha1").update(sdp).digest("hex").slice(0, 12);
   return `${kind}:${sdp.length}:${h}`;
 }
 
@@ -31,40 +32,72 @@ export async function OPTIONS(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   await cookies();
+
   const anon = await anonFrom(req);
   if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
+  // pairId من body أو الهيدر أو الكويري
+  const url = new URL(req.url);
+  const fromQuery = url.searchParams.get("pairId");
+  const fromHdr = req.headers.get("x-pair-id");
   const body = await req.json().catch(() => ({} as any));
-  const pairId: string = body?.pairId;
-  const sdp: string = body?.sdp;
+
+  const pairId: string = String(body?.pairId || fromHdr || fromQuery || "").trim();
+  const sdp: string = String(body?.sdp || "");
+
   if (!pairId || !sdp) return rjson(req, { error: "bad-input" }, 400);
   if (Buffer.byteLength(sdp, "utf8") > MAX_SDP) return rjson(req, { error: "too-large" }, 413);
 
   const role = await roleOf(anon, pairId);
   if (role !== "callee") return rjson(req, { error: "only-callee" }, 403);
 
-  const tag = req.headers.get("x-ditona-sdp-tag") || sdpTag(String(sdp), "answer");
+  const tagFromHdr = req.headers.get("x-ditona-sdp-tag") || undefined;
+  const tag = tagFromHdr || sdpTag(sdp, "answer");
   const idemKey = `rtc:idem:${pairId}:${role}:${tag}`;
   const idemHit = !(await R.setNxPx(idemKey, "1", IDEM_TTL_MS));
   if (idemHit) {
-    logRTC({ route: "/api/rtc/answer", status: 204, rid: req.headers.get("x-req-id"), anonId: anon, pairId, role, phase: "idem-hit" });
+    logRTC({
+      route: "/api/rtc/answer",
+      status: 204,
+      rid: req.headers.get("x-req-id"),
+      anonId: anon,
+      pairId,
+      role,
+      phase: "idem-hit",
+      tag,
+    });
     return rempty(req, 204);
   }
 
   await R.hset(`rtc:pair:${pairId}`, { answer: String(sdp) });
   await R.expire(`rtc:pair:${pairId}`, PAIR_TTL_S);
 
-  logRTC({ route: "/api/rtc/answer", status: 200, rid: req.headers.get("x-req-id"), anonId: anon, pairId, role, phase: "store" });
+  logRTC({
+    route: "/api/rtc/answer",
+    status: 200,
+    rid: req.headers.get("x-req-id"),
+    anonId: anon,
+    pairId,
+    role,
+    phase: "store",
+    tag,
+  });
+
   return rjson(req, { ok: true }, 200);
 }
 
 export async function GET(req: NextRequest) {
   await cookies();
+
   const anon = await anonFrom(req);
   if (!anon) return rjson(req, { error: "anon-required" }, 403);
 
   const url = new URL(req.url);
-  const pairId = (url.searchParams.get("pairId") || req.headers.get("x-pair-id") || "").trim();
+  const pairId = (
+    url.searchParams.get("pairId") ||
+    req.headers.get("x-pair-id") ||
+    ""
+  ).trim();
   if (!pairId) return rjson(req, { error: "pair-required" }, 400);
 
   const role = await roleOf(anon, pairId);
