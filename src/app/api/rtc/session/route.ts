@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
   } else {
     logRTC({ route: "/api/rtc/session", status: 200, phase: "existing", anonId: anon });
   }
-
-  return rjson(req, { ok: true, anonId: anon }, 200, hNoStore(req));
-}
+return new Response(JSON.stringify({ ok: true, anonId: anon }), {
+  status: 200,
+  headers: hNoStore(req),
+});
