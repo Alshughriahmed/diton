@@ -147,6 +147,8 @@ async function initAnon() {
 async function ensureEnqueue() {
   await apiSafeFetch("/api/rtc/enqueue", {
     method: "POST",
+    credentials: "include" as RequestCredentials,
+    cache: "no-store" as RequestCache,
     headers: { "content-type": "application/json", ...rtcHeaders() },
     body: JSON.stringify({
       gender: "u",
@@ -154,9 +156,10 @@ async function ensureEnqueue() {
       filterGenders: "all",
       filterCountries: "ALL",
     }),
-    timeoutMs: 7000,
+    timeoutMs: 6000,
   }).catch(swallowAbort);
 }
+
 
 /** poll /matchmake with strict AC guard; auto re-enqueue on 400. */
 async function pollMatchmake(): Promise<{ pairId: string; role: Role; peerAnonId?: string }> {
@@ -168,10 +171,13 @@ async function pollMatchmake(): Promise<{ pairId: string; role: Role; peerAnonId
     if (acNow.signal.aborted) throw new DOMException("aborted", "AbortError");
 
     const r = await apiSafeFetch("/api/rtc/matchmake", {
-      method: "GET",
-      headers: rtcHeaders(),
-      timeoutMs: 5000,
-    }).catch(() => undefined);
+  method: "GET",
+  credentials: "include" as RequestCredentials,
+  cache: "no-store" as RequestCache,
+  headers: rtcHeaders(),
+  timeoutMs: 4500,
+}).catch(() => undefined);
+
 
     if (!r) {
       await sleep(back);
@@ -413,6 +419,19 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
 
       // Strictly allocate AC before any async
       state.ac = new AbortController();
+       await apiSafeFetch("/api/age/allow", {
+  method: "POST",
+  credentials: "include" as RequestCredentials,
+  cache: "no-store" as RequestCache,
+  timeoutMs: 6000,
+}).catch(swallowAbort);
+
+await apiSafeFetch("/api/rtc/init", {
+  method: "GET",
+  credentials: "include" as RequestCredentials,
+  cache: "no-store" as RequestCache,
+  timeoutMs: 6000,
+}).catch(swallowAbort);
 
       // Bootstrap: init cookie → enqueue attrs → poll matchmake
       await initAnon();
