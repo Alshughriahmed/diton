@@ -1,6 +1,6 @@
 "use client";
 
-import { Room, RoomEvent, RemoteTrackPublication, Track } from "livekit-client";
+import { Room, RoomEvent, Track, RemoteTrackPublication, RemoteTrack } from "livekit-client";
 import { useEffect, useRef } from "react";
 
 export default function LiveKitMinimal({ roomName }: { roomName: string }) {
@@ -12,21 +12,19 @@ export default function LiveKitMinimal({ roomName }: { roomName: string }) {
 
     (async () => {
       try {
-        // استخدم عنوان WebSocket العلني من المتغيرات
         const wsUrl = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL as string;
-        const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(roomName)}`, {
-          credentials: "include",
-        });
+        const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(roomName)}`, { credentials: "include" });
         const { token } = await r.json();
 
         room = new Room();
         await room.connect(wsUrl, token);
 
-        // فعّل الصوت والفيديو
+        // فعّل الصوت
         await room.localParticipant.setMicrophoneEnabled(true);
-        const camTrack = await room.localParticipant.setCameraEnabled(true); // LocalVideoTrack
 
-        // عرض الكاميرا المحلية
+        // فعّل الكاميرا وأرفق الـtrack المحلي للفيديو
+        const camPub = await room.localParticipant.setCameraEnabled(true); // LocalTrackPublication | undefined
+        const camTrack = camPub?.track; // LocalVideoTrack | undefined
         if (localVideoRef.current && camTrack) {
           camTrack.attach(localVideoRef.current);
           localVideoRef.current.muted = true;
@@ -34,17 +32,21 @@ export default function LiveKitMinimal({ roomName }: { roomName: string }) {
           localVideoRef.current.autoplay = true;
         }
 
-        // عرض المسارات البعيدة
-        room.on(RoomEvent.TrackSubscribed, (_track, pub: RemoteTrackPublication, participant) => {
-          if (!remoteWrapRef.current) return;
-          const el = document.createElement(pub.kind === Track.Kind.Video ? "video" : "audio");
-          el.setAttribute("data-participant", participant.identity);
-          (el as any).autoplay = true;
-          (el as any).playsInline = true;
-          pub.track?.attach(el as any);
-          remoteWrapRef.current.appendChild(el);
-        });
+        // عند الاشتراك بمسار بعيد
+        room.on(
+          RoomEvent.TrackSubscribed,
+          (track: RemoteTrack, pub: RemoteTrackPublication, participant) => {
+            if (!remoteWrapRef.current) return;
+            const el = document.createElement(track.kind === Track.Kind.Video ? "video" : "audio");
+            el.setAttribute("data-participant", participant.identity);
+            (el as any).autoplay = true;
+            (el as any).playsInline = true;
+            track.attach(el as any);
+            remoteWrapRef.current.appendChild(el);
+          }
+        );
 
+        // تنظيف عند إلغاء الاشتراك
         room.on(RoomEvent.TrackUnsubscribed, (track) => {
           track.detach().forEach((el) => el.remove());
         });
