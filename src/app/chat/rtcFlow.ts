@@ -140,7 +140,7 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
 
 /** Ensure anon cookie exists; server also stabilizes header↔cookie. */
 async function initAnon() {
-  await apiSafeFetch("/api/rtc/init", { method: "GET", timeoutMs: 6000 }).catch(swallowAbort);
+  await apiSafeFetch("/api/rtc/session", { method: "GET", timeoutMs: 6000 }).catch(() => {});
 }
 
 /** Write attrs/filters + queue. Defaults are conservative & normalized server-side anyway. */
