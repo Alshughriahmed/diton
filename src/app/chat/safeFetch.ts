@@ -1,6 +1,7 @@
 "use client";
 
 type SafeInit = RequestInit & { timeoutMs?: number };
+type AllowedMethod = "GET" | "POST" | "HEAD";
 
 // === helpers to normalize enqueue payload to server schema ===
 function normEnqueueBody(input: any): {
@@ -11,9 +12,6 @@ function normEnqueueBody(input: any): {
 } {
   const b = (input && typeof input === "object") ? input : {};
 
-  // allow both new-style and old-style inputs
-  // new style from UI: { gender: "any"|"male"|"female", countries: ["ALL"|CC...], genders?: [...] }
-  // old style: { filterGenders, filterCountries }
   let g: string | undefined =
     (b.gender ?? (Array.isArray(b.genders) ? b.genders[0] : undefined)) || "any";
   g = String(g).toLowerCase();
@@ -35,36 +33,30 @@ function normEnqueueBody(input: any): {
     }
   }
 
-  return {
-    gender: "u",
-    country: "XX",
-    filterGenders,
-    filterCountries,
-  };
+  return { gender: "u", country: "XX", filterGenders, filterCountries };
 }
 
 // map routes → enforced method
-function enforcedMethod(url: string): "GET" | "POST" {
+function enforcedMethod(url: string): "GET" | "POST" | undefined {
   if (url.startsWith("/api/age/allow")) return "POST";
   if (url.startsWith("/api/rtc/init")) return "GET";
   if (url.startsWith("/api/rtc/enqueue")) return "POST";
   if (url.startsWith("/api/rtc/matchmake")) return "GET";
   if (url.startsWith("/api/rtc/offer")) return "POST";
   if (url.startsWith("/api/rtc/answer")) return "POST";
-  // /api/rtc/ice supports POST (send) and GET (poll by pairId). لا نفرضه هنا.
-  return (undefined as any);
+  // /api/rtc/ice supports POST and GET; leave as-is.
+  return undefined;
 }
 
 export default async function safeFetch(input: RequestInfo | URL, init: SafeInit = {}) {
   const url = typeof input === "string" ? input : String(input);
   const isRtc = url.includes("/api/rtc/");
-  let method = (init.method || "GET").toUpperCase() as "GET" | "POST";
 
-  // enforce method when known route
+  let method: AllowedMethod = String(init.method || "GET").toUpperCase() as AllowedMethod;
+
   const must = enforcedMethod(url);
-  if (must) method = must;
+  if (must) method = must as AllowedMethod;
 
-  // compose AbortController with optional external signal + timeout
   const ac = new AbortController();
   const ext = init.signal as AbortSignal | undefined;
   if (ext) {
@@ -74,19 +66,16 @@ export default async function safeFetch(input: RequestInfo | URL, init: SafeInit
   const timeout = init.timeoutMs ?? 15000;
   const tm = setTimeout(() => ac.abort(), timeout);
 
-  // headers
   const headers = new Headers(init.headers || undefined);
   const isApi = url.startsWith("/api/");
   if (isApi && !headers.has("accept")) headers.set("accept", "application/json");
 
-  // normalize enqueue body if targeting that route
   let body: any = init.body as any;
   if (url.startsWith("/api/rtc/enqueue")) {
     body = normEnqueueBody(typeof body === "string" ? JSON.parse(body || "{}") : body);
     if (!headers.has("content-type")) headers.set("content-type", "application/json");
   }
 
-  // never send body on GET/HEAD
   const finalInit: RequestInit = {
     ...init,
     method,
@@ -105,6 +94,7 @@ export default async function safeFetch(input: RequestInfo | URL, init: SafeInit
       !(body instanceof FormData) &&
       !(body instanceof Blob);
     if (hasJsonBody) (finalInit as any).body = JSON.stringify(body);
+    else if (typeof body === "string") (finalInit as any).body = body;
   }
 
   try {
