@@ -159,19 +159,30 @@ export default function ChatClient() {
           localRef.current.play?.().catch(() => {});
         }
 
-        // get ephemeral token from our API
-        const identity =
-          (profile?.name && String(profile.name)) ||
-          `anon-${Math.random().toString(36).slice(2, 10)}`;
-        const tokenRes = await fetch(`/api/livekit/token?room=ditona-public&identity=${encodeURIComponent(identity)}`, {
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (!tokenRes.ok) {
-          console.warn("token fetch failed", tokenRes.status);
-          return;
-        }
-        const { token } = await tokenRes.json();
+       // get ephemeral token from our API
+const identity = (() => {
+  const p = (profile ?? {}) as any;
+  return String(
+    p.username ||
+    p.displayName ||
+    p.name ||        // إن وُجد
+    p.id ||
+    p.uid ||
+    p.anonId ||
+    `anon-${Math.random().toString(36).slice(2, 10)}`
+  );
+})();
+
+const tokenRes = await fetch(
+  `/api/livekit/token?room=ditona-public&identity=${encodeURIComponent(identity)}`,
+  { credentials: "include", cache: "no-store" }
+);
+if (!tokenRes.ok) {
+  console.warn("token fetch failed", tokenRes.status);
+  return;
+}
+const { token } = await tokenRes.json();
+
 
         // create room and connect
         const room = new Room({
