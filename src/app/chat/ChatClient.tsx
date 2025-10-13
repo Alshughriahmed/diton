@@ -497,6 +497,7 @@ export default function ChatClient() {
 
         // بعد الميديا ابدأ RTC
         if (localRef.current?.srcObject) {
+          await safeFetch("/api/rtc/init", { method: "POST", credentials: "include", cache: "no-store" });
           const m = await rtc
             .start(localRef.current.srcObject as MediaStream, setRtcPhase)
             .catch(() => undefined as any);
