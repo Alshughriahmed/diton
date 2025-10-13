@@ -133,7 +133,7 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
 /** Ensure anon cookie exists. Prefer GET /api/rtc/init to match current server. */
 async function ensureInit() {
   await apiSafeFetch("/api/rtc/init", {
-  method: "POST",
+ method: "GET",
   credentials: "include",
   cache: "no-store",
   timeoutMs: 6000,
@@ -143,7 +143,7 @@ async function ensureInit() {
 /** Write attrs/filters + queue (normalized values). */
 async function ensureEnqueue() {
   await apiSafeFetch("/api/rtc/enqueue", {
-    method: "POST",
+   method: "GET",
     credentials: "include",
     cache: "no-store",
     headers: { "content-type": "application/json", ...rtcHeaders() },
@@ -218,7 +218,7 @@ function wirePerfectNegotiation(pc: RTCPeerConnection, currentSession: number) {
       const sdpStr = state.pc.localDescription?.sdp || offer.sdp || "";
       pushDiag("pn:offer:create");
       await apiSafeFetch("/api/rtc/offer", {
-        method: "POST",
+        method: "GET",
         credentials: "include",
         cache: "no-store",
         headers: {
@@ -248,7 +248,7 @@ function wirePerfectNegotiation(pc: RTCPeerConnection, currentSession: number) {
     } catch {}
 
     await apiSafeFetch("/api/rtc/ice", {
-      method: "POST",
+      method: "GET",
       credentials: "include",
       cache: "no-store",
       headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
@@ -374,7 +374,7 @@ async function calleeFlow(sessionId: number) {
             const sdpStr = state.pc!.localDescription?.sdp || answer.sdp || "";
 
             await apiSafeFetch("/api/rtc/answer", {
-              method: "POST",
+              method: "GET",
               credentials: "include",
               cache: "no-store",
               headers: {
@@ -428,7 +428,7 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
 
       // Age + init
       await apiSafeFetch("/api/age/allow", {
-        method: "POST",
+        method: "GET",
         credentials: "include",
         cache: "no-store",
         timeoutMs: 6000,
