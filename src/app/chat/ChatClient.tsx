@@ -1,6 +1,7 @@
 "use client";
 
 /* ======================= boot / guards ======================= */
+import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 import "./freeForAllBridge";
@@ -8,28 +9,26 @@ import "./dcMetaResponder.client";
 import "./likeSyncClient";
 import "./msgSendClient";
 
+if (process.env.NODE_ENV !== "production") {
+  if (typeof window !== "undefined") {
+    // silence AbortError rejections
+    window.addEventListener("unhandledrejection", (e) => {
+      const r = (e as any).reason;
+      const msg = String((r && r.message) || "");
+      if ((r && r.name === "AbortError") || /aborted/i.test(msg)) e.preventDefault();
+    });
+  }
+}
+
 /* ======================= react & app hooks ======================= */
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 
-/* livekit */
-import {
-  Room,
-  RoomEvent,
-  RemoteParticipant,
-  RemoteTrack,
-  RemoteAudioTrack,
-  RemoteVideoTrack,
-  Track,
-} from "livekit-client";
-
-/* app hooks */
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useGestures } from "@/hooks/useGestures";
 import { useHydrated } from "@/hooks/useHydrated";
 
-/* media */
 import {
   initLocalMedia,
   getLocalStream,
@@ -38,7 +37,6 @@ import {
   switchCamera,
 } from "@/lib/media";
 
-/* state + ui libs */
 import { useFilters } from "@/state/filters";
 import { useFFA } from "@/lib/useFFA";
 import { useRouter } from "next/navigation";
@@ -46,6 +44,16 @@ import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
+
+/* ======================= LiveKit ======================= */
+import {
+  Room,
+  RoomEvent,
+  RemoteParticipant,
+  RemoteTrackPublication,
+  Track,
+  RemoteTrack,
+} from "livekit-client";
 
 /* ======================= UI components ======================= */
 import ChatComposer from "@/components/chat/ChatComposer";
@@ -60,12 +68,10 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 
-/* ======================= consts ======================= */
+/* ======================= types / consts ======================= */
+type MatchEcho = { ts: number; gender: string; countries: string[] };
+const NEXT_COOLDOWN_MS = 700;
 const isBrowser = typeof window !== "undefined";
-const WS_URL =
-  (process.env.NEXT_PUBLIC_LIVEKIT_WS_URL as string) ||
-  (process.env.LIVEKIT_URL as string) ||
-  "";
 
 /* ============================================================= */
 
@@ -75,30 +81,18 @@ export default function ChatClient() {
   const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
 
-  // refs / state
+  // ===== local refs / state
   const localRef = useRef<HTMLVideoElement>(null);
   const remoteRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
-  const lkRoomRef = useRef<Room | null>(null);
+  const lastNextTsRef = useRef(0);
 
   const [ready, setReady] = useState(false);
   const [like, setLike] = useState(false);
   const [peerLikes, setPeerLikes] = useState(0);
-  const [isMirrored, setIsMirrored] = useState(true);
-  const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
 
-  const [peerInfo, setPeerInfo] = useState({
-    name: "Anonymous",
-    isVip: false,
-    likes: 0,
-    isOnline: true,
-    country: "",
-    city: "",
-    gender: "",
-    age: 0,
-  });
-
-  const [remoteCount, setRemoteCount] = useState(0);
+  const [rtcPhase, setRtcPhase] = useState<"idle" | "searching" | "matched" | "connected" | "stopped">("idle");
+  const [pair, setPair] = useState<{ id?: string; role?: "caller" | "callee" }>({});
 
   const { isVip: vip } = useFilters();
   const { profile } = useProfile();
@@ -107,6 +101,12 @@ export default function ChatClient() {
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
+  const [isMirrored, setIsMirrored] = useState(true);
+  const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
+
+  // LiveKit room + single-flight guards
+  const lkRoomRef = useRef<Room | null>(null);
+  const joiningRef = useRef(false);
 
   /* ---------- helpers ---------- */
   function updatePeerBadges(meta: any) {
@@ -121,7 +121,7 @@ export default function ChatClient() {
     } catch {}
   }
 
-  /* ---------- peer-meta-ui from other modules ---------- */
+  /* ---------- peer-meta-ui (badges) ---------- */
   useEffect(() => {
     if (!isBrowser) return;
     const handler = (event: any) => {
@@ -135,6 +135,7 @@ export default function ChatClient() {
             gender: meta.gender ?? p.gender,
           }));
           updatePeerBadges(meta);
+          console.log("UI_META", meta);
         }
       } catch {}
     };
@@ -142,188 +143,120 @@ export default function ChatClient() {
     return () => window.removeEventListener("ditona:peer-meta-ui", handler as any);
   }, []);
 
-  /* ---------- keyboard + gestures ---------- */
-  useKeyboardShortcuts();
-  useGestures();
+  /* ---------- peer meta from remote (events) ---------- */
+  const [peerInfo, setPeerInfo] = useState({
+    name: "Anonymous",
+    isVip: false,
+    likes: 0,
+    isOnline: true,
+    country: "",
+    city: "",
+    gender: "",
+    age: 0,
+  });
 
-  /* ---------- LiveKit setup ---------- */
+  const handlePeerMeta = (e: any) => {
+    const meta = e.detail;
+    if (!meta) return;
+    setPeerInfo((prev) => ({
+      ...prev,
+      country: meta.country ?? prev.country,
+      gender: meta.gender ?? prev.gender,
+    }));
+    updatePeerBadges(meta);
+  };
+
+  /* ---------- autostart ---------- */
   useEffect(() => {
     if (!hydrated || !isBrowser) return;
-    if (!WS_URL) {
-      console.warn("LIVEKIT WS URL missing");
-      return;
-    }
+    if ((window as any).__ditonaAutostartDone) return;
+    (window as any).__ditonaAutostartDone = 1;
 
-    const join = async () => {
+    const doAutoStart = async () => {
       try {
-        // init local media preview
-        await initLocalMedia();
-        const s = getLocalStream();
-        if (localRef.current && s) {
-          localRef.current.srcObject = s;
-          localRef.current.muted = true;
-          localRef.current.play?.().catch(() => {});
+        const { prefetchGeo } = await import("@/lib/geoCache");
+        prefetchGeo();
+
+        await new Promise((r) => setTimeout(r, 300));
+
+        const stream = await initLocalMedia();
+        if (stream && localRef.current) {
+          localRef.current.srcObject = stream;
+          localRef.current.play().catch(() => {});
         }
 
-        // identity
-        const identity = (() => {
-          const p = (profile ?? {}) as any;
-          return String(
-            p.username ||
-              p.displayName ||
-              p.name ||
-              p.id ||
-              p.uid ||
-              p.anonId ||
-              `anon-${Math.random().toString(36).slice(2, 10)}`
-          );
-        })();
+        await new Promise((r) => setTimeout(r, 150));
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
 
-        // token
-        const tokenRes = await fetch(
-          `/api/livekit/token?room=ditona-public&identity=${encodeURIComponent(identity)}`,
-          { credentials: "include", cache: "no-store" }
-        );
-        if (!tokenRes.ok) {
-          console.warn("token fetch failed", tokenRes.status);
-          return;
-        }
-        const { token } = await tokenRes.json();
+        // optional: age/allow
+        try {
+          await safeFetch("/api/age/allow", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+          });
+        } catch {}
 
-        // create room
-        const room = new Room({ adaptiveStream: true, dynacast: true });
-        lkRoomRef.current = room;
-
-        // events
-        room.on(RoomEvent.ParticipantConnected, () => {
-          setRemoteCount(room.remoteParticipants.size);
-        });
-        room.on(RoomEvent.ParticipantDisconnected, () => {
-          setRemoteCount(room.remoteParticipants.size);
-          if (room.remoteParticipants.size === 0) {
-            // detach remote media
-            if (remoteRef.current) remoteRef.current.srcObject = null;
-            if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-          }
-        });
-        room.on(
-          RoomEvent.TrackSubscribed,
-          (track: RemoteTrack, _pub, participant: RemoteParticipant) => {
-            if (participant.isLocal) return;
-            // attach per track type
-            if (track.kind === Track.Kind.Video) {
-              const vTrack = track as RemoteVideoTrack;
-              const el = remoteRef.current;
-              if (el) {
-                try {
-                  vTrack.attach(el);
-                  el.play?.().catch(() => {});
-                } catch {}
-              }
-            } else if (track.kind === Track.Kind.Audio) {
-              const aTrack = track as RemoteAudioTrack;
-              const el = remoteAudioRef.current;
-              if (el) {
-                try {
-                  aTrack.attach(el);
-                  el.muted = false;
-                  el.play?.().catch(() => {});
-                } catch {}
-              }
-            }
-            setRemoteCount(room.remoteParticipants.size);
-          }
-        );
-        room.on(RoomEvent.TrackUnsubscribed, () => {
-          setRemoteCount(room.remoteParticipants.size);
-        });
-        room.on(RoomEvent.DataReceived, (payload, _p, _k, topic) => {
-          if (topic !== "like") return;
-          try {
-            const msg = JSON.parse(new TextDecoder().decode(payload));
-            if (msg?.t === "like" && typeof msg.liked === "boolean") {
-              window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked: msg.liked } }));
-            }
-          } catch {}
-        });
-
-        // connect
-        await room.connect(WS_URL, token);
-
-        // publish local tracks
-        if (s) {
-          for (const t of s.getTracks()) {
-            try {
-              await room.localParticipant.publishTrack(t);
-            } catch {}
-          }
-        }
-
-        setReady(true);
-      } catch (err: any) {
-        console.warn("livekit join error", err);
-        if (err?.name === "NotAllowedError")
-          setCameraPermissionHint("Allow camera and microphone from browser settings");
-        else if (err?.name === "NotReadableError" || err?.name === "AbortError")
-          setCameraPermissionHint("Close the other tab or allow camera");
-        else if (err?.name === "NotFoundError")
-          setCameraPermissionHint("No camera or microphone found");
-        else setCameraPermissionHint("Camera access error — check permissions");
+        emit("ui:next");
+      } catch (err) {
+        console.warn("[auto-start] Failed:", err);
       }
     };
 
-    join();
+    const t = setTimeout(doAutoStart, 100);
+    return () => clearTimeout(t);
+  }, [hydrated]);
 
-    return () => {
-      const r = lkRoomRef.current;
-      lkRoomRef.current = null;
-      try {
-        r?.disconnect();
-      } catch {}
-    };
-  }, [hydrated, profile]);
+  /* ---------- global UI events ---------- */
+  useKeyboardShortcuts();
+  useGestures();
 
-  /* ---------- UI event bus ---------- */
   useEffect(() => {
+    // media & controls
     const off1 = on("ui:toggleMic", () => toggleMic());
     const off2 = on("ui:toggleCam", () => toggleCam());
+
     const off3 = on("ui:switchCamera", async () => {
       try {
         const newStream = await switchCamera();
         if (localRef.current && newStream) {
           localRef.current.srcObject = newStream;
           localRef.current.play().catch(() => {});
-      // republish switched tracks
-const room = lkRoomRef.current;
-if (room) {
-  try {
-    // unpublish existing tracks safely across SDK versions
-    const lp: any = room.localParticipant;
-    const pubs =
-      typeof lp.getTrackPublications === "function"
-        ? lp.getTrackPublications() // modern API
-        : Array.from(lp.trackPublications?.values?.() ?? []); // fallback
-
-    for (const pub of pubs) {
-      try {
-        const tr: any = (pub as any).track; // LocalAudioTrack | LocalVideoTrack
-        if (tr && typeof lp.unpublishTrack === "function") {
-          lp.unpublishTrack(tr);
         }
-      } catch {}
-    }
+        // republish switched tracks to LiveKit
+        const room = lkRoomRef.current;
+        if (room) {
+          try {
+            const lp: any = room.localParticipant;
+            const pubs =
+              typeof lp.getTrackPublications === "function"
+                ? lp.getTrackPublications()
+                : Array.from(lp.trackPublications?.values?.() ?? []);
+            for (const pub of pubs) {
+              try {
+                const tr: any = (pub as any).track;
+                if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr);
+              } catch {}
+            }
+            for (const t of newStream.getTracks()) {
+              try {
+                await room.localParticipant.publishTrack(t);
+              } catch {}
+            }
+          } catch {}
+        }
+      } catch (e) {
+        console.warn("Camera switch failed:", e);
+      }
+    });
 
-    // publish new tracks from the switched stream
-    for (const t of newStream.getTracks()) {
+    const off4 = on("ui:openSettings", () => {
       try {
-        await room.localParticipant.publishTrack(t);
+        window.location.href = "/settings";
       } catch {}
-    }
-  } catch {}
-}
-   
-    // like via LiveKit data channel
-    const offLike = on("ui:like", async () => {
+    });
+
+    const off5 = on("ui:like", async () => {
       const room = lkRoomRef.current;
       if (!room) {
         toast("No active connection for like");
@@ -333,7 +266,6 @@ if (room) {
       setLike(newLike);
       try {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-        // use reliable data with topic "like"
         await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
       } catch (e) {
         console.warn("publishData failed", e);
@@ -341,64 +273,284 @@ if (room) {
       toast(`Like ${newLike ? "❤️" : "💔"}`);
     });
 
-    // peer-like -> HUD
-    const peerLikeHandler = (e: any) => {
-      const detail = e.detail;
-      if (detail && typeof detail.liked === "boolean") {
-        setPeerLikes(detail.liked ? 1 : 0);
-        toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
+    const off6 = on("ui:report", async () => {
+      try {
+        toast("Report sent. Moving on");
+      } catch {}
+      // for future: leave room / switch room here if needed
+    });
+
+    const off7 = on("ui:next", () => {
+      const now = Date.now();
+      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
+      lastNextTsRef.current = now;
+      toast("⏭️ Next");
+      // later: implement LiveKit-based matchmaking switch
+    });
+
+    const off8 = on("ui:prev", () => {
+      tryPrevOrRandom();
+    });
+
+    const offOpenMsg = on("ui:openMessaging" as any, () => setShowMessaging(true));
+    const offCloseMsg = on("ui:closeMessaging" as any, () => setShowMessaging(false));
+
+    const offRemoteAudio = on("ui:toggleRemoteAudio" as any, () => {
+      const a = remoteAudioRef.current;
+      const v = remoteRef.current;
+      const target: any = a ?? v;
+      if (target) {
+        target.muted = !target.muted;
+        toast(target.muted ? "Remote muted" : "Remote unmuted");
+      }
+    });
+
+    const offTogglePlay = on("ui:togglePlay", () => toast("Toggle matching state"));
+    const offToggleMasks = on("ui:toggleMasks", () => toast("Enable/disable masks"));
+
+    const offMirror = on("ui:toggleMirror", () => {
+      setIsMirrored((prev) => {
+        const s = !prev;
+        toast(s ? "Mirror on" : "Mirror off");
+        return s;
+      });
+    });
+
+    const offUpsell = on("ui:upsell", (d: any) => {
+      if (ffa) return;
+      router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
+    });
+
+    // filters events — no server enqueue anymore; keep UX flow only
+    const reEnqueue = async () => {
+      toast("Filters updated");
+    };
+    const offCountry = on("filters:country", reEnqueue);
+    const offGender = on("filters:gender", reEnqueue);
+
+    // RTC-like UI events (kept for HUD)
+    const offRtcPhase = on("rtc:phase" as any, (data) => setRtcPhase(data.phase));
+    const offRtcPair = on("rtc:pair" as any, (data) => {
+      setPair({ id: data.pairId, role: data.role });
+      setPeerInfo((p) => ({ ...p, name: "Partner", likes: Math.floor(Math.random() * 500) }));
+    });
+    const offRtcTrack = on("rtc:remote-track" as any, (data) => {
+      const remoteVideo = remoteRef.current;
+      if (remoteVideo && data.stream) {
+        remoteVideo.srcObject = data.stream;
+        try {
+          const remoteAudio = remoteAudioRef.current;
+          if (remoteAudio) {
+            remoteAudio.srcObject = remoteVideo.srcObject as any;
+            remoteAudio.muted = false;
+            remoteAudio.play?.().catch(() => {});
+          }
+        } catch {}
+        try { remoteVideo.play?.().catch(() => {}); } catch {}
+      }
+    });
+
+    if (isBrowser) {
+      window.addEventListener("ditona:peer-meta", handlePeerMeta as any);
+      window.addEventListener("rtc:peer-like", (e: any) => {
+        const detail = e.detail;
+        if (detail && typeof detail.liked === "boolean") {
+          setPeerLikes(detail.liked ? 1 : 0);
+          toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
+        }
+      });
+    }
+
+    // init media, then LiveKit connect
+    const initMediaWithPermissionChecks = async () => {
+      try {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+          setCameraPermissionHint("Return to the tab to enable camera");
+          return;
+        }
+        setCameraPermissionHint("");
+        await initLocalMedia();
+        setCameraPermissionHint("");
+      } catch (error: any) {
+        console.warn("Media initialization failed:", error);
+        if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
+        else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
+        else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
+        else setCameraPermissionHint("Camera access error — check permissions");
+        return;
+      }
+
+      const s = getLocalStream();
+      if (localRef.current && s) {
+        if (vip && isBrowser) {
+          try {
+            const { getVideoEffects } = await import("@/lib/effects");
+            const fx = getVideoEffects();
+            if (fx) {
+              const v = document.createElement("video");
+              v.srcObject = s;
+              void v.play();
+              const processed = await fx.initialize(v);
+              if (processed) {
+                setEffectsStream(processed);
+                localRef.current.srcObject = processed;
+                fx.start();
+              } else {
+                localRef.current.srcObject = s;
+              }
+            } else {
+              localRef.current.srcObject = s;
+            }
+          } catch {
+            localRef.current.srcObject = s;
+          }
+        } else {
+          localRef.current.srcObject = s;
+        }
+
+        localRef.current.muted = true;
+        localRef.current.play().catch(() => {});
+
+        // connect to LiveKit once
+        joinLiveKit().catch((e) => console.warn("joinLiveKit failed", e));
+        setReady(true);
       }
     };
-    if (isBrowser) window.addEventListener("rtc:peer-like", peerLikeHandler as any);
 
-    // beauty / masks config
-    const offBeauty = on("ui:toggleBeauty", async (data) => {
+    // connect/join room
+    const joinLiveKit = async () => {
+      if (joiningRef.current) return;
+      joiningRef.current = true;
+
       try {
-        if (!isBrowser) return;
-        const { getVideoEffects } = await import("@/lib/effects");
-        const fx = getVideoEffects();
-        if (fx) {
-          fx.updateConfig({ beauty: { enabled: data.enabled, ...(data.settings || {}) } });
-          setBeauty(!!data.enabled);
+        const room = new Room({
+          adaptiveStream: true,
+          dynacast: true,
+        });
+
+        // wire events
+        room.on(RoomEvent.TrackSubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication, participant: RemoteParticipant) => {
+          try {
+            if (pub.kind === Track.Kind.Video) {
+              const videoTrack = pub.track;
+              if (videoTrack && remoteRef.current) {
+                // prefer attaching via media stream for our UI layer
+                const ms = new MediaStream([videoTrack.mediaStreamTrack]);
+                remoteRef.current.srcObject = ms as any;
+                remoteRef.current.play?.().catch(() => {});
+                // also dispatch legacy event for HUD
+                window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: ms } }));
+              }
+            } else if (pub.kind === Track.Kind.Audio) {
+              const audioTrack = pub.track;
+              if (audioTrack && remoteAudioRef.current) {
+                const ms = new MediaStream([audioTrack.mediaStreamTrack]);
+                remoteAudioRef.current.srcObject = ms as any;
+                remoteAudioRef.current.muted = false;
+                remoteAudioRef.current.play?.().catch(() => {});
+              }
+            }
+            setRtcPhase("connected");
+            window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
+          } catch {}
+        });
+
+        room.on(RoomEvent.DataReceived, (payload, _participant, _kind, _topic) => {
+          try {
+            const msg = new TextDecoder().decode(payload);
+            if (!msg) return;
+            if (/^\s*\{/.test(msg)) {
+              const j = JSON.parse(msg);
+              if (j?.t === "like") {
+                setPeerLikes(j.liked ? 1 : 0);
+                toast(j.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
+                window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: j }));
+              }
+              if (j?.t === "peer-meta") {
+                window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j }));
+              }
+            }
+          } catch {}
+        });
+
+        room.on(RoomEvent.ParticipantDisconnected, () => {
+          setRtcPhase("searching");
+        });
+
+        // set local media tracks into room
+        const src = (effectsStream ?? getLocalStream()) || null;
+        if (src) {
+          for (const t of src.getTracks()) {
+            try {
+              await room.localParticipant.publishTrack(t);
+            } catch {}
+          }
         }
-      } catch {}
-    });
 
-    const offBeautyUpdate = on("ui:updateBeauty", async (data) => {
-      try {
-        if (!isBrowser) return;
-        const { getVideoEffects } = await import("@/lib/effects");
-        const fx = getVideoEffects();
-        if (fx) fx.updateConfig({ beauty: { enabled: beauty, ...(data.settings || {}) } });
-      } catch {}
-    });
+        // get token and connect
+        const identity =
+          (profile && (profile as any)?.displayName && String((profile as any).displayName)) ||
+          `anon-${Math.random().toString(36).slice(2, 10)}`;
+        const tokenRes = await fetch(`/api/livekit/token?room=ditona-public&identity=${encodeURIComponent(identity)}`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!tokenRes.ok) {
+          console.warn("token fetch failed", tokenRes.status);
+          joiningRef.current = false;
+          return;
+        }
+        const { token } = await tokenRes.json();
+        const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+        await room.connect(ws, token);
 
-    const offMask = on("ui:changeMask", async (data) => {
-      try {
-        if (!isBrowser) return;
-        const { getVideoEffects } = await import("@/lib/effects");
-        const fx = getVideoEffects();
-        if (fx) fx.updateConfig({ mask: { enabled: data.type !== "none", type: data.type } });
-      } catch {}
-    });
-
-    return () => {
-      off1(); off2(); off3();
-      offOpenMsg(); offCloseMsg(); offRemoteAudio(); offTogglePlay(); offToggleMasks(); offMirror(); offUpsell();
-      offLike(); offBeauty(); offBeautyUpdate(); offMask();
-      if (isBrowser) window.removeEventListener("rtc:peer-like", peerLikeHandler as any);
+        lkRoomRef.current = room;
+        setRtcPhase("matched");
+        window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: "ditona-public", role: "caller" } }));
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched" } }));
+      } finally {
+        joiningRef.current = false;
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [like, vip, ffa, router, beauty]);
 
-  /* ---------- mobile viewport optimizer ---------- */
-  useEffect(() => {
+    initMediaWithPermissionChecks().catch(() => {});
+
+    // mobile viewport optimizer
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
-    return () => unsubMob();
+
+    return () => {
+      off1(); off2(); off3(); off4(); off5(); off6(); off7(); off8();
+      offOpenMsg(); offCloseMsg(); offRemoteAudio(); offTogglePlay(); offToggleMasks(); offMirror(); offUpsell();
+      offCountry(); offGender(); offRtcPhase(); offRtcPair(); offRtcTrack();
+      if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
+
+      // LiveKit cleanup
+      try {
+        const room = lkRoomRef.current;
+        lkRoomRef.current = null;
+        if (room) {
+          try { room.disconnect(); } catch {}
+        }
+      } catch {}
+
+      unsubMob();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pair.id, vip, ffa, router, beauty]);
+
+  // stop-like hook on unmount for legacy rtcFlow parity
+  useEffect(() => () => {
+    try {
+      const room = lkRoomRef.current;
+      lkRoomRef.current = null;
+      if (room) {
+        try { room.disconnect(); } catch {}
+      }
+    } catch {}
   }, []);
 
-  /* ---------- swipe next/prev: UI only ---------- */
+  // swipe next/prev
   useEffect(() => {
     if (!isBrowser) return;
     let x0 = 0, y0 = 0;
@@ -419,7 +571,8 @@ if (room) {
     return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("pointerup", up); };
   }, [vip, ffa]);
 
-  /* ---------- render ---------- */
+  /* ======================= UI ======================= */
+
   if (!hydrated) {
     return (
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
@@ -441,25 +594,28 @@ if (room) {
       <LikeHud />
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
-          {/* remote */}
+          {/* ======= remote ======= */}
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
             <PeerInfoCard peerInfo={peerInfo} />
             <PeerMetadata country={peerInfo.country} city={peerInfo.city} gender={peerInfo.gender} age={peerInfo.age} />
             <FilterBar />
             <MessageHud />
-            <div className="absolute bottom-4 right-4 z-30"><LikeSystem /></div>
 
+            {/* like button */}
+            <div className="absolute bottom-4 right-4 z-30">
+              <LikeSystem />
+            </div>
+
+            {/* remote media */}
             <video ref={remoteRef} id="remoteVideo" data-role="remote" className="w-full h-full object-cover" playsInline autoPlay />
             <audio ref={remoteAudioRef} id="remoteAudio" autoPlay playsInline hidden />
 
-            {remoteCount === 0 && (
+            {/* searching overlay */}
+            {rtcPhase === "searching" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">Searching for a partner…</div>
                 <button
-                  onClick={() => {
-                    try { lkRoomRef.current?.disconnect(); } catch {}
-                    toast("🛑 Search cancelled");
-                  }}
+                  onClick={() => toast("🛑 Search cancelled")}
                   className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
                 >
                   Cancel
@@ -468,7 +624,7 @@ if (room) {
             )}
           </section>
 
-          {/* local */}
+          {/* ======= local ======= */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
@@ -478,6 +634,7 @@ if (room) {
               muted
               autoPlay
             />
+
             {!ready && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 text-sm text-center px-4">
                 {cameraPermissionHint ? (
@@ -485,22 +642,52 @@ if (room) {
                     <div className="mb-2 text-yellow-400">⚠️</div>
                     <div className="mb-4">{cameraPermissionHint}</div>
                     <button
-                      onClick={async () => {
+                      onClick={() => {
                         setCameraPermissionHint("");
-                        try {
-                          await initLocalMedia();
-                          const s = getLocalStream();
-                          if (localRef.current && s) {
-                            localRef.current.srcObject = s;
-                            localRef.current.muted = true;
-                            await localRef.current.play().catch(() => {});
-                            setReady(true);
-                          }
-                        } catch (error: any) {
-                          if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
-                          else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
-                          else setCameraPermissionHint("Camera access error — check permissions");
-                        }
+                        initLocalMedia()
+                          .then(async () => {
+                            const s = getLocalStream();
+                            if (localRef.current && s) {
+                              if (vip && isBrowser) {
+                                try {
+                                  const { getVideoEffects } = await import("@/lib/effects");
+                                  const fx = getVideoEffects();
+                                  if (fx) {
+                                    const v = document.createElement("video");
+                                    v.srcObject = s;
+                                    void v.play();
+                                    const processed = await fx.initialize(v);
+                                    if (processed) {
+                                      setEffectsStream(processed);
+                                      localRef.current.srcObject = processed;
+                                      fx.start();
+                                    } else {
+                                      localRef.current.srcObject = s;
+                                    }
+                                  } else {
+                                    localRef.current.srcObject = s;
+                                  }
+                                } catch {
+                                  localRef.current.srcObject = s;
+                                }
+                              } else {
+                                localRef.current.srcObject = s;
+                              }
+                              localRef.current.muted = true;
+                              localRef.current.play().catch(() => {});
+                              setReady(true);
+                            }
+                          })
+                          .catch((error) => {
+                            console.warn("Retry failed:", error);
+                            if ((error as any)?.name === "NotAllowedError") {
+                              setCameraPermissionHint("Allow camera and microphone from browser settings");
+                            } else if ((error as any)?.name === "NotReadableError" || (error as any)?.name === "AbortError") {
+                              setCameraPermissionHint("Close the other tab or allow camera");
+                            } else {
+                              setCameraPermissionHint("Camera access error — check permissions");
+                            }
+                          });
                       }}
                       className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
                     >
@@ -512,6 +699,7 @@ if (room) {
                 )}
               </div>
             )}
+
             <MyControls />
             <div id="gesture-layer" className="absolute inset-0 -z-10" />
           </section>
