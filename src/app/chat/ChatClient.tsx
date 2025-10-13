@@ -11,7 +11,7 @@ import "./msgSendClient";
 
 if (process.env.NODE_ENV !== "production") {
   if (typeof window !== "undefined") {
-    // لا تزعج المستخدم بأخطاء إلغاء الطلبات
+    // Ignore aborted-request errors for end users
     window.addEventListener("unhandledrejection", (e) => {
       const r = (e as any).reason;
       const msg = String((r && r.message) || "");
@@ -147,7 +147,7 @@ export default function ChatClient() {
     } catch {}
   }
 
-  /* ---------- peer-meta-ui (فوري للبادجات) ---------- */
+  /* ---------- peer-meta-ui (instant badges) ---------- */
   useEffect(() => {
     if (!isBrowser) return;
     const handler = (event: any) => {
@@ -169,7 +169,7 @@ export default function ChatClient() {
     return () => window.removeEventListener("ditona:peer-meta-ui", handler as any);
   }, []);
 
-  /* ---------- أوتو ستارت بعد الهاييدريشن ---------- */
+  /* ---------- autostart after hydration ---------- */
   useEffect(() => {
     if (!hydrated || !isBrowser) return;
     if ((window as any).__ditonaAutostartDone) return;
@@ -201,7 +201,7 @@ export default function ChatClient() {
           await safeFetch("/api/age/allow", opts);
           await safeFetch("/api/rtc/init", opts);
         } catch (e) {
-          console.warn("age/allow or anon/init failed", e);
+          console.warn("age/allow or rtc/init failed", e);
         }
 
         emit("ui:next");
@@ -216,7 +216,7 @@ export default function ChatClient() {
     return () => clearTimeout(t);
   }, [hydrated]);
 
-  /* ---------- أحداث الواجهة / اختصارات ---------- */
+  /* ---------- UI events / shortcuts ---------- */
   useKeyboardShortcuts();
   useGestures();
 
@@ -248,7 +248,7 @@ export default function ChatClient() {
         const dc = (globalThis as any).__ditonaDataChannel;
 
         if (!currentPairId || !dc || dc.readyState !== "open") {
-          toast("لا يوجد اتصال نشط للإعجاب");
+          toast("No active connection for like");
           return;
         }
 
@@ -260,7 +260,7 @@ export default function ChatClient() {
           method: "POST",
         }).catch(() => {});
 
-        toast(`تم الإعجاب ${newLike ? "❤️" : "💔"}`);
+        toast(`Like ${newLike ? "❤️" : "💔"}`);
       } catch (e) {
         console.warn("Like failed:", e);
       }
@@ -269,7 +269,7 @@ export default function ChatClient() {
     const off6 = on("ui:report", async () => {
       try {
         await safeFetch("/api/moderation/report", { method: "POST" });
-        toast("🚩 تم إرسال البلاغ وجاري الانتقال");
+        toast("Report sent. Moving on");
       } catch {}
       teardownSignaling("report");
       rtc.next();
@@ -295,28 +295,28 @@ export default function ChatClient() {
       const a = document.getElementById("remoteAudio") as HTMLAudioElement | null;
       if (a) {
         a.muted = !a.muted;
-        toast(a.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني");
+        toast(a.muted ? "Remote muted" : "Remote unmuted");
         return;
       }
       const v = document.querySelector('video[data-role="remote"],#remoteVideo') as HTMLVideoElement | null;
       if (v) {
         v.muted = !v.muted;
-        toast(v.muted ? "🔇 صمت الطرف الثاني" : "🔈 سماع الطرف الثاني");
+        toast(v.muted ? "Remote muted" : "Remote unmuted");
       }
     });
 
     const offTogglePlay = on("ui:togglePlay", () => {
-      toast("تبديل حالة المطابقة");
+      toast("Toggle matching state");
     });
 
     const offToggleMasks = on("ui:toggleMasks", () => {
-      toast("🤡 تفعيل/إلغاء الأقنعة");
+      toast("Enable/disable masks");
     });
 
     const offMirror = on("ui:toggleMirror", () => {
       setIsMirrored((prev) => {
         const s = !prev;
-        toast(s ? "🪞 تفعيل المرآة" : "📹 إلغاء المرآة");
+        toast(s ? "Mirror on" : "Mirror off");
         return s;
       });
     });
@@ -326,30 +326,30 @@ export default function ChatClient() {
       router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
     });
 
-    // تحديث الفلاتر ⇒ إعادة enqueue ثم next
+    // filters update ⇒ re-enqueue then next
     const reEnqueue = async () => {
       try {
         const { useFilters } = await import("@/state/filters");
         const { gender, countries } = useFilters.getState();
-       await safeFetch("/api/rtc/enqueue", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  credentials: "include",
-  cache: "no-store",
-  body: JSON.stringify({
-    gender: "u",
-    country: "XX",
-    filterGenders: gender === "all" ? "all" : gender,           // "all"|"male"|"female"
-    filterCountries: countries?.length ? countries.join(",") : "ALL",
-  }),
-});
+        await safeFetch("/api/rtc/enqueue", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          cache: "no-store",
+          body: JSON.stringify({
+            gender: "u",
+            country: "XX",
+            filterGenders: gender === "all" ? "all" : gender, // "all"|"male"|"female"
+            filterCountries: countries?.length ? countries.join(",") : "ALL",
+          }),
+        });
       } catch {}
       rtc.next();
     };
     const offCountry = on("filters:country", reEnqueue);
     const offGender = on("filters:gender", reEnqueue);
 
-    // حالـة RTC / الـ pair / الستريم البعيد
+    // RTC phase / pair / remote stream
     const offRtcPhase = on("rtc:phase" as any, (data) => {
       setRtcPhase(data.phase);
     });
@@ -381,7 +381,7 @@ export default function ChatClient() {
       }
     });
 
-    // مؤثرات الجمال / الأقنعة
+    // beauty / masks
     const offBeauty = on("ui:toggleBeauty", async (data) => {
       try {
         if (!isBrowser) return;
@@ -418,7 +418,7 @@ export default function ChatClient() {
       }
     });
 
-    // ميتا من النظير
+    // peer metadata
     const handlePeerMeta = (e: any) => {
       const meta = e.detail;
       if (meta) {
@@ -436,16 +436,16 @@ export default function ChatClient() {
         const detail = e.detail;
         if (detail && typeof detail.liked === "boolean") {
           setPeerLikes(detail.liked ? 1 : 0);
-          toast(`${detail.liked ? "أعجب" : "ألغى الإعجاب"} بك الشريك ${detail.liked ? "❤️" : "💔"}`);
+          toast(`Your partner ${detail.liked ? "liked" : "unliked"} you ${detail.liked ? "❤️" : "💔"}`);
         }
       });
     }
 
-    // تهيئة الميديا بإشعارات أذونات أو تبويب غير نشط
+    // media init with permission/visibility hints
     const initMediaWithPermissionChecks = async () => {
       try {
         if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-          setCameraPermissionHint("قم بالعودة إلى التبويب لتفعيل الكاميرا");
+          setCameraPermissionHint("Return to the tab to enable camera");
           return;
         }
         setCameraPermissionHint("");
@@ -454,13 +454,13 @@ export default function ChatClient() {
       } catch (error: any) {
         console.warn("Media initialization failed:", error);
         if (error?.name === "NotAllowedError") {
-          setCameraPermissionHint("قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح");
+          setCameraPermissionHint("Allow camera and microphone from browser settings");
         } else if (error?.name === "NotReadableError" || error?.name === "AbortError") {
-          setCameraPermissionHint("قم بإغلاق التبويب الثاني أو اسمح للكاميرا");
+          setCameraPermissionHint("Close the other tab or allow camera");
         } else if (error?.name === "NotFoundError") {
-          setCameraPermissionHint("لم يتم العثور على كاميرا أو ميكروفون");
+          setCameraPermissionHint("No camera or microphone found");
         } else {
-          setCameraPermissionHint("خطأ في الوصول للكاميرا - تأكد من الأذونات");
+          setCameraPermissionHint("Camera access error — check permissions");
         }
         return;
       }
@@ -487,7 +487,7 @@ export default function ChatClient() {
               localRef.current.srcObject = s;
             }
           } catch (e) {
-            console.warn("Effects init failed, fallback to raw stream:", e);
+            console.warn("Effects init failed, falling back to raw stream:", e);
             localRef.current.srcObject = s;
           }
         } else {
@@ -497,7 +497,7 @@ export default function ChatClient() {
         localRef.current.muted = true;
         localRef.current.play().catch(() => {});
 
-        // بعد الميديا ابدأ RTC
+        // After media, start RTC
         if (localRef.current?.srcObject) {
           await safeFetch("/api/rtc/init", { method: "POST", credentials: "include", cache: "no-store" });
           const m = await rtc
@@ -521,24 +521,24 @@ export default function ChatClient() {
         const role: "caller" | "callee" | undefined = detail.role;
         if (!pairId || !role) return;
 
-        // single-flight: لا تبدأ جلسة جديدة إن كانت نفس الزوجة قيد العمل
+        // single-flight: do not start a new session if the same pair is already active
         if (sigRef.current?.pairId === pairId && sigRef.current?.role === role) return;
 
-        // أوقف أي جلسة سابقة قبل البدء
+        // stop any previous session before starting
         teardownSignaling("restart");
 
         const ac = new AbortController();
-        const pc = new RTCPeerConnection(); // بدون تبعيات جديدة
+        const pc = new RTCPeerConnection();
         const sdpTag = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
         sigRef.current = { ac, pc, pairId, role, sdpTag, icePoll: null };
 
-        // Tracks: أضف الميديا المحلية
+        // add local media
         const local = getLocalStream();
         if (local) {
           for (const track of local.getTracks()) pc.addTrack(track, local);
         }
 
-        // ontrack → مرر الستريم للـ UI عبر الحدث القائم
+        // forward remote stream to UI
         pc.ontrack = (e) => {
           const remoteStream = e.streams?.[0];
           if (remoteStream) {
@@ -546,27 +546,21 @@ export default function ChatClient() {
           }
         };
 
-        // حالة الاتصال
+        // connection state
         pc.onconnectionstatechange = () => {
           if (pc.connectionState === "connected") {
             window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
           }
         };
 
-        // إرسال ICE الصادر
+        // outbound ICE
         pc.onicecandidate = async (e) => {
           if (!e.candidate || ac.signal.aborted) return;
           try {
             await safeFetch("/api/rtc/ice", {
               method: "POST",
-              headers: {
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({
-                pairId,
-                role,
-                candidate: e.candidate,
-              }),
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ pairId, role, candidate: e.candidate }),
               credentials: "include",
               cache: "no-store",
               signal: ac.signal,
@@ -574,7 +568,7 @@ export default function ChatClient() {
           } catch {}
         };
 
-        // استهلاك ICE الوارد (poll)
+        // inbound ICE polling
         const startIcePoll = () => {
           const timer = window.setInterval(async () => {
             if (ac.signal.aborted) return;
@@ -590,8 +584,7 @@ export default function ChatClient() {
               const list: any[] = Array.isArray(data) ? data : data?.candidates || [];
               for (const c of list) {
                 try {
-                  // قد يأتي null كإشارة نهاية التجميع
-                  await pc.addIceCandidate(c || null);
+                  await pc.addIceCandidate(c || null); // null marks end-of-candidates
                 } catch {}
               }
             } catch {}
@@ -599,13 +592,11 @@ export default function ChatClient() {
           sigRef.current && (sigRef.current.icePoll = timer);
         };
 
-        // تسلسل الإشارة
+        // signaling sequence
         if (role === "caller") {
-          // لا يبدأ أي offer قبل matchmake 200 {pairId, role} — نحن هنا بعده
           const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
           await pc.setLocalDescription(offer);
 
-          // POST /offer
           await safeFetch("/api/rtc/offer", {
             method: "POST",
             headers: {
@@ -620,7 +611,7 @@ export default function ChatClient() {
 
           startIcePoll();
 
-          // سحب answer حتى وصوله
+          // pull answer until available
           while (!ac.signal.aborted && !pc.currentRemoteDescription) {
             try {
               const res = await safeFetch(`/api/rtc/answer?pairId=${encodeURIComponent(pairId)}`, {
@@ -641,7 +632,6 @@ export default function ChatClient() {
           }
         } else {
           // callee
-          // سحب offer حتى وصوله
           while (!ac.signal.aborted && !pc.currentRemoteDescription) {
             try {
               const res = await safeFetch(`/api/rtc/offer?pairId=${encodeURIComponent(pairId)}`, {
@@ -664,7 +654,6 @@ export default function ChatClient() {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
 
-          // POST /answer
           await safeFetch("/api/rtc/answer", {
             method: "POST",
             headers: {
@@ -686,13 +675,13 @@ export default function ChatClient() {
 
     window.addEventListener("rtc:matched", onMatched as any);
 
-    // Mobile viewport optimizer
+    // mobile viewport optimizer
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe((vp) => {
       console.log("Viewport changed:", vp);
     });
 
-    // تنظيف
+    // cleanup
     return () => {
       off1();
       off2();
@@ -725,10 +714,10 @@ export default function ChatClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair.id, vip, ffa, router]);
 
-  // أوقف RTC عند إزالة المكوّن
+  // stop RTC on unmount
   useEffect(() => () => { try { rtc.stop(); } catch {} }, []);
 
-  // سحب بالإيماءة (التالي/السابق)
+  // swipe gestures (next/prev)
   useEffect(() => {
     if (!isBrowser) return;
     let x0 = 0,
@@ -742,15 +731,15 @@ export default function ChatClient() {
         dy = e.clientY - y0;
       if (Math.abs(dx) > 60 && Math.abs(dy) < 60 && Math.abs(dx) > Math.abs(dy)) {
         if (dx < 0) {
-          toast("⏭️ سحب للمطابقة التالية");
+          toast("⏭️ Swiped to next");
           emit("ui:next");
         } else {
           if (ffa) console.log("FFA_FORCE: enabled");
           if (!vip && !ffa) {
-            toast("🔒 العودة للسابق متاحة لـ VIP فقط");
+            toast("🔒 Going back is VIP only");
             emit("ui:upsell", "prev");
           } else {
-            toast("⏮️ محاولة العودة للمطابقة السابقة...");
+            toast("⏮️ Attempting to go back…");
             emit("ui:prev");
           }
         }
@@ -787,23 +776,23 @@ export default function ChatClient() {
       <LikeHud />
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
-          {/* ======= الأعلى (الطرف الآخر) ======= */}
+          {/* ======= top (peer) ======= */}
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
             <PeerInfoCard peerInfo={peerInfo} />
             <PeerMetadata country={peerInfo.country} city={peerInfo.city} gender={peerInfo.gender} age={peerInfo.age} />
             <FilterBar />
             <MessageHud />
 
-            {/* زر الإعجاب */}
+            {/* like button */}
             <div className="absolute bottom-4 right-4 z-30">
               <LikeSystem />
             </div>
 
-            {/* فيديو الطرف الآخر + أوديو مخفي (لـ iOS) */}
+            {/* remote video + hidden audio for iOS */}
             <video id="remoteVideo" data-role="remote" className="w-full h-full object-cover" playsInline autoPlay />
             <audio id="remoteAudio" autoPlay playsInline hidden />
 
-            {/* طبقة البحث */}
+            {/* searching layer */}
             {rtcPhase === "searching" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">Searching for a partner…</div>
@@ -811,7 +800,7 @@ export default function ChatClient() {
                   onClick={() => {
                     try {
                       rtc.stop();
-                      toast("🛑 تم إلغاء البحث");
+                      toast("🛑 Search cancelled");
                     } catch (e) {
                       console.warn("Cancel failed:", e);
                     }
@@ -824,7 +813,7 @@ export default function ChatClient() {
             )}
           </section>
 
-          {/* ======= الأسفل (أنا) ======= */}
+          {/* ======= bottom (me) ======= */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
@@ -890,17 +879,17 @@ export default function ChatClient() {
                           .catch((error) => {
                             console.warn("Retry failed:", error);
                             if ((error as any)?.name === "NotAllowedError") {
-                              setCameraPermissionHint("قم بالسماح للكاميرا والميكروفون من إعدادات المتصفح");
+                              setCameraPermissionHint("Allow camera and microphone from browser settings");
                             } else if ((error as any)?.name === "NotReadableError" || (error as any)?.name === "AbortError") {
-                              setCameraPermissionHint("قم بإغلاق التبويب الثاني أو اسمح للكاميرا");
+                              setCameraPermissionHint("Close the other tab or allow camera");
                             } else {
-                              setCameraPermissionHint("خطأ في الوصول للكاميرا - تأكد من الأذونات");
+                              setCameraPermissionHint("Camera access error — check permissions");
                             }
                           });
                       }}
                       className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
                     >
-                      إعادة المحاولة
+                      Retry
                     </button>
                   </>
                 ) : (
@@ -913,7 +902,7 @@ export default function ChatClient() {
             <div id="gesture-layer" className="absolute inset-0 -z-10" />
           </section>
 
-          {/* أدوات الشريط السفلي + الرسائل + العروض */}
+          {/* bottom bar + messages + promos */}
           <ChatToolbar />
           <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
           <ChatMessagingBar />
