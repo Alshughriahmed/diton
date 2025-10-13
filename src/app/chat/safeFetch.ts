@@ -1,52 +1,56 @@
-// src/app/chat/safeFetch.ts
-export type SafeOpts = RequestInit & { timeoutMs?: number };
+"use client";
 
-function rid() {
-  try {
-    const a = new Uint32Array(3);
-    crypto.getRandomValues(a);
-    return Array.from(a, x => x.toString(36)).join("-");
-  } catch {
-    return Math.random().toString(36).slice(2);
+type SafeInit = RequestInit & { timeoutMs?: number };
+
+export default async function safeFetch(input: RequestInfo | URL, init: SafeInit = {}) {
+  const url = typeof input === "string" ? input : String(input);
+  const isRtc = url.includes("/api/rtc/");
+  const method = (init.method || "GET").toUpperCase();
+
+  // compose AbortController with optional external signal + timeout
+  const ac = new AbortController();
+  const ext = init.signal as AbortSignal | undefined;
+  if (ext) {
+    if (ext.aborted) ac.abort();
+    else ext.addEventListener("abort", () => ac.abort(), { once: true });
   }
-}
+  const timeout = init.timeoutMs ?? 15000;
+  const tm = setTimeout(() => ac.abort(), timeout);
 
-export default async function apiSafeFetch(input: string, opts: SafeOpts = {}) {
-  const ctrl = new AbortController();
-  const t = setTimeout(
-    () => ctrl.abort(new DOMException("timeout", "AbortError")),
-    opts.timeoutMs ?? 10000
-  );
+  // headers
+  const headers = new Headers(init.headers || undefined);
+  const isApi = url.startsWith("/api/");
+  const hasJsonishBody =
+    init.body != null &&
+    method !== "GET" &&
+    method !== "HEAD" &&
+    typeof init.body !== "string" &&
+    !(init.body instanceof FormData) &&
+    !(init.body instanceof Blob);
 
-  const headers = new Headers(opts.headers || {});
-  headers.set("x-req-id", rid());
-  headers.set("accept", "application/json, text/plain, */*");
+  if (isApi && !headers.has("accept")) headers.set("accept", "application/json");
+  if (isApi && hasJsonishBody && !headers.has("content-type")) headers.set("content-type", "application/json");
 
-  // أضف anonId إن وُجد
-  try {
-    const anon =
-      localStorage.getItem("anonId") || localStorage.getItem("ditona_anon");
-    if (anon) headers.set("x-anon-id", anon);
-  } catch {}
-
-  const init: RequestInit = {
-    ...opts,
+  // final init
+  const finalInit: RequestInit = {
+    ...init,
+    method,
     headers,
-    credentials: opts.credentials ?? "include",
-    cache: "no-store",
-    signal: ctrl.signal,
+    signal: ac.signal,
+    cache: init.cache ?? "no-store",
+    credentials: init.credentials ?? (isRtc ? "include" : "same-origin"),
   };
 
+  // never send body on GET/HEAD
+  if (method === "GET" || method === "HEAD") {
+    delete (finalInit as any).body;
+  } else if (hasJsonishBody) {
+    (finalInit as any).body = JSON.stringify(init.body);
+  }
+
   try {
-    const res = await fetch(input, init);
-    return res;
-  } catch (e) {
-    // لا نرمي أخطاء الشبكة كي لا نكسر الـ flow الأعلى
-    if ((e as any)?.name !== "AbortError") {
-      console.warn("safeFetch network error:", e);
-    }
-    return undefined as any;
+    return await fetch(input as any, finalInit);
   } finally {
-    clearTimeout(t);
+    clearTimeout(tm);
   }
 }
