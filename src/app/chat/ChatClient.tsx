@@ -393,71 +393,95 @@ export default function ChatClient() {
       }
     });
 
-    // init media, then RTC
-    const initMediaWithPermissionChecks = async () => {
-      try {
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-          setCameraPermissionHint("Return to the tab to enable camera");
-          return;
-        }
-        setCameraPermissionHint("");
-        await initLocalMedia();
-        setCameraPermissionHint("");
-      } catch (error: any) {
-        console.warn("Media initialization failed:", error);
-        if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
-        else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
-        else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
-        else setCameraPermissionHint("Camera access error — check permissions");
-        return;
-      }
+   // peer meta from remote
+const handlePeerMeta = (e: any) => {
+  const meta = e.detail;
+  if (!meta) return;
+  setPeerInfo((prev) => ({
+    ...prev,
+    country: meta.country ?? prev.country,
+    gender: meta.gender ?? prev.gender,
+  }));
+  updatePeerBadges(meta);
+};
 
-      const s = getLocalStream();
-      if (localRef.current && s) {
-        if (vip && isBrowser) {
-          try {
-            const { getVideoEffects } = await import("@/lib/effects");
-            const fx = getVideoEffects();
-            if (fx) {
-              const v = document.createElement("video");
-              v.srcObject = s;
-              void v.play();
-              const processed = await fx.initialize(v);
-              if (processed) {
-                setEffectsStream(processed);
-                localRef.current.srcObject = processed;
-                fx.start();
-              } else {
-                localRef.current.srcObject = s;
-              }
-            } else {
-              localRef.current.srcObject = s;
-            }
-          } catch {
+if (isBrowser) {
+  window.addEventListener("ditona:peer-meta", handlePeerMeta as any);
+  window.addEventListener("rtc:peer-like", (e: any) => {
+    const detail = e.detail;
+    if (detail && typeof detail.liked === "boolean") {
+      setPeerLikes(detail.liked ? 1 : 0);
+      toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
+    }
+  });
+}
+
+// init media, then RTC
+const initMediaWithPermissionChecks = async () => {
+  try {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      setCameraPermissionHint("Return to the tab to enable camera");
+      return;
+    }
+    setCameraPermissionHint("");
+    await initLocalMedia();
+    setCameraPermissionHint("");
+  } catch (error: any) {
+    console.warn("Media initialization failed:", error);
+    if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
+    else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
+    else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
+    else setCameraPermissionHint("Camera access error — check permissions");
+    return;
+  }
+
+  const s = getLocalStream();
+  if (localRef.current && s) {
+    if (vip && isBrowser) {
+      try {
+        const { getVideoEffects } = await import("@/lib/effects");
+        const fx = getVideoEffects();
+        if (fx) {
+          const v = document.createElement("video");
+          v.srcObject = s;
+          void v.play();
+          const processed = await fx.initialize(v);
+          if (processed) {
+            setEffectsStream(processed);
+            localRef.current.srcObject = processed;
+            fx.start();
+          } else {
             localRef.current.srcObject = s;
           }
         } else {
           localRef.current.srcObject = s;
         }
-
-        localRef.current.muted = true;
-        localRef.current.play().catch(() => {});
-
-        if (localRef.current?.srcObject) {
-          await safeFetch("/api/rtc/init", { method: "GET", credentials: "include", cache: "no-store" });
-          const m = await rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase).catch(() => undefined as any);
-          if (m?.pairId && m?.role) window.dispatchEvent(new CustomEvent("rtc:matched", { detail: m }));
-        }
-        setReady(true);
+      } catch {
+        localRef.current.srcObject = s;
       }
-    };
+    } else {
+      localRef.current.srcObject = s;
+    }
 
-    initMediaWithPermissionChecks().catch(() => {});
+    localRef.current.muted = true;
+    localRef.current.play().catch(() => {});
 
-    // matched → signaling bridge (already implemented elsewhere)
-    const onMatched = async (ev: any) => {
-      // kept as in your current version
-    };
+    if (localRef.current?.srcObject) {
+      await safeFetch("/api/rtc/init", { method: "GET", credentials: "include", cache: "no-store" });
+      const m = await rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase).catch(() => undefined as any);
+      if (m?.pairId && m?.role) window.dispatchEvent(new CustomEvent("rtc:matched", { detail: m }));
+    }
+    setReady(true);
+  }
+};
+
+initMediaWithPermissionChecks().catch(() => {});
+
+// matched → signaling bridge (already implemented elsewhere)
+const onMatched = async (ev: any) => {
+  // keep existing signaling bridge implementation
+};
+
     window.addEventListener("rtc:matched", onMatched as any);
 
     // mobile viewport optimizer
