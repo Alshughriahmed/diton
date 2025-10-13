@@ -2,10 +2,67 @@
 
 type SafeInit = RequestInit & { timeoutMs?: number };
 
+// === helpers to normalize enqueue payload to server schema ===
+function normEnqueueBody(input: any): {
+  gender: "u";
+  country: "XX";
+  filterGenders: "all" | "male" | "female";
+  filterCountries: string; // "ALL" or CSV
+} {
+  const b = (input && typeof input === "object") ? input : {};
+
+  // allow both new-style and old-style inputs
+  // new style from UI: { gender: "any"|"male"|"female", countries: ["ALL"|CC...], genders?: [...] }
+  // old style: { filterGenders, filterCountries }
+  let g: string | undefined =
+    (b.gender ?? (Array.isArray(b.genders) ? b.genders[0] : undefined)) || "any";
+  g = String(g).toLowerCase();
+  const filterGenders: "all" | "male" | "female" =
+    g === "male" ? "male" : g === "female" ? "female" : "all";
+
+  let cList: string[] | undefined = Array.isArray(b.countries) ? b.countries : undefined;
+  let filterCountries =
+    typeof b.filterCountries === "string" ? b.filterCountries : undefined;
+
+  if (!filterCountries) {
+    if (!cList || cList.length === 0 || cList.includes("ALL")) {
+      filterCountries = "ALL";
+    } else {
+      const csv = cList
+        .map((x) => String(x || "").toUpperCase())
+        .filter((x) => /^[A-Z]{2}$/.test(x));
+      filterCountries = csv.length ? csv.join(",") : "ALL";
+    }
+  }
+
+  return {
+    gender: "u",
+    country: "XX",
+    filterGenders,
+    filterCountries,
+  };
+}
+
+// map routes → enforced method
+function enforcedMethod(url: string): "GET" | "POST" {
+  if (url.startsWith("/api/age/allow")) return "POST";
+  if (url.startsWith("/api/rtc/init")) return "GET";
+  if (url.startsWith("/api/rtc/enqueue")) return "POST";
+  if (url.startsWith("/api/rtc/matchmake")) return "GET";
+  if (url.startsWith("/api/rtc/offer")) return "POST";
+  if (url.startsWith("/api/rtc/answer")) return "POST";
+  // /api/rtc/ice supports POST (send) and GET (poll by pairId). لا نفرضه هنا.
+  return (undefined as any);
+}
+
 export default async function safeFetch(input: RequestInfo | URL, init: SafeInit = {}) {
   const url = typeof input === "string" ? input : String(input);
   const isRtc = url.includes("/api/rtc/");
-  const method = (init.method || "GET").toUpperCase();
+  let method = (init.method || "GET").toUpperCase() as "GET" | "POST";
+
+  // enforce method when known route
+  const must = enforcedMethod(url);
+  if (must) method = must;
 
   // compose AbortController with optional external signal + timeout
   const ac = new AbortController();
@@ -20,18 +77,16 @@ export default async function safeFetch(input: RequestInfo | URL, init: SafeInit
   // headers
   const headers = new Headers(init.headers || undefined);
   const isApi = url.startsWith("/api/");
-  const hasJsonishBody =
-    init.body != null &&
-    method !== "GET" &&
-    method !== "HEAD" &&
-    typeof init.body !== "string" &&
-    !(init.body instanceof FormData) &&
-    !(init.body instanceof Blob);
-
   if (isApi && !headers.has("accept")) headers.set("accept", "application/json");
-  if (isApi && hasJsonishBody && !headers.has("content-type")) headers.set("content-type", "application/json");
 
-  // final init
+  // normalize enqueue body if targeting that route
+  let body: any = init.body as any;
+  if (url.startsWith("/api/rtc/enqueue")) {
+    body = normEnqueueBody(typeof body === "string" ? JSON.parse(body || "{}") : body);
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
+  }
+
+  // never send body on GET/HEAD
   const finalInit: RequestInit = {
     ...init,
     method,
@@ -41,11 +96,15 @@ export default async function safeFetch(input: RequestInfo | URL, init: SafeInit
     credentials: init.credentials ?? (isRtc ? "include" : "same-origin"),
   };
 
-  // never send body on GET/HEAD
   if (method === "GET" || method === "HEAD") {
     delete (finalInit as any).body;
-  } else if (hasJsonishBody) {
-    (finalInit as any).body = JSON.stringify(init.body);
+  } else {
+    const hasJsonBody =
+      body != null &&
+      typeof body === "object" &&
+      !(body instanceof FormData) &&
+      !(body instanceof Blob);
+    if (hasJsonBody) (finalInit as any).body = JSON.stringify(body);
   }
 
   try {
