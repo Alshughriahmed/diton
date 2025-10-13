@@ -104,6 +104,36 @@ export default function ChatClient() {
     age: 0,
   });
 
+  // ======== signaling single-flight guard ========
+  const sigRef = useRef<{
+    ac: AbortController;
+    pc: RTCPeerConnection | null;
+    pairId?: string;
+    role?: "caller" | "callee";
+    sdpTag?: string;
+    icePoll?: number | null;
+  } | null>(null);
+
+  const teardownSignaling = (reason = "user") => {
+    try {
+      const s = sigRef.current;
+      if (!s) return;
+      s.ac.abort();
+      if (s.icePoll) {
+        clearInterval(s.icePoll);
+      }
+      if (s.pc) {
+        try { s.pc.ontrack = null as any; } catch {}
+        try { s.pc.onicecandidate = null as any; } catch {}
+        try { s.pc.close(); } catch {}
+      }
+    } catch {}
+    sigRef.current = null;
+    try {
+      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped", reason } }));
+    } catch {}
+  };
+
   /* ---------- helpers ---------- */
   function updatePeerBadges(meta: any) {
     try {
@@ -241,6 +271,7 @@ export default function ChatClient() {
         await safeFetch("/api/moderation/report", { method: "POST" });
         toast("🚩 تم إرسال البلاغ وجاري الانتقال");
       } catch {}
+      teardownSignaling("report");
       rtc.next();
     });
 
@@ -248,10 +279,12 @@ export default function ChatClient() {
       const now = Date.now();
       if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
       lastNextTsRef.current = now;
+      teardownSignaling("next");
       rtc.next();
     });
 
     const off8 = on("ui:prev", () => {
+      teardownSignaling("prev");
       tryPrevOrRandom();
     });
 
@@ -477,6 +510,179 @@ export default function ChatClient() {
 
     initMediaWithPermissionChecks().catch(() => {});
 
+    // ====== matched → signaling bridge (single listener) ======
+    const onMatched = async (ev: any) => {
+      try {
+        const detail = ev?.detail || {};
+        const pairId: string | undefined = detail.pairId;
+        const role: "caller" | "callee" | undefined = detail.role;
+        if (!pairId || !role) return;
+
+        // single-flight: لا تبدأ جلسة جديدة إن كانت نفس الزوجة قيد العمل
+        if (sigRef.current?.pairId === pairId && sigRef.current?.role === role) return;
+
+        // أوقف أي جلسة سابقة قبل البدء
+        teardownSignaling("restart");
+
+        const ac = new AbortController();
+        const pc = new RTCPeerConnection(); // بدون تبعيات جديدة
+        const sdpTag = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+        sigRef.current = { ac, pc, pairId, role, sdpTag, icePoll: null };
+
+        // Tracks: أضف الميديا المحلية
+        const local = getLocalStream();
+        if (local) {
+          for (const track of local.getTracks()) pc.addTrack(track, local);
+        }
+
+        // ontrack → مرر الستريم للـ UI عبر الحدث القائم
+        pc.ontrack = (e) => {
+          const remoteStream = e.streams?.[0];
+          if (remoteStream) {
+            window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: remoteStream } }));
+          }
+        };
+
+        // حالة الاتصال
+        pc.onconnectionstatechange = () => {
+          if (pc.connectionState === "connected") {
+            window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
+          }
+        };
+
+        // إرسال ICE الصادر
+        pc.onicecandidate = async (e) => {
+          if (!e.candidate || ac.signal.aborted) return;
+          try {
+            await safeFetch("/api/rtc/ice", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                pairId,
+                role,
+                candidate: e.candidate,
+              }),
+              credentials: "include",
+              cache: "no-store",
+              signal: ac.signal,
+            } as any);
+          } catch {}
+        };
+
+        // استهلاك ICE الوارد (poll)
+        const startIcePoll = () => {
+          const timer = window.setInterval(async () => {
+            if (ac.signal.aborted) return;
+            try {
+              const res = await safeFetch(`/api/rtc/ice?pairId=${encodeURIComponent(pairId)}`, {
+                method: "GET",
+                credentials: "include",
+                cache: "no-store",
+                signal: ac.signal,
+              } as any);
+              if (!res) return;
+              const data = await res.json().catch(() => null as any);
+              const list: any[] = Array.isArray(data) ? data : data?.candidates || [];
+              for (const c of list) {
+                try {
+                  // قد يأتي null كإشارة نهاية التجميع
+                  await pc.addIceCandidate(c || null);
+                } catch {}
+              }
+            } catch {}
+          }, 1000);
+          sigRef.current && (sigRef.current.icePoll = timer);
+        };
+
+        // تسلسل الإشارة
+        if (role === "caller") {
+          // لا يبدأ أي offer قبل matchmake 200 {pairId, role} — نحن هنا بعده
+          const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+          await pc.setLocalDescription(offer);
+
+          // POST /offer
+          await safeFetch("/api/rtc/offer", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-ditona-sdp-tag": sdpTag,
+            },
+            body: JSON.stringify({ pairId, sdp: offer.sdp }),
+            credentials: "include",
+            cache: "no-store",
+            signal: ac.signal,
+          } as any).catch(() => {});
+
+          startIcePoll();
+
+          // سحب answer حتى وصوله
+          while (!ac.signal.aborted && !pc.currentRemoteDescription) {
+            try {
+              const res = await safeFetch(`/api/rtc/answer?pairId=${encodeURIComponent(pairId)}`, {
+                method: "GET",
+                credentials: "include",
+                cache: "no-store",
+                signal: ac.signal,
+              } as any);
+              if (res && res.ok) {
+                const data = await res.json().catch(() => null as any);
+                if (data?.sdp) {
+                  await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+                  break;
+                }
+              }
+            } catch {}
+            await new Promise((r) => setTimeout(r, 700));
+          }
+        } else {
+          // callee
+          // سحب offer حتى وصوله
+          while (!ac.signal.aborted && !pc.currentRemoteDescription) {
+            try {
+              const res = await safeFetch(`/api/rtc/offer?pairId=${encodeURIComponent(pairId)}`, {
+                method: "GET",
+                credentials: "include",
+                cache: "no-store",
+                signal: ac.signal,
+              } as any);
+              if (res && res.ok) {
+                const data = await res.json().catch(() => null as any);
+                if (data?.sdp) {
+                  await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+                  break;
+                }
+              }
+            } catch {}
+            await new Promise((r) => setTimeout(r, 700));
+          }
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          // POST /answer
+          await safeFetch("/api/rtc/answer", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-ditona-sdp-tag": sdpTag,
+            },
+            body: JSON.stringify({ pairId, sdp: answer.sdp }),
+            credentials: "include",
+            cache: "no-store",
+            signal: ac.signal,
+          } as any).catch(() => {});
+
+          startIcePoll();
+        }
+      } catch (err) {
+        console.warn("[onMatched] signaling failed:", err);
+      }
+    };
+
+    window.addEventListener("rtc:matched", onMatched as any);
+
     // Mobile viewport optimizer
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe((vp) => {
@@ -509,6 +715,8 @@ export default function ChatClient() {
       offBeautyUpdate();
       offMask();
       if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
+      if (isBrowser) window.removeEventListener("rtc:matched", onMatched as any);
+      teardownSignaling("unmount");
       unsubMob();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
