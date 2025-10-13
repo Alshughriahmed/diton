@@ -1,14 +1,12 @@
 // src/app/chat/rtcFlow.ts
 // Robust WebRTC flow for DitonaChat:
-// - Strict AbortController guards (no "reading 'signal' of undefined")
-// - Stable bootstrap: GET /api/rtc/init → POST /api/rtc/enqueue → poll GET /api/rtc/matchmake
-// - Perfect Negotiation (polite/makingOffer/ignoreOffer + rollback on glare)
-// - Idempotent signaling via x-ditona-sdp-tag
-// - ICE pump with graceful stop + x-last-stop-ts for server grace
+// - Strict AbortController guards
+// - Stable bootstrap: /api/rtc/init → /api/rtc/enqueue → poll /api/rtc/matchmake
+// - Perfect Negotiation with rollback on glare
+// - Idempotent signaling via x-ditona-sdp-tag (from raw SDP string)
+// - ICE pump with graceful stop (+ x-last-stop-ts)
 // - Clean teardown + unified backoff
-// - Rich diagnostics to window.__rtcLog and console
-//
-// No new deps. No new ENV. Works with your existing server routes.
+// - No new deps/ENV
 
 "use client";
 
@@ -16,12 +14,11 @@ import apiSafeFetch from "@/app/chat/safeFetch";
 
 /* ========================= diagnostics ========================= */
 
-const RTC_FLOW_VERSION = "S2.2-PN-AC-Strict";
+const RTC_FLOW_VERSION = "S2.3-PN-AC-Strict";
 
 /** bounded in-memory ring buffer under window.__rtcLog */
 function pushDiag(...args: any[]) {
   try {
-    // eslint-disable-next-line no-console
     console.log("[rtc]", ...args);
     const w: any = typeof window !== "undefined" ? window : undefined;
     if (!w) return;
@@ -29,9 +26,7 @@ function pushDiag(...args: any[]) {
     buf.push(args);
     if (buf.length > 250) buf.splice(0, buf.length - 250);
     w.__rtcLog = buf;
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 }
 
 /* ========================= headers helpers ========================= */
@@ -74,7 +69,7 @@ export type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 type Role = "caller" | "callee";
 
 type State = {
-  sid: number; // session id guard
+  sid: number;
   phase: Phase;
   pairId: string | null;
   role: Role | null;
@@ -114,10 +109,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const isAbort = (e: any) => !!(e?.name === "AbortError");
 
 function swallowAbort(e: any) {
-  if (!isAbort(e)) {
-    // eslint-disable-next-line no-console
-    console.warn(e);
-  }
+  if (!isAbort(e)) console.warn(e);
 }
 
 function checkSession(sid: number) {
@@ -138,17 +130,22 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
 
 /* ========================= bootstrap calls ========================= */
 
-/** Ensure anon cookie exists; server also stabilizes header↔cookie. */
-async function initAnon() {
-  await apiSafeFetch("/api/rtc/session", { method: "GET", timeoutMs: 6000 }).catch(() => {});
+/** Ensure anon cookie exists. Prefer GET /api/rtc/init to match current server. */
+async function ensureInit() {
+  await apiSafeFetch("/api/rtc/init", {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+    timeoutMs: 6000,
+  }).catch(swallowAbort);
 }
 
-/** Write attrs/filters + queue. Defaults are conservative & normalized server-side anyway. */
+/** Write attrs/filters + queue (normalized values). */
 async function ensureEnqueue() {
   await apiSafeFetch("/api/rtc/enqueue", {
     method: "POST",
-    credentials: "include" as RequestCredentials,
-    cache: "no-store" as RequestCache,
+    credentials: "include",
+    cache: "no-store",
     headers: { "content-type": "application/json", ...rtcHeaders() },
     body: JSON.stringify({
       gender: "u",
@@ -160,8 +157,7 @@ async function ensureEnqueue() {
   }).catch(swallowAbort);
 }
 
-
-/** poll /matchmake with strict AC guard; auto re-enqueue on 400. */
+/** poll /matchmake with strict AC guard; auto re-init/enqueue on 400/403. */
 async function pollMatchmake(): Promise<{ pairId: string; role: Role; peerAnonId?: string }> {
   const acNow = state.ac;
   if (!acNow || !acNow.signal) throw new DOMException("aborted", "AbortError");
@@ -171,13 +167,12 @@ async function pollMatchmake(): Promise<{ pairId: string; role: Role; peerAnonId
     if (acNow.signal.aborted) throw new DOMException("aborted", "AbortError");
 
     const r = await apiSafeFetch("/api/rtc/matchmake", {
-  method: "GET",
-  credentials: "include" as RequestCredentials,
-  cache: "no-store" as RequestCache,
-  headers: rtcHeaders(),
-  timeoutMs: 4500,
-}).catch(() => undefined);
-
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: rtcHeaders(),
+      timeoutMs: 4500,
+    }).catch(() => undefined);
 
     if (!r) {
       await sleep(back);
@@ -189,12 +184,15 @@ async function pollMatchmake(): Promise<{ pairId: string; role: Role; peerAnonId
       const j = await r.json().catch(() => ({} as any));
       if (j?.pairId && j?.role) return j as { pairId: string; role: Role; peerAnonId?: string };
     } else if (r.status === 204) {
-      // no partner yet
+      // keep polling
     } else if (r.status === 400) {
-      // transient missing-attrs: re-enqueue and keep polling
+      // transient missing-attrs
+      await ensureEnqueue();
+    } else if (r.status === 403) {
+      // anon drift or missing cookie
+      await ensureInit();
       await ensureEnqueue();
     } else if (r.status >= 500) {
-      // server hiccup — short cool-down
       await sleep(300);
     }
 
@@ -207,7 +205,7 @@ async function pollMatchmake(): Promise<{ pairId: string; role: Role; peerAnonId
 
 function wirePerfectNegotiation(pc: RTCPeerConnection, currentSession: number) {
   pc.onnegotiationneeded = async () => {
-    // Only caller drives offers in our model
+    // Only caller drives offers
     if (!checkSession(currentSession)) return;
     if (!state.pc || state.ac?.signal.aborted) return;
     if (state.role !== "caller") return;
@@ -217,16 +215,18 @@ function wirePerfectNegotiation(pc: RTCPeerConnection, currentSession: number) {
       const offer = await state.pc.createOffer();
       await state.pc.setLocalDescription(offer);
 
-      const sdpJson = JSON.stringify(offer);
+      const sdpStr = state.pc.localDescription?.sdp || offer.sdp || "";
       pushDiag("pn:offer:create");
       await apiSafeFetch("/api/rtc/offer", {
         method: "POST",
+        credentials: "include",
+        cache: "no-store",
         headers: {
           "content-type": "application/json",
-          "x-ditona-sdp-tag": sdpTagOf(sdpJson, "offer"),
+          "x-ditona-sdp-tag": sdpTagOf(sdpStr, "offer"),
           ...rtcHeaders({ pairId: state.pairId, role: state.role }),
         },
-        body: JSON.stringify({ pairId: state.pairId, sdp: sdpJson }),
+        body: JSON.stringify({ pairId: state.pairId, sdp: sdpStr }),
         timeoutMs: 9000,
       }).catch(swallowAbort);
       pushDiag("pn:offer:sent");
@@ -242,7 +242,6 @@ function wirePerfectNegotiation(pc: RTCPeerConnection, currentSession: number) {
     if (!e.candidate || !state.pairId || !state.role) return;
     if (state.ac?.signal.aborted) return;
 
-    // Helpful diag: which kinds arrive?
     try {
       const anyCand: any = e.candidate;
       pushDiag("pc:ice:cand", { type: anyCand?.type, proto: anyCand?.protocol });
@@ -250,6 +249,8 @@ function wirePerfectNegotiation(pc: RTCPeerConnection, currentSession: number) {
 
     await apiSafeFetch("/api/rtc/ice", {
       method: "POST",
+      credentials: "include",
+      cache: "no-store",
       headers: { "content-type": "application/json", ...rtcHeaders({ pairId: state.pairId, role: state.role }) },
       body: JSON.stringify({ pairId: state.pairId, role: state.role, candidate: e.candidate }),
     }).catch(swallowAbort);
@@ -270,6 +271,8 @@ async function iceExchange(sessionId: number) {
   ) {
     const r = await apiSafeFetch(`/api/rtc/ice?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
+      credentials: "include",
+      cache: "no-store",
       headers: rtcHeaders({ pairId: state.pairId, role: state.role }),
       timeoutMs: 6000,
     }).catch(swallowAbort);
@@ -286,7 +289,6 @@ async function iceExchange(sessionId: number) {
       }
       backoff = 320;
     }
-    // 204 => nothing new; 403 after grace => loop will exit when stop() clears ac/pair
     await sleep(backoff + Math.floor(Math.random() * 240));
     backoff = Math.min(backoff * 1.25, 1200);
   }
@@ -307,6 +309,8 @@ async function callerFlow(sessionId: number) {
   ) {
     const r = await apiSafeFetch(`/api/rtc/answer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
+      credentials: "include",
+      cache: "no-store",
       headers: rtcHeaders({ pairId: state.pairId, role: state.role }),
       timeoutMs: 7000,
     }).catch(swallowAbort);
@@ -315,8 +319,7 @@ async function callerFlow(sessionId: number) {
       const { sdp } = await r.json().catch(() => ({}));
       if (sdp) {
         try {
-          const desc = JSON.parse(String(sdp));
-          await state.pc!.setRemoteDescription(desc);
+          await state.pc!.setRemoteDescription({ type: "answer", sdp: String(sdp) });
           pushDiag("pn:answer:set");
           return;
         } catch (e) {
@@ -342,6 +345,8 @@ async function calleeFlow(sessionId: number) {
   ) {
     const r = await apiSafeFetch(`/api/rtc/offer?pairId=${encodeURIComponent(state.pairId)}`, {
       method: "GET",
+      credentials: "include",
+      cache: "no-store",
       headers: rtcHeaders({ pairId: state.pairId, role: state.role }),
       timeoutMs: 7000,
     }).catch(swallowAbort);
@@ -350,9 +355,9 @@ async function calleeFlow(sessionId: number) {
       const { sdp } = await r.json().catch(() => ({}));
       if (sdp) {
         try {
-          const offer = JSON.parse(String(sdp));
+          const offerSdp = String(sdp);
           const offerCollision =
-            offer?.type === "offer" && (state.makingOffer || state.pc!.signalingState !== "stable");
+            "offer" && (state.makingOffer || state.pc!.signalingState !== "stable");
           state.ignoreOffer = !state.polite && offerCollision;
 
           if (!state.ignoreOffer) {
@@ -362,25 +367,27 @@ async function calleeFlow(sessionId: number) {
                 pushDiag("pn:rollback");
               } catch {}
             }
-            await state.pc!.setRemoteDescription(offer);
+            await state.pc!.setRemoteDescription({ type: "offer", sdp: offerSdp });
             const answer = await state.pc!.createAnswer();
             await state.pc!.setLocalDescription(answer);
-            const s = JSON.stringify(answer);
+            const sdpStr = state.pc!.localDescription?.sdp || answer.sdp || "";
 
             await apiSafeFetch("/api/rtc/answer", {
               method: "POST",
+              credentials: "include",
+              cache: "no-store",
               headers: {
                 "content-type": "application/json",
-                "x-ditona-sdp-tag": sdpTagOf(s, "answer"),
+                "x-ditona-sdp-tag": sdpTagOf(sdpStr, "answer"),
                 ...rtcHeaders({ pairId: state.pairId, role: state.role }),
               },
-              body: JSON.stringify({ pairId: state.pairId, sdp: s }),
+              body: JSON.stringify({ pairId: state.pairId, sdp: sdpStr }),
               timeoutMs: 9000,
             }).catch(swallowAbort);
 
             pushDiag("pn:answer:sent");
           }
-          return; // either ignored or replied — done
+          return; // done
         } catch (e) {
           pushDiag("callee:error", String(e));
         }
@@ -397,17 +404,15 @@ async function calleeFlow(sessionId: number) {
 /**
  * start(media?, onPhase?)
  * - Creates a new AC every time.
- * - Strictly enforces init → enqueue → matchmake
- * - Guards all loops by session id + AC
+ * - Enforces init → enqueue → matchmake
+ * - Guards loops by session id + AC
  */
 export async function start(media?: MediaStream | null, onPhase?: (phase: Phase) => void) {
   if (inflightStart) return inflightStart;
 
   inflightStart = (async () => {
     try {
-      // stop only network parts of any prior flow; keep UI state unless full stop requested elsewhere
       stop("network");
-
       if (typeof onPhase === "function") onPhaseCallback = onPhase;
 
       state.sid = (state.sid + 1) | 0;
@@ -417,24 +422,20 @@ export async function start(media?: MediaStream | null, onPhase?: (phase: Phase)
       } catch {}
       pushDiag("RTC_FLOW_VERSION=" + RTC_FLOW_VERSION);
 
-      // Strictly allocate AC before any async
+      // Allocate AC before any async
       state.ac = new AbortController();
-       await apiSafeFetch("/api/age/allow", {
-  method: "POST",
-  credentials: "include" as RequestCredentials,
-  cache: "no-store" as RequestCache,
-  timeoutMs: 6000,
-}).catch(swallowAbort);
 
-await apiSafeFetch("/api/rtc/init", {
-  method: "GET",
-  credentials: "include" as RequestCredentials,
-  cache: "no-store" as RequestCache,
-  timeoutMs: 6000,
-}).catch(swallowAbort);
+      // Age + init
+      await apiSafeFetch("/api/age/allow", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        timeoutMs: 6000,
+      }).catch(swallowAbort);
 
-      // Bootstrap: init cookie → enqueue attrs → poll matchmake
-      await initAnon();
+      await ensureInit();
+
+      // Enqueue → Match
       await ensureEnqueue();
 
       pushDiag("mm:polling");
@@ -452,16 +453,12 @@ await apiSafeFetch("/api/rtc/init", {
       // Expose to UI/diagnostics
       try {
         (window as any).__pair = { pairId: state.pairId, role: state.role };
-        window.dispatchEvent(
-          new CustomEvent("rtc:pair", { detail: { pairId: state.pairId, role: state.role } })
-        );
+        window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: state.pairId, role: state.role } }));
       } catch {}
 
-      // Create PC (keep TURN/STUN configured elsewhere if needed)
+      // Create PC
       const pcCfg: RTCConfiguration = {
-        iceServers: [
-          { urls: ["stun:stun.l.google.com:19302", "stun:global.stun.twilio.com:3478"] },
-        ],
+        iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:global.stun.twilio.com:3478"] }],
         iceCandidatePoolSize: 4,
         bundlePolicy: "balanced",
         rtcpMuxPolicy: "require",
@@ -469,7 +466,7 @@ await apiSafeFetch("/api/rtc/init", {
       state.pc = new RTCPeerConnection(pcCfg);
       wirePerfectNegotiation(state.pc, state.sid);
 
-      // connection state hooks (diagnostics + lifecycle)
+      // connection diagnostics
       state.pc.onconnectionstatechange = () => {
         if (!checkSession(state.sid) || !state.pc) return;
         const cs = state.pc.connectionState;
@@ -480,11 +477,7 @@ await apiSafeFetch("/api/rtc/init", {
             onPhaseCallback("connected");
           } catch {}
           try {
-            window.dispatchEvent(
-              new CustomEvent("ditona:phase", {
-                detail: { phase: "connected", role: state.role },
-              })
-            );
+            window.dispatchEvent(new CustomEvent("ditona:phase", { detail: { phase: "connected", role: state.role } }));
           } catch {}
         } else if (cs === "closed") {
           stop();
@@ -496,9 +489,7 @@ await apiSafeFetch("/api/rtc/init", {
         } catch {}
       };
 
-      // Media wiring:
-      // - If media provided, publish it (triggers onnegotiationneeded for caller)
-      // - Else prepare to receive tracks (recvonly)
+      // Media wiring
       try {
         if (media && media.getTracks) {
           for (const t of media.getTracks()) {
@@ -515,39 +506,33 @@ await apiSafeFetch("/api/rtc/init", {
           } catch {}
         }
       } catch (e) {
-        // Mic/cam issues must not kill the state machine (e.g., NotReadableError)
         pushDiag("media:wiring:error", String((e as any)?.name || e));
       }
 
-      // Forward remote stream to UI
+      // Remote stream to UI
       state.pc.ontrack = (ev) => {
         try {
-          const stream =
-            (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
+          const stream = (ev.streams && ev.streams[0]) ? ev.streams[0] : new MediaStream([ev.track]);
           pushDiag("pc:ontrack", { tracks: stream.getTracks().length });
           window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream } }));
         } catch {}
       };
 
-      // Start ICE pump in background (AC-guarded)
+      // ICE pump
       iceExchange(state.sid).catch(swallowAbort);
 
       // Role-specific signaling
       if (state.role === "caller") await callerFlow(state.sid);
       else await calleeFlow(state.sid);
 
-      // Expose PC for debugging
       try {
         (window as any).ditonaPC = state.pc;
       } catch {}
 
       return { pairId: state.pairId!, role: state.role! };
     } catch (e: any) {
-      if (!isAbort(e)) {
-        // eslint-disable-next-line no-console
-        console.warn("rtcFlow.start error", e);
-      }
-      stop(); // full stop on failure
+      if (!isAbort(e)) console.warn("rtcFlow.start error", e);
+      stop();
       return null;
     } finally {
       inflightStart = null;
@@ -614,5 +599,4 @@ export async function prev() {
 export const startRTCFlow = start;
 
 // ————————————————————————
-// On first import, print the flow version once (diagnostics)
 pushDiag("RTC_FLOW_VERSION", RTC_FLOW_VERSION);
