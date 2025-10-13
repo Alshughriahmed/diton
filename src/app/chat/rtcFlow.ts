@@ -133,11 +133,11 @@ function sdpTagOf(sdp: string, kind: "offer" | "answer") {
 /** Ensure anon cookie exists. Prefer GET /api/rtc/init to match current server. */
 async function ensureInit() {
   await apiSafeFetch("/api/rtc/init", {
-    method: "GET",
-    credentials: "include",
-    cache: "no-store",
-    timeoutMs: 6000,
-  }).catch(swallowAbort);
+  method: "POST",
+  credentials: "include",
+  cache: "no-store",
+  timeoutMs: 6000,
+}).catch(swallowAbort);
 }
 
 /** Write attrs/filters + queue (normalized values). */
