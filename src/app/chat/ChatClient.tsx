@@ -331,16 +331,18 @@ export default function ChatClient() {
       try {
         const { useFilters } = await import("@/state/filters");
         const { gender, countries } = useFilters.getState();
-        await safeFetch("/api/rtc/enqueue", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            gender: "unknown",
-            country: "UNKNOWN",
-            filterGenders: gender === "all" ? "all" : gender,
-            filterCountries: countries?.length ? countries.join(",") : "ALL",
-          }),
-        });
+       await safeFetch("/api/rtc/enqueue", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  credentials: "include",
+  cache: "no-store",
+  body: JSON.stringify({
+    gender: "u",
+    country: "XX",
+    filterGenders: gender === "all" ? "all" : gender,           // "all"|"male"|"female"
+    filterCountries: countries?.length ? countries.join(",") : "ALL",
+  }),
+});
       } catch {}
       rtc.next();
     };
