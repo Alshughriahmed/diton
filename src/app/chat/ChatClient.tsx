@@ -29,13 +29,7 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useGestures } from "@/hooks/useGestures";
 import { useHydrated } from "@/hooks/useHydrated";
 
-import {
-  initLocalMedia,
-  getLocalStream,
-  toggleMic,
-  toggleCam,
-  switchCamera,
-} from "@/lib/media";
+import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
 
 import { useFilters } from "@/state/filters";
 import { useFFA } from "@/lib/useFFA";
@@ -120,9 +114,15 @@ export default function ChatClient() {
       s.ac.abort();
       if (s.icePoll) clearInterval(s.icePoll);
       if (s.pc) {
-        try { s.pc.ontrack = null as any; } catch {}
-        try { s.pc.onicecandidate = null as any; } catch {}
-        try { s.pc.close(); } catch {}
+        try {
+          s.pc.ontrack = null as any;
+        } catch {}
+        try {
+          s.pc.onicecandidate = null as any;
+        } catch {}
+        try {
+          s.pc.close();
+        } catch {}
       }
     } catch {}
     sigRef.current = null;
@@ -352,7 +352,9 @@ export default function ChatClient() {
             remoteAudio.play?.().catch(() => {});
           }
         } catch {}
-        try { remoteVideo.play?.().catch(() => {}); } catch {}
+        try {
+          remoteVideo.play?.().catch(() => {});
+        } catch {}
       }
     });
 
@@ -393,94 +395,94 @@ export default function ChatClient() {
       }
     });
 
-   // peer meta from remote
-const handlePeerMeta = (e: any) => {
-  const meta = e.detail;
-  if (!meta) return;
-  setPeerInfo((prev) => ({
-    ...prev,
-    country: meta.country ?? prev.country,
-    gender: meta.gender ?? prev.gender,
-  }));
-  updatePeerBadges(meta);
-};
+    // peer meta from remote
+    const handlePeerMeta = (e: any) => {
+      const meta = e.detail;
+      if (!meta) return;
+      setPeerInfo((prev) => ({
+        ...prev,
+        country: meta.country ?? prev.country,
+        gender: meta.gender ?? prev.gender,
+      }));
+      updatePeerBadges(meta);
+    };
 
-if (isBrowser) {
-  window.addEventListener("ditona:peer-meta", handlePeerMeta as any);
-  window.addEventListener("rtc:peer-like", (e: any) => {
-    const detail = e.detail;
-    if (detail && typeof detail.liked === "boolean") {
-      setPeerLikes(detail.liked ? 1 : 0);
-      toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
+    if (isBrowser) {
+      window.addEventListener("ditona:peer-meta", handlePeerMeta as any);
+      window.addEventListener("rtc:peer-like", (e: any) => {
+        const detail = e.detail;
+        if (detail && typeof detail.liked === "boolean") {
+          setPeerLikes(detail.liked ? 1 : 0);
+          toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
+        }
+      });
     }
-  });
-}
 
-// init media, then RTC
-const initMediaWithPermissionChecks = async () => {
-  try {
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-      setCameraPermissionHint("Return to the tab to enable camera");
-      return;
-    }
-    setCameraPermissionHint("");
-    await initLocalMedia();
-    setCameraPermissionHint("");
-  } catch (error: any) {
-    console.warn("Media initialization failed:", error);
-    if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
-    else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
-    else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
-    else setCameraPermissionHint("Camera access error — check permissions");
-    return;
-  }
-
-  const s = getLocalStream();
-  if (localRef.current && s) {
-    if (vip && isBrowser) {
+    // init media, then RTC
+    const initMediaWithPermissionChecks = async () => {
       try {
-        const { getVideoEffects } = await import("@/lib/effects");
-        const fx = getVideoEffects();
-        if (fx) {
-          const v = document.createElement("video");
-          v.srcObject = s;
-          void v.play();
-          const processed = await fx.initialize(v);
-          if (processed) {
-            setEffectsStream(processed);
-            localRef.current.srcObject = processed;
-            fx.start();
-          } else {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+          setCameraPermissionHint("Return to the tab to enable camera");
+          return;
+        }
+        setCameraPermissionHint("");
+        await initLocalMedia();
+        setCameraPermissionHint("");
+      } catch (error: any) {
+        console.warn("Media initialization failed:", error);
+        if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
+        else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
+        else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
+        else setCameraPermissionHint("Camera access error — check permissions");
+        return;
+      }
+
+      const s = getLocalStream();
+      if (localRef.current && s) {
+        if (vip && isBrowser) {
+          try {
+            const { getVideoEffects } = await import("@/lib/effects");
+            const fx = getVideoEffects();
+            if (fx) {
+              const v = document.createElement("video");
+              v.srcObject = s;
+              void v.play();
+              const processed = await fx.initialize(v);
+              if (processed) {
+                setEffectsStream(processed);
+                localRef.current.srcObject = processed;
+                fx.start();
+              } else {
+                localRef.current.srcObject = s;
+              }
+            } else {
+              localRef.current.srcObject = s;
+            }
+          } catch {
             localRef.current.srcObject = s;
           }
         } else {
           localRef.current.srcObject = s;
         }
-      } catch {
-        localRef.current.srcObject = s;
+
+        localRef.current.muted = true;
+        localRef.current.play().catch(() => {});
+
+        if (localRef.current?.srcObject) {
+          await safeFetch("/api/rtc/init", { method: "GET", credentials: "include", cache: "no-store" });
+          const m = await rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase).catch(() => undefined as any);
+          if (m?.pairId && m?.role) window.dispatchEvent(new CustomEvent("rtc:matched", { detail: m }));
+        }
+        setReady(true);
       }
-    } else {
-      localRef.current.srcObject = s;
-    }
+    };
 
-    localRef.current.muted = true;
-    localRef.current.play().catch(() => {});
+    initMediaWithPermissionChecks().catch(() => {});
 
-    if (localRef.current?.srcObject) {
-      await safeFetch("/api/rtc/init", { method: "GET", credentials: "include", cache: "no-store" });
-      const m = await rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase).catch(() => undefined as any);
-      if (m?.pairId && m?.role) window.dispatchEvent(new CustomEvent("rtc:matched", { detail: m }));
-    }
-    setReady(true);
-  }
-};
-
-initMediaWithPermissionChecks().catch(() => {});
-
-// matched → signaling bridge (already implemented elsewhere)
-const onMatched = async (ev: any) => {
-  // keep existing signaling bridge implementation
-};
+    // matched → signaling bridge (already implemented elsewhere)
+    const onMatched = async (_ev: any) => {
+      // signaling handled elsewhere
+    };
 
     window.addEventListener("rtc:matched", onMatched as any);
 
@@ -489,9 +491,29 @@ const onMatched = async (ev: any) => {
     const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
 
     return () => {
-      off1(); off2(); off3(); off4(); off5(); off6(); off7(); off8();
-      offOpenMsg(); offCloseMsg(); offRemoteAudio(); offTogglePlay(); offToggleMasks(); offMirror(); offUpsell();
-      offCountry(); offGender(); offRtcPhase(); offRtcPair(); offRtcTrack(); offBeauty(); offBeautyUpdate(); offMask();
+      off1();
+      off2();
+      off3();
+      off4();
+      off5();
+      off6();
+      off7();
+      off8();
+      offOpenMsg();
+      offCloseMsg();
+      offRemoteAudio();
+      offTogglePlay();
+      offToggleMasks();
+      offMirror();
+      offUpsell();
+      offCountry();
+      offGender();
+      offRtcPhase();
+      offRtcPair();
+      offRtcTrack();
+      offBeauty();
+      offBeautyUpdate();
+      offMask();
       if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
       if (isBrowser) window.removeEventListener("rtc:matched", onMatched as any);
       teardownSignaling("unmount");
@@ -505,22 +527,37 @@ const onMatched = async (ev: any) => {
   // swipe next/prev
   useEffect(() => {
     if (!isBrowser) return;
-    let x0 = 0, y0 = 0;
-    const down = (e: PointerEvent) => { x0 = e.clientX; y0 = e.clientY; };
+    let x0 = 0,
+      y0 = 0;
+    const down = (e: PointerEvent) => {
+      x0 = e.clientX;
+      y0 = e.clientY;
+    };
     const up = (e: PointerEvent) => {
-      const dx = e.clientX - x0, dy = e.clientY - y0;
+      const dx = e.clientX - x0,
+        dy = e.clientY - y0;
       if (Math.abs(dx) > 60 && Math.abs(dy) < 60 && Math.abs(dx) > Math.abs(dy)) {
-        if (dx < 0) { toast("⏭️ Swiped to next"); emit("ui:next"); }
-        else {
+        if (dx < 0) {
+          toast("⏭️ Swiped to next");
+          emit("ui:next");
+        } else {
           if (ffa) console.log("FFA_FORCE: enabled");
-          if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); }
-          else { toast("⏮️ Attempting to go back…"); emit("ui:prev"); }
+          if (!vip && !ffa) {
+            toast("🔒 Going back is VIP only");
+            emit("ui:upsell", "prev");
+          } else {
+            toast("⏮️ Attempting to go back…");
+            emit("ui:prev");
+          }
         }
       }
     };
     window.addEventListener("pointerdown", down);
     window.addEventListener("pointerup", up);
-    return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("pointerup", up); };
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointerup", up);
+    };
   }, [vip, ffa]);
 
   if (!hydrated) {
@@ -544,19 +581,29 @@ const onMatched = async (ev: any) => {
       <LikeHud />
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
+          {/* remote */}
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
             <PeerInfoCard peerInfo={peerInfo} />
             <PeerMetadata country={peerInfo.country} city={peerInfo.city} gender={peerInfo.gender} age={peerInfo.age} />
             <FilterBar />
             <MessageHud />
-            <div className="absolute bottom-4 right-4 z-30"><LikeSystem /></div>
+            <div className="absolute bottom-4 right-4 z-30">
+              <LikeSystem />
+            </div>
             <video id="remoteVideo" data-role="remote" className="w-full h-full object-cover" playsInline autoPlay />
             <audio id="remoteAudio" autoPlay playsInline hidden />
             {rtcPhase === "searching" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">Searching for a partner…</div>
                 <button
-                  onClick={() => { try { rtc.stop(); toast("🛑 Search cancelled"); } catch (e) { console.warn("Cancel failed:", e); } }}
+                  onClick={() => {
+                    try {
+                      rtc.stop();
+                      toast("🛑 Search cancelled");
+                    } catch (e) {
+                      console.warn("Cancel failed:", e);
+                    }
+                  }}
                   className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
                 >
                   Cancel
@@ -565,8 +612,16 @@ const onMatched = async (ev: any) => {
             )}
           </section>
 
+          {/* local */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
-            <video ref={localRef} data-local-video className={`w-full h-full object-cover ${isMirrored ? "scale-x-[-1]" : ""}`} playsInline muted autoPlay />
+            <video
+              ref={localRef}
+              data-local-video
+              className={`w-full h-full object-cover ${isMirrored ? "scale-x-[-1]" : ""}`}
+              playsInline
+              muted
+              autoPlay
+            />
             {!ready && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 text-sm text-center px-4">
                 {cameraPermissionHint ? (
@@ -576,36 +631,52 @@ const onMatched = async (ev: any) => {
                     <button
                       onClick={() => {
                         setCameraPermissionHint("");
-                        initLocalMedia().then(async () => {
-                          const s = getLocalStream();
-                          if (localRef.current && s) {
-                            if (vip && isBrowser) {
-                              try {
-                                const { getVideoEffects } = await import("@/lib/effects");
-                                const fx = getVideoEffects();
-                                if (fx) {
-                                  const v = document.createElement("video");
-                                  v.srcObject = s; void v.play();
-                                  const processed = await fx.initialize(v);
-                                  if (processed) { setEffectsStream(processed); localRef.current.srcObject = processed; fx.start(); }
-                                  else { localRef.current.srcObject = s; }
-                                } else { localRef.current.srcObject = s; }
-                              } catch { localRef.current.srcObject = s; }
-                            } else { localRef.current.srcObject = s; }
-                            localRef.current.muted = true;
-                            localRef.current.play().catch(() => {});
-                            if (localRef.current?.srcObject) {
-                              const m = await rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase).catch(() => undefined as any);
-                              if (m?.pairId && m?.role) window.dispatchEvent(new CustomEvent("rtc:matched", { detail: m }));
+                        initLocalMedia()
+                          .then(async () => {
+                            const s = getLocalStream();
+                            if (localRef.current && s) {
+                              if (vip && isBrowser) {
+                                try {
+                                  const { getVideoEffects } = await import("@/lib/effects");
+                                  const fx = getVideoEffects();
+                                  if (fx) {
+                                    const v = document.createElement("video");
+                                    v.srcObject = s;
+                                    void v.play();
+                                    const processed = await fx.initialize(v);
+                                    if (processed) {
+                                      setEffectsStream(processed);
+                                      localRef.current.srcObject = processed;
+                                      fx.start();
+                                    } else {
+                                      localRef.current.srcObject = s;
+                                    }
+                                  } else {
+                                    localRef.current.srcObject = s;
+                                  }
+                                } catch {
+                                  localRef.current.srcObject = s;
+                                }
+                              } else {
+                                localRef.current.srcObject = s;
+                              }
+                              localRef.current.muted = true;
+                              localRef.current.play().catch(() => {});
+                              if (localRef.current?.srcObject) {
+                                const m = await rtc.start(localRef.current.srcObject as MediaStream, setRtcPhase).catch(() => undefined as any);
+                                if (m?.pairId && m?.role) window.dispatchEvent(new CustomEvent("rtc:matched", { detail: m }));
+                              }
+                              setReady(true);
                             }
-                            setReady(true);
-                          }
-                        }).catch((error) => {
-                          console.warn("Retry failed:", error);
-                          if ((error as any)?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
-                          else if ((error as any)?.name === "NotReadableError" || (error as any)?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
-                          else setCameraPermissionHint("Camera access error — check permissions");
-                        });
+                          })
+                          .catch((error) => {
+                            console.warn("Retry failed:", error);
+                            if ((error as any)?.name === "NotAllowedError")
+                              setCameraPermissionHint("Allow camera and microphone from browser settings");
+                            else if ((error as any)?.name === "NotReadableError" || (error as any)?.name === "AbortError")
+                              setCameraPermissionHint("Close the other tab or allow camera");
+                            else setCameraPermissionHint("Camera access error — check permissions");
+                          });
                       }}
                       className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
                     >
