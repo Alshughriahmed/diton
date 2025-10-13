@@ -1,3 +1,4 @@
+// next.config.mjs
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -9,8 +10,7 @@ const nextConfig = {
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "media-src 'self' blob:",
-      // اسمح بطلبات REST و WebSocket نحو LiveKit
-      "connect-src 'self' https: wss:",
+      "connect-src 'self' https: wss:", // يسمح لـ LiveKit
       "frame-src 'self'",
       "worker-src 'self' blob:",
       "object-src 'none'",
@@ -33,4 +33,5 @@ const nextConfig = {
     ];
   },
 };
-module.exports = nextConfig;
+
+export default nextConfig;
