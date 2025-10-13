@@ -199,7 +199,7 @@ export default function ChatClient() {
             cache: "no-store" as RequestCache,
           };
           await safeFetch("/api/age/allow", opts);
-          await safeFetch("/api/anon/init", opts);
+          await safeFetch("/api/rtc/init", opts);
         } catch (e) {
           console.warn("age/allow or anon/init failed", e);
         }
