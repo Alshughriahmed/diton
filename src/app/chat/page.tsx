@@ -1,11 +1,8 @@
-"use client";
+import ChatClient from "./ChatClient";
 
-import dynamic from "next/dynamic";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-// حمّل مكوّن LiveKit الذي كتبناه
-const LiveKitClient = dynamic(() => import("./livekit"), { ssr: false });
-
-export default function ChatPage() {
-  // غرفة تجريبية اسمها lobby
-  return <LiveKitClient roomName="lobby" />;
+export default function Page() {
+  return <ChatClient />;
 }
