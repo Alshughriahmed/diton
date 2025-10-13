@@ -1,42 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
 
-export const runtime = "nodejs"; // ليس edge
+const API_KEY = process.env.LIVEKIT_API_KEY!;
+const API_SECRET = process.env.LIVEKIT_API_SECRET!;
+const LK_URL = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_WS_URL;
 
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const room = url.searchParams.get("room") || "ditona-public";
-  const identity = url.searchParams.get("identity") || crypto.randomUUID();
-  const metadata = url.searchParams.get("metadata") || "";
+  try {
+    const { searchParams } = new URL(req.url);
+    const room = searchParams.get("room") || "ditona-public";
+    const identity = searchParams.get("identity"); // يجب أن تأتي من العميل
 
-  const wsUrl =
-    process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ||
-    process.env.LIVEKIT_URL ||
-    "";
+    if (!LK_URL || !API_KEY || !API_SECRET) {
+      return NextResponse.json({ error: "LiveKit env missing" }, { status: 500 });
+    }
+    if (!identity) {
+      return NextResponse.json({ error: "identity required" }, { status: 400 });
+    }
 
-  const apiKey = process.env.LIVEKIT_API_KEY || "";
-  const apiSecret = process.env.LIVEKIT_API_SECRET || "";
+    const at = new AccessToken(API_KEY, API_SECRET, { identity });
+    at.addGrant({
+      room,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    });
 
-  if (!wsUrl || !apiKey || !apiSecret) {
-    return NextResponse.json(
-      { error: "LiveKit env vars missing" },
-      { status: 500 }
-    );
+    const token = await at.toJwt();
+    return NextResponse.json({ token });
+  } catch (e) {
+    return NextResponse.json({ error: "token-gen-failed" }, { status: 500 });
   }
-
-  const at = new AccessToken(apiKey, apiSecret, {
-    identity,
-    metadata,
-    ttl: "1h",
-  });
-  at.addGrant({
-    room,
-    roomJoin: true,
-    canPublish: true,
-    canSubscribe: true,
-    canPublishData: true,
-  });
-
-  const token = await at.toJwt();
-  return NextResponse.json({ token, wsUrl, room, identity });
 }
