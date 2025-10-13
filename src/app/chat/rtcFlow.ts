@@ -355,10 +355,11 @@ async function calleeFlow(sessionId: number) {
       const { sdp } = await r.json().catch(() => ({}));
       if (sdp) {
         try {
-          const offerSdp = String(sdp);
-          const offerCollision =
-            "offer" && (state.makingOffer || state.pc!.signalingState !== "stable");
-          state.ignoreOffer = !state.polite && offerCollision;
+           const offerSdp = String(sdp);
+         // receiving a remote OFFER; glare if we're making an offer or not stable
+          const offerCollision = state.makingOffer || state.pc!.signalingState !== "stable";
+           state.ignoreOffer = !state.polite && offerCollision;
+
 
           if (!state.ignoreOffer) {
             if (offerCollision) {
