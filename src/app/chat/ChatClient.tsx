@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, Track, createLocalTracks, DataPacket_Kind } from "livekit-client";
+lkRoom.localParticipant.publishData(
+  new TextEncoder().encode(s),
+  { reliable: true } // أو { reliable: true, topic: "like" }
+);
+
 
 import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
