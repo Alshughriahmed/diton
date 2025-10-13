@@ -557,7 +557,7 @@ export default function ChatClient() {
 
   if (!hydrated) {
     return (
-      <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
+      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
         <FilterBar />
         <div className="h-full grid grid-rows-2 gap-2 p-2">
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
@@ -574,7 +574,7 @@ export default function ChatClient() {
   return (
     <>
       <LikeHud />
-      <div className="min-h-screen h-screen w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
+      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
           {/* ======= الأعلى (الطرف الآخر) ======= */}
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
