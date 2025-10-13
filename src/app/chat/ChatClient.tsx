@@ -293,61 +293,35 @@ export default function ChatClient() {
         if (localRef.current && newStream) {
           localRef.current.srcObject = newStream;
           localRef.current.play().catch(() => {});
-          // republish switched tracks
-          const room = lkRoomRef.current;
-          if (room) {
-            try {
-              // unpublish existing
-              Array.from(room.localParticipant.tracks.values()).forEach((pub) => {
-                try {
-                  pub.unpublish();
-                } catch {}
-              });
-              // publish new
-              for (const t of newStream.getTracks()) {
-                try {
-                  await room.localParticipant.publishTrack(t);
-                } catch {}
-              }
-            } catch {}
-          }
+      // republish switched tracks
+const room = lkRoomRef.current;
+if (room) {
+  try {
+    // unpublish existing tracks safely across SDK versions
+    const lp: any = room.localParticipant;
+    const pubs =
+      typeof lp.getTrackPublications === "function"
+        ? lp.getTrackPublications() // modern API
+        : Array.from(lp.trackPublications?.values?.() ?? []); // fallback
+
+    for (const pub of pubs) {
+      try {
+        const tr: any = (pub as any).track; // LocalAudioTrack | LocalVideoTrack
+        if (tr && typeof lp.unpublishTrack === "function") {
+          lp.unpublishTrack(tr);
         }
-      } catch (e) {
-        console.warn("Camera switch failed:", e);
-      }
-    });
+      } catch {}
+    }
 
-    const offOpenMsg = on("ui:openMessaging" as any, () => setShowMessaging(true));
-    const offCloseMsg = on("ui:closeMessaging" as any, () => setShowMessaging(false));
-
-    const offRemoteAudio = on("ui:toggleRemoteAudio" as any, () => {
-      const a = remoteAudioRef.current;
-      const v = remoteRef.current;
-      const target = a ?? v;
-      if (target) {
-        // @ts-ignore
-        target.muted = !target.muted;
-        // @ts-ignore
-        toast(target.muted ? "Remote muted" : "Remote unmuted");
-      }
-    });
-
-    const offTogglePlay = on("ui:togglePlay", () => toast("Toggle matching state"));
-    const offToggleMasks = on("ui:toggleMasks", () => toast("Enable/disable masks"));
-
-    const offMirror = on("ui:toggleMirror", () => {
-      setIsMirrored((prev) => {
-        const s = !prev;
-        toast(s ? "Mirror on" : "Mirror off");
-        return s;
-      });
-    });
-
-    const offUpsell = on("ui:upsell", (d: any) => {
-      if (ffa) return;
-      router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
-    });
-
+    // publish new tracks from the switched stream
+    for (const t of newStream.getTracks()) {
+      try {
+        await room.localParticipant.publishTrack(t);
+      } catch {}
+    }
+  } catch {}
+}
+   
     // like via LiveKit data channel
     const offLike = on("ui:like", async () => {
       const room = lkRoomRef.current;
