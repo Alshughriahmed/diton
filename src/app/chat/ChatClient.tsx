@@ -204,38 +204,29 @@ const { token } = await tokenRes.json();
             // render remote
             const rv = remoteRef.current;
             if (rv) {
-              // room SDK auto attaches via track.attach(), لكن نسهّل بربط stream مباشرة لو وصل
-              const ms = new MediaStream();
-              participant.tracks.forEach((pub) => {
-                const t = pub.track as MediaStreamTrack | null;
-                if (t) ms.addTrack(t);
-              });
-              rv.srcObject = ms;
-              rv.muted = false;
-              rv.play?.().catch(() => {});
-              const ra = remoteAudioRef.current;
-              if (ra) {
-                ra.srcObject = ms;
-                ra.muted = false;
-                ra.play?.().catch(() => {});
-              }
-            }
-            setRemoteCount(room.remoteParticipants.size);
-          })
-          .on(RoomEvent.TrackUnsubscribed, () => {
-            setRemoteCount(room.remoteParticipants.size);
-          })
-          .on(RoomEvent.DataReceived, (payload, _participant: RemoteParticipant | undefined, _kind, topic) => {
-            if (topic !== "like") return;
-            try {
-              const msg = JSON.parse(new TextDecoder().decode(payload));
-              if (msg?.t === "like" && typeof msg.liked === "boolean") {
-                window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked: msg.liked } }));
-              }
-            } catch {}
-          });
+              
+        // بناء MediaStream من المشارِك البعيد
+const ms = new MediaStream();
 
-        await room.connect(WS_URL, token);
+// LiveKit v1/v2: استخدم getTracks() أو publications
+const pubs =
+  typeof (participant as any).getTracks === "function"
+    ? (participant as any).getTracks()                      // TrackPublication[]
+    : Array.from((participant as any).trackPublications?.values?.() ?? []); // Map -> []
+
+for (const pub of pubs) {
+  const trackObj: any = (pub as any).track;                // RemoteAudioTrack | RemoteVideoTrack | null
+  const mst: MediaStreamTrack | undefined =
+    trackObj?.mediaStreamTrack ?? trackObj ?? undefined;   // خذ الـ MediaStreamTrack إن وُجد
+  if (mst) ms.addTrack(mst);
+}
+
+// اربط الناتج
+const remoteVideo = document.querySelector("#remoteVideo") as HTMLVideoElement | null;
+if (remoteVideo) {
+  remoteVideo.srcObject = ms;
+  remoteVideo.play?.().catch(() => {});
+}
 
         // publish local tracks from our preview stream
         if (s) {
