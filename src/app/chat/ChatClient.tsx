@@ -576,7 +576,7 @@ export default function ChatClient() {
         } catch {}
       });
       room.on(RoomEvent.ParticipantDisconnected, ()=>{
-        if (room.participants.size===0) {
+      if (room.numParticipants === 0) {
           setRtcPhase("searching");
           window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
         }
