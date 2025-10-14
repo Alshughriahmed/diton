@@ -531,66 +531,80 @@ export default function ChatClient() {
         return;
       }
 
-      // connect
-      const room = new Room({ adaptiveStream:true, dynacast:true });
-      lkRoomRef.current = room;
+     // connect
+const room = new Room({ adaptiveStream: true, dynacast: true });
+lkRoomRef.current = room;
 
-      room.on(RoomEvent.ParticipantConnected, ()=>{
-        setRtcPhase("matched");
-        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched" } }));
-        window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: roomName, role:"caller" } }));
-      });
-      room.on(RoomEvent.TrackSubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
-        try {
-          if (pub.kind === Track.Kind.Video) {
-            const videoTrack = pub.track;
-            if (videoTrack && remoteRef.current) {
-              const ms = new MediaStream([videoTrack.mediaStreamTrack]);
-              remoteRef.current.srcObject = ms as any;
-              remoteRef.current.play?.().catch(() => {});
-              window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: ms } }));
-            }
-          } else if (pub.kind === Track.Kind.Audio) {
-            const audioTrack = pub.track;
-            if (audioTrack && remoteAudioRef.current) {
-              const ms = new MediaStream([audioTrack.mediaStreamTrack]);
-              remoteAudioRef.current.srcObject = ms as any;
-              remoteAudioRef.current.muted = false;
-              remoteAudioRef.current.play?.().catch(() => {});
-            }
-          }
-          setRtcPhase("connected");
-          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
-        } catch {}
-      });
-      room.on(RoomEvent.DataReceived, (payload) => {
-        try {
-          const msg = new TextDecoder().decode(payload);
-          if (!msg) return;
-          if (/^\s*\{/.test(msg)) {
-            const j = JSON.parse(msg);
-            if (j?.t==="chat" && j.text) window.dispatchEvent(new CustomEvent("ditona:chat:recv",{ detail:{ text:j.text, pairId: roomName } }));
-            if (j?.t==="peer-meta" && j.payload) window.dispatchEvent(new CustomEvent("ditona:peer-meta",{ detail:j.payload }));
-            if (j?.t==="like" || j?.type==="like:toggled") window.dispatchEvent(new CustomEvent("ditona:like:recv",{ detail:{ pairId: roomName } }));
-          }
-        } catch {}
-      });
-      room.on(RoomEvent.ParticipantDisconnected, ()=>{
-      if (room.numParticipants === 0) {
-          setRtcPhase("searching");
-          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
+room.on(RoomEvent.ParticipantConnected, () => {
+  setRtcPhase("matched");
+  window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched" } }));
+  window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: roomName, role: "caller" } }));
+});
+
+room.on(
+  RoomEvent.TrackSubscribed,
+  (_t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
+    try {
+      if (pub.kind === Track.Kind.Video) {
+        const vt = pub.track;
+        if (vt && remoteRef.current) {
+          const ms = new MediaStream([vt.mediaStreamTrack]);
+          remoteRef.current.srcObject = ms as any;
+          remoteRef.current.play?.().catch(() => {});
+          window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: ms } }));
         }
-      });
-      room.on(RoomEvent.Disconnected, ()=>{
-        setRtcPhase("stopped");
-        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
-      });
+      } else if (pub.kind === Track.Kind.Audio) {
+        const at = pub.track;
+        if (at && remoteAudioRef.current) {
+          const ms = new MediaStream([at.mediaStreamTrack]);
+          remoteAudioRef.current.srcObject = ms as any;
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.play?.().catch(() => {});
+        }
+      }
+      setRtcPhase("connected");
+      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
+    } catch {}
+  }
+);
 
-      const id = identity();
-      const token = await tokenReq(roomName, id);
-      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
-      await room.connect(ws, token);
-      exposeCompatDC(room);
+room.on(RoomEvent.DataReceived, (payload) => {
+  try {
+    const txt = new TextDecoder().decode(payload);
+    if (!txt || !/^\s*\{/.test(txt)) return;
+    const j = JSON.parse(txt);
+    if (j?.t === "chat" && j.text) {
+      window.dispatchEvent(
+        new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } })
+      );
+    }
+    if (j?.t === "peer-meta" && j.payload) {
+      window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
+    }
+    if (j?.t === "like" || j?.type === "like:toggled") {
+      window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { pairId: roomName } }));
+    }
+  } catch {}
+});
+
+room.on(RoomEvent.ParticipantDisconnected, () => {
+  if (room.numParticipants === 0) {
+    setRtcPhase("searching");
+    window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
+  }
+});
+
+room.on(RoomEvent.Disconnected, () => {
+  setRtcPhase("stopped");
+  window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
+});
+
+const id = identity();
+const token = await tokenReq(roomName, id);
+const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+await room.connect(ws, token);
+exposeCompatDC(room);
+
 
       // publish local tracks
       const src = (effectsStream ?? getLocalStream()) || null;
