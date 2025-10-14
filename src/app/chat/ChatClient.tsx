@@ -1,6 +1,6 @@
 // src/app/chat/ChatClient.tsx
 "use client";
-
+import "@/app/chat/dcShim.client"; // MUST load first
 /* ======================= boot / guards ======================= */
 import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
@@ -763,7 +763,7 @@ export default function ChatClient() {
       const token = await tokenReq(roomName, id);
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
-
+      (window as any).__ditonaDataChannel?.attach?.(room);
       exposeCompatDC(room);
 
       // publish local tracks
