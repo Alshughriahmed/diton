@@ -168,24 +168,43 @@ export default function ChatClient() {
     if (!r.ok) throw new Error("token failed " + r.status);
     const j = await r.json(); return j.token as string;
   }
-  function exposeCompatDC(room: Room) {
-    (globalThis as any).__lkRoom = room;
-    (globalThis as any).__ditonaDataChannel = {
+
+  // ===== NEW: LiveKit DataChannel shim (compat with legacy DC)
+  function createCompatDC(room: Room) {
+    const listeners = new Set<(ev: any) => void>();
+    const api: any = {
       readyState: "open",
-      send: (s: string | ArrayBuffer | Uint8Array) => {
-        try {
-          let u8: Uint8Array;
-          if (typeof s === "string") u8 = new TextEncoder().encode(s);
-          else if (s instanceof Uint8Array) u8 = s;
-          else u8 = new Uint8Array(s as ArrayBuffer);
-          room.localParticipant.publishData(u8, { reliable: true }).catch(() => {});
-        } catch {}
+      onmessage: null as null | ((ev: { data: any }) => void),
+      addEventListener(type: string, fn: any) { if (type === "message" && fn) listeners.add(fn); },
+      removeEventListener(type: string, fn: any) { if (type === "message" && fn) listeners.delete(fn); },
+      close() { try { listeners.clear(); this.readyState = "closed"; } catch {} },
+      send(payload: string | ArrayBuffer | Uint8Array) {
+        const u8 = typeof payload === "string"
+          ? new TextEncoder().encode(payload)
+          : (payload instanceof Uint8Array ? payload : new Uint8Array(payload as any));
+        try { room.localParticipant.publishData(u8, { reliable: true }); } catch {}
+      },
+      _emit(raw: any) {
+        const ev = { data: raw };
+        try { if (typeof api.onmessage === "function") api.onmessage(ev); } catch {}
+        for (const fn of Array.from(listeners)) { try { fn(ev); } catch {} }
       },
     };
+    (globalThis as any).__ditonaDataChannel = api;
+    (globalThis as any).__lkRoom = room;
+    return api;
   }
+
+  // ===== REPLACED: leaveRoom with shim cleanup
   async function leaveRoom() {
     const r = lkRoomRef.current; lkRoomRef.current = null;
-    try { (globalThis as any).__lkRoom = null; r?.disconnect(true); } catch {}
+    try {
+      const dc: any = (globalThis as any).__ditonaDataChannel;
+      if (dc && typeof dc.close === "function") dc.close();
+      (globalThis as any).__ditonaDataChannel = null;
+      (globalThis as any).__lkRoom = null;
+    } catch {}
+    try { r?.disconnect(true); } catch {}
   }
 
   function updatePeerBadges(meta: any) {
@@ -563,6 +582,7 @@ export default function ChatClient() {
       // connect
       const room = new Room({ adaptiveStream: true, dynacast: true });
       lkRoomRef.current = room;
+      const compatDC = createCompatDC(room);
 
       room.on(RoomEvent.ParticipantConnected, () => {
         setRtcPhase("matched");
@@ -597,15 +617,26 @@ export default function ChatClient() {
         }
       );
 
+      // ===== UPDATED: feed DataReceived into shim + keep ditona:* events
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
-          const u8 = payload instanceof Uint8Array ? payload : new Uint8Array(payload as ArrayBuffer);
-          const txt = new TextDecoder().decode(u8);
+          const txt = new TextDecoder().decode(payload);
+
+          // pass raw text into the compat DC for likeSync/msgSend (message event API)
+          if (compatDC && typeof (compatDC as any)._emit === "function") (compatDC as any)._emit(txt);
+
           if (!txt || !/^\s*\{/.test(txt)) return;
           const j = JSON.parse(txt);
-          if (j?.t === "chat" && j.text) emitCE("ditona:chat:recv", { text: j.text, pairId: roomName });
-          if (j?.t === "peer-meta") emitCE("ditona:peer-meta", j);
-          if (j?.t === "like" || j?.type === "like:toggled") emitCE("rtc:peer-like", j);
+
+          if (j?.t === "chat" && j.text) {
+            window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } }));
+          }
+          if (j?.t === "peer-meta" && j.payload) {
+            window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
+          }
+          if (j?.t === "like" || j?.type === "like:toggled") {
+            window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { pairId: roomName } }));
+          }
         } catch {}
       });
 
@@ -633,7 +664,6 @@ export default function ChatClient() {
       const token = await tokenReq(roomName, id);
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
-      exposeCompatDC(room);
 
       // publish local tracks
       const src = (effectsStream ?? getLocalStream()) || null;
@@ -695,7 +725,7 @@ export default function ChatClient() {
             )}
           </section>
 
-          {/* ======= local ======= */}
+            {/* ======= local ======= */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
