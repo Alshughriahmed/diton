@@ -16,11 +16,9 @@ export type Entry = {
 
 const TTL_SEC = parseInt(process.env.MATCH_TTL_SEC || "", 10) || 45;
 
-// Upstash env
 const URL = process.env.UPSTASH_REDIS_REST_URL || "";
 const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 
-// Public env guards
 export function haveRedisEnv() {
   return !!URL && !!TOKEN;
 }
@@ -33,7 +31,7 @@ function assertEnv() {
   }
 }
 
-// REST helpers
+/* ================= Upstash REST helpers (correct JSON shape) ================ */
 async function rc(cmd: (string | number)[]): Promise<any> {
   assertEnv();
   const r = await fetch(URL, {
@@ -42,13 +40,15 @@ async function rc(cmd: (string | number)[]): Promise<any> {
       authorization: `Bearer ${TOKEN}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(cmd.map(String)),
+    // MUST be { command: [...] }
+    body: JSON.stringify({ command: cmd.map(String) }),
     cache: "no-store",
   });
   if (!r.ok) throw new Error(`redis ${cmd[0]} failed: ${r.status}`);
   const j = await r.json();
   return j?.result;
 }
+
 async function rcp(commands: (string | number)[][]): Promise<any[]> {
   assertEnv();
   const r = await fetch(URL + "/pipeline", {
@@ -57,6 +57,7 @@ async function rcp(commands: (string | number)[][]): Promise<any[]> {
       authorization: `Bearer ${TOKEN}`,
       "content-type": "application/json",
     },
+    // MUST be { commands: [ [...], ... ] }
     body: JSON.stringify({ commands: commands.map(a => a.map(String)) }),
     cache: "no-store",
   });
@@ -65,16 +66,15 @@ async function rcp(commands: (string | number)[][]): Promise<any[]> {
   return Array.isArray(j?.results) ? j.results.map((x: any) => x.result) : [];
 }
 
-// keys
-const KQ = "mq:q";                             // ZSET: ts -> ticket
+/* ================= Keys ================= */
+const KQ = "mq:q";                             // ZSET ts -> ticket
 const KATTR = (t: string) => `mq:attr:${t}`;   // JSON per ticket
 const KROOM = (t: string) => `mq:room:${t}`;   // room per ticket
 const KDEV = (d: string) => `mq:dev:${d}`;     // deviceId -> ticket
 
-// utils
 const now = () => Date.now();
 const parseJSON = <T,>(s: any): T | null => {
-  try { return s ? JSON.parse(String(s)) as T : null; } catch { return null; }
+  try { return s ? (typeof s === "string" ? JSON.parse(s) : s) as T : null; } catch { return null; }
 };
 function stableRoom(a: string, b: string): string {
   const [x, y] = [a, b].sort();
@@ -82,7 +82,7 @@ function stableRoom(a: string, b: string): string {
   return `pair-${short}-${x.slice(0,4)}${y.slice(0,4)}`;
 }
 
-// ===== API =====
+/* ================= Public API ================= */
 export async function enqueue(entry: Omit<Entry, "ticket" | "ts">): Promise<{ ticket: string }> {
   const devKey = KDEV(entry.deviceId);
   const existing: string | null = await rc(["GET", devKey]);
@@ -101,8 +101,9 @@ export async function enqueue(entry: Omit<Entry, "ticket" | "ts">): Promise<{ ti
         ts: now(),
       };
       await rcp([
-        ["SET", KATTR(existing), JSON.stringify(updated), "EX", TTL_SEC],
-        ["EXPIRE", devKey, TTL_SEC.toString()],
+        ["SET", KATTR(existing), JSON.stringify(updated)],
+        ["EXPIRE", KATTR(existing), TTL_SEC],
+        ["EXPIRE", devKey, TTL_SEC],
         ["ZADD", KQ, updated.ts.toString(), existing],
       ]);
       return { ticket: existing };
@@ -122,8 +123,10 @@ export async function enqueue(entry: Omit<Entry, "ticket" | "ts">): Promise<{ ti
     ts: now(),
   };
   await rcp([
-    ["SET", KATTR(ticket), JSON.stringify(full), "EX", TTL_SEC],
-    ["SET", devKey, ticket, "EX", TTL_SEC],
+    ["SET", KATTR(ticket), JSON.stringify(full)],
+    ["EXPIRE", KATTR(ticket), TTL_SEC],
+    ["SET", devKey, ticket],
+    ["EXPIRE", devKey, TTL_SEC],
     ["ZADD", KQ, full.ts.toString(), ticket],
   ]);
   return { ticket };
@@ -146,16 +149,13 @@ export async function tryMatch(
   if (!myAttrStr) return null;
   const me = parseJSON<Entry>(myAttrStr)!;
 
-  // already paired?
   const existing = await rc(["GET", KROOM(ticket)]);
   if (existing) return { room: existing };
 
-  // purge old by score
   const cutoff = now() - TTL_SEC * 1000;
   const old = await rc(["ZRANGEBYSCORE", KQ, "-inf", String(cutoff)]);
   if (Array.isArray(old) && old.length) await rc(["ZREM", KQ, ...old]);
 
-  // FIFO scan
   const head = await rc(["ZRANGE", KQ, "0", "199"]);
   const candidates: string[] = Array.isArray(head) ? head : [];
   for (const cand of candidates) {
@@ -168,14 +168,15 @@ export async function tryMatch(
 
     const room = stableRoom(ticket, cand);
     await rcp([
-      ["SET", KROOM(ticket), room, "EX", TTL_SEC],
-      ["SET", KROOM(cand), room, "EX", TTL_SEC],
+      ["SET", KROOM(ticket), room],
+      ["EXPIRE", KROOM(ticket), TTL_SEC],
+      ["SET", KROOM(cand), room],
+      ["EXPIRE", KROOM(cand), TTL_SEC],
       ["ZREM", KQ, ticket, cand],
     ]);
     return { room };
   }
 
-  // ensure present in queue
   await rc(["ZADD", KQ, "NX", String(now()), ticket]);
   return null;
 }
