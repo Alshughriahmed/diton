@@ -54,6 +54,7 @@ import {
 } from "livekit-client";
 
 /* ======================= UI components ======================= */
+import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import PeerInfoCard from "@/components/chat/PeerInfoCard";
 import PeerMetadata from "@/components/chat/PeerMetadata";
@@ -65,29 +66,9 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 
-/* ======================= types / consts ======================= */
-type MatchEcho = { ts: number; gender: string; countries: string[] };
+/* ======================= consts ======================= */
 const NEXT_COOLDOWN_MS = 700;
 const isBrowser = typeof window !== "undefined";
-
-/* ========= safe custom-event helpers ========= */
-const emitCE = (type: string, detail?: any) => {
-  try {
-    if (typeof window?.dispatchEvent === "function" && typeof (window as any).CustomEvent === "function") {
-      window.dispatchEvent(new CustomEvent(type, { detail }));
-    }
-  } catch {}
-};
-const onCE = (type: string, handler: (e: any) => void) => {
-  try {
-    if (typeof window?.addEventListener === "function") {
-      const h = (ev: any) => { try { handler(ev); } catch {} };
-      window.addEventListener(type, h as any);
-      return () => { try { window.removeEventListener(type, h as any); } catch {} };
-    }
-  } catch {}
-  return () => {};
-};
 
 /* ============================================================= */
 export default function ChatClient() {
@@ -110,7 +91,6 @@ export default function ChatClient() {
   const { isVip: vip, gender, countries } = useFilters();
   const { profile } = useProfile();
 
-  const [beauty, setBeauty] = useState(false);
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
@@ -127,9 +107,7 @@ export default function ChatClient() {
       const k = "ditona_did";
       const v = localStorage.getItem(k);
       if (typeof v === "string" && v.length > 0) return v;
-      const gen =
-        (typeof crypto !== "undefined" && (crypto as any)?.randomUUID?.()) ||
-        ("did-" + Math.random().toString(36).slice(2, 10));
+      const gen = (crypto as any)?.randomUUID?.() || ("did-" + Math.random().toString(36).slice(2, 10));
       localStorage.setItem(k, String(gen));
       return String(gen);
     } catch {
@@ -140,71 +118,92 @@ export default function ChatClient() {
   function identity(): string {
     const base = String((profile?.displayName || "anon")).trim() || "anon";
     const did = String(stableDid());
-    const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
+    const tail = did.slice(0, 6);
     return `${base}#${tail}`;
+  }
+
+  // map UI genders → match API ("all" | "male" | "female")
+  function mapGenderFilter(g: any): "all" | "male" | "female" {
+    const v = String(g || "").toLowerCase();
+    if (v === "male") return "male";
+    if (v === "female") return "female";
+    // "everyone" | "couples" | "lgbt" → all
+    return "all";
+    }
+
+  function normCountries(cs: any): string[] {
+    if (!Array.isArray(cs)) return [];
+    return cs.map((x) => String(x || "").toUpperCase()).filter((x) => /^[A-Z]{2}$/.test(x));
   }
 
   async function enqueueReq(body: any) {
     const r = await fetch("/api/match/enqueue", {
-      method: "POST", credentials: "include", cache: "no-store",
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error("enqueue failed " + r.status);
-    const j = await r.json(); return j.ticket as string;
+    const j = await r.json();
+    return j.ticket as string;
   }
+
   async function nextReq(ticket: string) {
     const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=8000`, {
-      credentials: "include", cache: "no-store"
+      credentials: "include",
+      cache: "no-store",
     });
     if (r.status === 204) return null;
     if (!r.ok) throw new Error("next failed " + r.status);
-    const j = await r.json(); return j.room as string;
+    const j = await r.json();
+    return j.room as string;
   }
+
   async function tokenReq(room: string, id: string) {
     const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
-      credentials: "include", cache: "no-store"
+      credentials: "include",
+      cache: "no-store",
     });
     if (!r.ok) throw new Error("token failed " + r.status);
-    const j = await r.json(); return j.token as string;
+    const j = await r.json();
+    return j.token as string;
   }
 
-  // ===== NEW: LiveKit DataChannel shim (compat with legacy DC)
-  function createCompatDC(room: Room) {
-    const listeners = new Set<(ev: any) => void>();
-    const api: any = {
+  function exposeCompatDC(room: Room) {
+    const wrap = {
+      _closed: false,
       readyState: "open",
-      onmessage: null as null | ((ev: { data: any }) => void),
-      addEventListener(type: string, fn: any) { if (type === "message" && fn) listeners.add(fn); },
-      removeEventListener(type: string, fn: any) { if (type === "message" && fn) listeners.delete(fn); },
-      close() { try { listeners.clear(); this.readyState = "closed"; } catch {} },
-      send(payload: string | ArrayBuffer | Uint8Array) {
-        const u8 = typeof payload === "string"
-          ? new TextEncoder().encode(payload)
-          : (payload instanceof Uint8Array ? payload : new Uint8Array(payload as any));
-        try { room.localParticipant.publishData(u8, { reliable: true }); } catch {}
+      close() { (this as any)._closed = true; },
+      send: (s: string | ArrayBuffer | Uint8Array) => {
+        try {
+          if (!(lkRoomRef.current) || (wrap as any)._closed) return;
+          const u8 =
+            typeof s === "string"
+              ? new TextEncoder().encode(s)
+              : s instanceof Uint8Array
+              ? s
+              : new Uint8Array(s as ArrayBuffer);
+          (room.localParticipant as any).publishData(u8, { reliable: true });
+        } catch {}
       },
-      _emit(raw: any) {
-        const ev = { data: raw };
-        try { if (typeof api.onmessage === "function") api.onmessage(ev); } catch {}
-        for (const fn of Array.from(listeners)) { try { fn(ev); } catch {} }
-      },
-    };
-    (globalThis as any).__ditonaDataChannel = api;
+    } as any;
     (globalThis as any).__lkRoom = room;
-    return api;
+    (globalThis as any).__ditonaDataChannel = wrap;
   }
 
-  // ===== REPLACED: leaveRoom with shim cleanup
   async function leaveRoom() {
-    const r = lkRoomRef.current; lkRoomRef.current = null;
     try {
+      const r = lkRoomRef.current;
+      lkRoomRef.current = null;
       const dc: any = (globalThis as any).__ditonaDataChannel;
       if (dc && typeof dc.close === "function") dc.close();
-      (globalThis as any).__ditonaDataChannel = null;
       (globalThis as any).__lkRoom = null;
+      if (r) {
+        try { r.removeAllListeners?.(); } catch {}
+        try { r.disconnect(true); } catch {}
+      }
     } catch {}
-    try { r?.disconnect(true); } catch {}
   }
 
   function updatePeerBadges(meta: any) {
@@ -282,14 +281,10 @@ export default function ChatClient() {
         }
 
         await new Promise((r) => setTimeout(r, 150));
-        emitCE("rtc:phase", { phase: "boot" });
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
 
         try {
-          await safeFetch("/api/age/allow", {
-            method: "POST",
-            credentials: "include",
-            cache: "no-store",
-          });
+          await safeFetch("/api/age/allow", { method: "POST", credentials: "include", cache: "no-store" });
         } catch {}
 
         emit("ui:next");
@@ -318,7 +313,6 @@ export default function ChatClient() {
           localRef.current.srcObject = newStream;
           localRef.current.play().catch(() => {});
         }
-        // republish switched tracks to LiveKit
         const room = lkRoomRef.current;
         if (room) {
           try {
@@ -343,9 +337,7 @@ export default function ChatClient() {
       }
     });
 
-    const off4 = on("ui:openSettings", () => {
-      try { window.location.href = "/settings"; } catch {}
-    });
+    const off4 = on("ui:openSettings", () => { try { window.location.href = "/settings"; } catch {} });
 
     const off5 = on("ui:like", async () => {
       const room = lkRoomRef.current;
@@ -358,9 +350,7 @@ export default function ChatClient() {
       toast(`Like ${newLike ? "❤️" : "💔"}`);
     });
 
-    const off6 = on("ui:report", async () => {
-      try { toast("Report sent. Moving on"); } catch {}
-    });
+    const off6 = on("ui:report", async () => { try { toast("Report sent. Moving on"); } catch {} });
 
     const off7 = on("ui:next", async () => {
       const now = Date.now(); if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
@@ -401,7 +391,7 @@ export default function ChatClient() {
       router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
     });
 
-    // filters events — UX only; server enqueue happens on next
+    // filters events — UX only
     const reEnqueue = async () => { toast("Filters updated"); };
     const offCountry = on("filters:country", reEnqueue);
     const offGender = on("filters:gender", reEnqueue);
@@ -429,102 +419,91 @@ export default function ChatClient() {
     });
 
     if (isBrowser) {
-      const offPM = onCE("ditona:peer-meta", handlePeerMeta as any);
-      const offLike = onCE("rtc:peer-like", (e: any) => {
+      window.addEventListener("ditona:peer-meta", handlePeerMeta as any);
+      window.addEventListener("rtc:peer-like", (e: any) => {
         const detail = e.detail;
         if (detail && typeof detail.liked === "boolean") {
           setPeerLikes(detail.liked ? 1 : 0);
           toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
         }
       });
-      // init media, then LiveKit connect through matchmaking
-      const initMediaWithPermissionChecks = async () => {
-        try {
-          if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-            setCameraPermissionHint("Return to the tab to enable camera");
-            return;
-          }
-          setCameraPermissionHint("");
-          await initLocalMedia();
-          setCameraPermissionHint("");
-        } catch (error: any) {
-          console.warn("Media initialization failed:", error);
-          if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
-          else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
-          else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
-          else setCameraPermissionHint("Camera access error — check permissions");
+    }
+
+    // init media, then Connect via matchmaking
+    const initMediaWithPermissionChecks = async () => {
+      try {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+          setCameraPermissionHint("Return to the tab to enable camera");
           return;
         }
+        setCameraPermissionHint("");
+        await initLocalMedia();
+        setCameraPermissionHint("");
+      } catch (error: any) {
+        console.warn("Media initialization failed:", error);
+        if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
+        else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
+        else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
+        else setCameraPermissionHint("Camera access error — check permissions");
+        return;
+      }
 
-        const s = getLocalStream();
-        if (localRef.current && s) {
-          if (vip && isBrowser) {
-            try {
-              const { getVideoEffects } = await import("@/lib/effects");
-              const fx = getVideoEffects();
-              if (fx) {
-                const v = document.createElement("video");
-                v.srcObject = s;
-                void v.play();
-                const processed = await fx.initialize(v);
-                if (processed) {
-                  setEffectsStream(processed);
-                  localRef.current.srcObject = processed;
-                  fx.start();
-                } else {
-                  localRef.current.srcObject = s;
-                }
+      const s = getLocalStream();
+      if (localRef.current && s) {
+        if (vip && isBrowser) {
+          try {
+            const { getVideoEffects } = await import("@/lib/effects");
+            const fx = getVideoEffects();
+            if (fx) {
+              const v = document.createElement("video");
+              v.srcObject = s;
+              void v.play();
+              const processed = await fx.initialize(v);
+              if (processed) {
+                setEffectsStream(processed);
+                localRef.current.srcObject = processed;
+                fx.start();
               } else {
                 localRef.current.srcObject = s;
               }
-            } catch {
+            } else {
               localRef.current.srcObject = s;
             }
-          } else {
+          } catch {
             localRef.current.srcObject = s;
           }
-
-          localRef.current.muted = true;
-          localRef.current.play().catch(() => {});
-
-          joinViaRedisMatch().catch((e) => console.warn("joinViaRedisMatch failed", e));
-          setReady(true);
+        } else {
+          localRef.current.srcObject = s;
         }
-      };
 
-      const mobileOptimizer = getMobileOptimizer();
-      const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
+        localRef.current.muted = true;
+        localRef.current.play().catch(() => {});
 
-      initMediaWithPermissionChecks().catch(() => {});
+        joinViaRedisMatch().catch((e) => console.warn("joinViaRedisMatch failed", e));
+        setReady(true);
+      }
+    };
 
-      return () => {
-        offPM(); offLike();
-        off1(); off2(); off3(); off4(); off5(); off6(); off7(); off8();
-        offOpenMsg(); offCloseMsg(); offRemoteAudio(); offTogglePlay(); offToggleMasks(); offMirror(); offUpsell();
-        offCountry(); offGender(); offRtcPhase(); offRtcPair(); offRtcTrack();
-        // LiveKit cleanup
-        try {
-          const room = lkRoomRef.current;
-          lkRoomRef.current = null;
-          if (room) { try { room.disconnect(); } catch {} }
-        } catch {}
-        unsubMob();
-      };
-    }
+    const mobileOptimizer = getMobileOptimizer();
+    const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
 
-    // fallback cleanup
-    return () => {};
+    initMediaWithPermissionChecks().catch(() => {});
+
+    return () => {
+      off1(); off2(); off3(); off4(); off5(); off6(); off7(); off8();
+      offOpenMsg(); offCloseMsg(); offRemoteAudio(); offTogglePlay(); offToggleMasks(); offMirror(); offUpsell();
+      offCountry(); offGender(); offRtcPhase(); offRtcPair(); offRtcTrack();
+      if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
+
+      // LiveKit cleanup
+      leaveRoom().catch(() => {});
+      unsubMob();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pair.id, vip, ffa, router, beauty]);
+  }, [pair.id, vip, ffa, router]);
 
-  // stop-like hook on unmount for legacy rtcFlow parity
-  useEffect(() => () => {
-    try {
-      const room = lkRoomRef.current;
-      lkRoomRef.current = null;
-      if (room) { try { room.disconnect(); } catch {} }
-    } catch {}
-  }, []);
+  // stop-like hook on unmount
+  useEffect(() => () => { leaveRoom().catch(() => {}); }, []);
 
   // swipe next/prev
   useEffect(() => {
@@ -552,7 +531,7 @@ export default function ChatClient() {
     if (joiningRef.current) return;
     joiningRef.current = true;
     setRtcPhase("searching");
-    emitCE("rtc:phase", { phase: "searching" });
+    window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
 
     try {
       // enqueue with current filters
@@ -564,70 +543,58 @@ export default function ChatClient() {
         vip: !!vip,
         selfGender: (profile?.gender === "male" || profile?.gender === "female") ? profile.gender : "u",
         selfCountry,
-        filterGenders: (gender === "male" || gender === "female") ? gender : "all",
-        filterCountries: Array.isArray(countries) ? countries : []
+        filterGenders: mapGenderFilter(gender),
+        filterCountries: normCountries(countries),
       });
 
-      // poll next up to ~8s
+      // poll next up to ~8s (server widens after 3s)
       let roomName: string | null = null;
-      for (let i = 0; i < 3 && !roomName; i++) {
-        roomName = await nextReq(ticket);
-      }
+      for (let i = 0; i < 3 && !roomName; i++) roomName = await nextReq(ticket);
       if (!roomName) {
         setRtcPhase("stopped");
-        emitCE("rtc:phase", { phase: "stopped" });
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
         return;
       }
 
       // connect
       const room = new Room({ adaptiveStream: true, dynacast: true });
       lkRoomRef.current = room;
-      const compatDC = createCompatDC(room);
 
       room.on(RoomEvent.ParticipantConnected, () => {
         setRtcPhase("matched");
-        emitCE("rtc:phase", { phase: "matched" });
-        emitCE("rtc:pair", { pairId: roomName, role: "caller" });
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched" } }));
+        window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: roomName, role: "caller" } }));
       });
 
-      room.on(
-        RoomEvent.TrackSubscribed,
-        (_t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
-          try {
-            if (pub.kind === Track.Kind.Video) {
-              const vt = pub.track;
-              if (vt && remoteRef.current) {
-                const ms = new MediaStream([vt.mediaStreamTrack]);
-                remoteRef.current.srcObject = ms as any;
-                remoteRef.current.play?.().catch(() => {});
-                emitCE("rtc:remote-track", { stream: ms });
-              }
-            } else if (pub.kind === Track.Kind.Audio) {
-              const at = pub.track;
-              if (at && remoteAudioRef.current) {
-                const ms = new MediaStream([at.mediaStreamTrack]);
-                remoteAudioRef.current.srcObject = ms as any;
-                remoteAudioRef.current.muted = false;
-                remoteAudioRef.current.play?.().catch(() => {});
-              }
+      room.on(RoomEvent.TrackSubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
+        try {
+          if (pub.kind === Track.Kind.Video) {
+            const vt = pub.track;
+            if (vt && remoteRef.current) {
+              const ms = new MediaStream([vt.mediaStreamTrack]);
+              remoteRef.current.srcObject = ms as any;
+              remoteRef.current.play?.().catch(() => {});
+              window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: ms } }));
             }
-            setRtcPhase("connected");
-            emitCE("rtc:phase", { phase: "connected" });
-          } catch {}
-        }
-      );
+          } else if (pub.kind === Track.Kind.Audio) {
+            const at = pub.track;
+            if (at && remoteAudioRef.current) {
+              const ms = new MediaStream([at.mediaStreamTrack]);
+              remoteAudioRef.current.srcObject = ms as any;
+              remoteAudioRef.current.muted = false;
+              remoteAudioRef.current.play?.().catch(() => {});
+            }
+          }
+          setRtcPhase("connected");
+          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
+        } catch {}
+      });
 
-      // ===== UPDATED: feed DataReceived into shim + keep ditona:* events
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
           const txt = new TextDecoder().decode(payload);
-
-          // pass raw text into the compat DC for likeSync/msgSend (message event API)
-          if (compatDC && typeof (compatDC as any)._emit === "function") (compatDC as any)._emit(txt);
-
           if (!txt || !/^\s*\{/.test(txt)) return;
           const j = JSON.parse(txt);
-
           if (j?.t === "chat" && j.text) {
             window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } }));
           }
@@ -641,33 +608,30 @@ export default function ChatClient() {
       });
 
       room.on(RoomEvent.ParticipantDisconnected, () => {
-        try {
-          const noneLeft = (room as any).remoteParticipants
-            ? (room as any).remoteParticipants.size === 0
-            : room.numParticipants === 0;
-          if (noneLeft) {
-            setRtcPhase("searching");
-            emitCE("rtc:phase", { phase: "searching" });
-          }
-        } catch {
+        if (room.numParticipants === 0) {
           setRtcPhase("searching");
-          emitCE("rtc:phase", { phase: "searching" });
+          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
         }
       });
 
       room.on(RoomEvent.Disconnected, () => {
         setRtcPhase("stopped");
-        emitCE("rtc:phase", { phase: "stopped" });
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
       });
 
       const id = identity();
       const token = await tokenReq(roomName, id);
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
+      exposeCompatDC(room);
 
-      // publish local tracks
+      // publish local tracks after connect
       const src = (effectsStream ?? getLocalStream()) || null;
-      if (src) for (const t of src.getTracks()) { try { await room.localParticipant.publishTrack(t); } catch {} }
+      if (src) {
+        for (const t of src.getTracks()) {
+          try { await room.localParticipant.publishTrack(t); } catch {}
+        }
+      }
     } finally {
       joiningRef.current = false;
     }
@@ -725,7 +689,7 @@ export default function ChatClient() {
             )}
           </section>
 
-            {/* ======= local ======= */}
+          {/* ======= local ======= */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
@@ -749,31 +713,7 @@ export default function ChatClient() {
                           .then(async () => {
                             const s = getLocalStream();
                             if (localRef.current && s) {
-                              if (vip && isBrowser) {
-                                try {
-                                  const { getVideoEffects } = await import("@/lib/effects");
-                                  const fx = getVideoEffects();
-                                  if (fx) {
-                                    const v = document.createElement("video");
-                                    v.srcObject = s;
-                                    void v.play();
-                                    const processed = await fx.initialize(v);
-                                    if (processed) {
-                                      setEffectsStream(processed);
-                                      localRef.current.srcObject = processed;
-                                      fx.start();
-                                    } else {
-                                      localRef.current.srcObject = s;
-                                    }
-                                  } else {
-                                    localRef.current.srcObject = s;
-                                  }
-                                } catch {
-                                  localRef.current.srcObject = s;
-                                }
-                              } else {
-                                localRef.current.srcObject = s;
-                              }
+                              localRef.current.srcObject = s;
                               localRef.current.muted = true;
                               localRef.current.play().catch(() => {});
                               setReady(true);
