@@ -1,7 +1,9 @@
 "use client";
 
-/* ===== boot / guards ===== */
-import "@/app/chat/dcShim.client"; // load DC shim first
+/* ========= الشِّيم يجب أن تُحمَّل أولًا ========= */
+import "@/app/chat/dcShim.client";
+
+/* ======================= boot / guards ======================= */
 import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
@@ -20,7 +22,7 @@ if (process.env.NODE_ENV !== "production") {
   }
 }
 
-/* ===== react & app hooks ===== */
+/* ======================= react & app hooks ======================= */
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 
@@ -44,7 +46,7 @@ import { toast } from "@/lib/ui/toast";
 import { tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
 
-/* ===== LiveKit ===== */
+/* ======================= LiveKit ======================= */
 import {
   Room,
   RoomEvent,
@@ -54,7 +56,7 @@ import {
   RemoteTrack,
 } from "livekit-client";
 
-/* ===== UI components ===== */
+/* ======================= UI components ======================= */
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import PeerInfoCard from "@/components/chat/PeerInfoCard";
@@ -67,8 +69,8 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 
-/* ===== types / consts ===== */
-type MatchEcho = { ts: number; gender: string; countries: string[] };
+/* ======================= types / consts ======================= */
+type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 700;
 const isBrowser = typeof window !== "undefined";
 
@@ -88,19 +90,18 @@ export default function ChatClient() {
   const [ready, setReady] = useState(false);
   const [like, setLike] = useState(false);
   const [peerLikes, setPeerLikes] = useState(0);
-  const [rtcPhase, setRtcPhase] = useState<"idle" | "searching" | "matched" | "connected" | "stopped">("idle");
+  const [rtcPhase, setRtcPhase] = useState<Phase>("idle");
   const [pair, setPair] = useState<{ id?: string; role?: "caller" | "callee" }>({});
   const { isVip: vip, gender, countries } = useFilters();
   const { profile } = useProfile();
 
-  const [beauty, setBeauty] = useState(false);
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
   const [isMirrored, setIsMirrored] = useState(true);
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
 
-  // LiveKit room + guards
+  // LiveKit
   const lkRoomRef = useRef<Room | null>(null);
   const joiningRef = useRef(false);
 
@@ -134,8 +135,10 @@ export default function ChatClient() {
       body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error("enqueue failed " + r.status);
-    const j = await r.json(); return j.ticket as string;
+    const j = await r.json();
+    return j.ticket as string;
   }
+
   async function nextReq(ticket: string) {
     const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=8000`, {
       credentials: "include",
@@ -143,45 +146,35 @@ export default function ChatClient() {
     });
     if (r.status === 204) return null;
     if (!r.ok) throw new Error("next failed " + r.status);
-    const j = await r.json(); return j.room as string;
+    const j = await r.json();
+    return j.room as string;
   }
+
   async function tokenReq(room: string, id: string) {
-    const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
-      credentials: "include",
-      cache: "no-store",
-    });
+    const r = await fetch(
+      `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
+      { credentials: "include", cache: "no-store" }
+    );
     if (!r.ok) throw new Error("token failed " + r.status);
-    const j = await r.json(); return j.token as string;
+    const j = await r.json();
+    return j.token as string;
   }
+
+  /** اربط الشِّيم فقط. لا تنشئ أو تستبدل __ditonaDataChannel هنا. */
   function exposeCompatDC(room: Room) {
-    // إذا كان الشيم محمّلًا، اربطه بدل إعادة التعريف
-    const dc: any = (globalThis as any).__ditonaDataChannel;
-    if (dc && typeof dc.addEventListener === "function" && typeof dc.attach === "function") {
-      try { dc.attach(room); } catch {}
-      (globalThis as any).__lkRoom = room;
-      return;
-    }
-    // fallback القديم إن لزم
-    (globalThis as any).__lkRoom = room;
-    (globalThis as any).__ditonaDataChannel = {
-      readyState: "open",
-      addEventListener: () => {}, // حارس لتفادي TypeError
-      send: (s: string | ArrayBuffer | Uint8Array) => {
-        const u8 = typeof s === "string"
-          ? new TextEncoder().encode(s)
-          : s instanceof Uint8Array
-            ? s
-            : new Uint8Array(s as any);
-        try { (room.localParticipant as any).publishData(u8, { reliable: true }); } catch {}
-      },
-      close: () => {},
-    };
-  }
-  async function leaveRoom() {
-    const r = lkRoomRef.current; lkRoomRef.current = null;
+    const w: any = globalThis;
+    w.__lkRoom = room;
     try {
+      w.__ditonaDataChannel?.attach?.(room);
+    } catch {}
+  }
+
+  async function leaveRoom() {
+    const r = lkRoomRef.current;
+    lkRoomRef.current = null;
+    try {
+      (globalThis as any).__ditonaDataChannel?.detach?.();
       (globalThis as any).__lkRoom = null;
-      (globalThis as any).__ditonaDataChannel?.close?.();
       r?.disconnect(true);
     } catch {}
   }
@@ -198,7 +191,7 @@ export default function ChatClient() {
     } catch {}
   }
 
-  /* ---------- peer-meta-ui ---------- */
+  /* ---------- peer-meta-ui (badges) ---------- */
   useEffect(() => {
     if (!isBrowser) return;
     const handler = (event: any) => {
@@ -219,7 +212,7 @@ export default function ChatClient() {
     return () => window.removeEventListener("ditona:peer-meta-ui", handler as any);
   }, []);
 
-  /* ---------- peer meta from remote ---------- */
+  /* ---------- peer meta from remote (events) ---------- */
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
     isVip: false,
@@ -272,7 +265,9 @@ export default function ChatClient() {
         } catch {}
 
         emit("ui:next");
-      } catch (err) {}
+      } catch (err) {
+        console.warn("[auto-start] Failed:", err);
+      }
     };
 
     const t = setTimeout(doAutoStart, 100);
@@ -284,6 +279,7 @@ export default function ChatClient() {
   useGestures();
 
   useEffect(() => {
+    // media & controls
     const off1 = on("ui:toggleMic", () => toggleMic());
     const off2 = on("ui:toggleCam", () => toggleCam());
 
@@ -309,34 +305,49 @@ export default function ChatClient() {
               } catch {}
             }
             for (const t of newStream.getTracks()) {
-              try { await room.localParticipant.publishTrack(t); } catch {}
+              try {
+                await room.localParticipant.publishTrack(t);
+              } catch {}
             }
           } catch {}
         }
-      } catch {}
+      } catch (e) {
+        console.warn("Camera switch failed:", e);
+      }
     });
 
     const off4 = on("ui:openSettings", () => {
-      try { window.location.href = "/settings"; } catch {}
+      try {
+        window.location.href = "/settings";
+      } catch {}
     });
 
     const off5 = on("ui:like", async () => {
       const room = lkRoomRef.current;
-      if (!room) { toast("No active connection for like"); return; }
-      const newLike = !like; setLike(newLike);
+      if (!room) {
+        toast("No active connection for like");
+        return;
+      }
+      const newLike = !like;
+      setLike(newLike);
       try {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
         await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-      } catch {}
+      } catch (e) {
+        console.warn("publishData failed", e);
+      }
       toast(`Like ${newLike ? "❤️" : "💔"}`);
     });
 
     const off6 = on("ui:report", async () => {
-      try { toast("Report sent. Moving on"); } catch {}
+      try {
+        toast("Report sent. Moving on");
+      } catch {}
     });
 
     const off7 = on("ui:next", async () => {
-      const now = Date.now(); if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
+      const now = Date.now();
+      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
       lastNextTsRef.current = now;
       toast("⏭️ Next");
       await leaveRoom();
@@ -345,8 +356,13 @@ export default function ChatClient() {
 
     const off8 = on("ui:prev", () => {
       if (ffa) console.log("FFA_FORCE: enabled");
-      if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); }
-      else { toast("⏮️ Attempting to go back…"); tryPrevOrRandom(); }
+      if (!vip && !ffa) {
+        toast("🔒 Going back is VIP only");
+        emit("ui:upsell", "prev");
+      } else {
+        toast("⏮️ Attempting to go back…");
+        tryPrevOrRandom();
+      }
     });
 
     const offOpenMsg = on("ui:openMessaging" as any, () => setShowMessaging(true));
@@ -366,7 +382,11 @@ export default function ChatClient() {
     const offToggleMasks = on("ui:toggleMasks", () => toast("Enable/disable masks"));
 
     const offMirror = on("ui:toggleMirror", () => {
-      setIsMirrored((prev) => { const s = !prev; toast(s ? "Mirror on" : "Mirror off"); return s; });
+      setIsMirrored((prev) => {
+        const s = !prev;
+        toast(s ? "Mirror on" : "Mirror off");
+        return s;
+      });
     });
 
     const offUpsell = on("ui:upsell", (d: any) => {
@@ -374,7 +394,9 @@ export default function ChatClient() {
       router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
     });
 
-    const reEnqueue = async () => { toast("Filters updated"); };
+    const reEnqueue = async () => {
+      toast("Filters updated");
+    };
     const offCountry = on("filters:country", reEnqueue);
     const offGender = on("filters:gender", reEnqueue);
 
@@ -395,7 +417,9 @@ export default function ChatClient() {
             remoteAudio.play?.().catch(() => {});
           }
         } catch {}
-        try { remoteVideo.play?.().catch(() => {}); } catch {}
+        try {
+          remoteVideo.play?.().catch(() => {});
+        } catch {}
       }
     });
 
@@ -420,8 +444,11 @@ export default function ChatClient() {
         await initLocalMedia();
         setCameraPermissionHint("");
       } catch (error: any) {
-        if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
-        else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
+        console.warn("Media initialization failed:", error);
+        if (error?.name === "NotAllowedError")
+          setCameraPermissionHint("Allow camera and microphone from browser settings");
+        else if (error?.name === "NotReadableError" || error?.name === "AbortError")
+          setCameraPermissionHint("Close the other tab or allow camera");
         else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
         else setCameraPermissionHint("Camera access error — check permissions");
         return;
@@ -429,64 +456,75 @@ export default function ChatClient() {
 
       const s = getLocalStream();
       if (localRef.current && s) {
-        if (vip && isBrowser) {
-          try {
-            const { getVideoEffects } = await import("@/lib/effects");
-            const fx = getVideoEffects();
-            if (fx) {
-              const v = document.createElement("video");
-              v.srcObject = s;
-              void v.play();
-              const processed = await fx.initialize(v);
-              if (processed) {
-                setEffectsStream(processed);
-                localRef.current.srcObject = processed;
-                fx.start();
-              } else {
-                localRef.current.srcObject = s;
-              }
-            } else {
-              localRef.current.srcObject = s;
-            }
-          } catch {
-            localRef.current.srcObject = s;
-          }
-        } else {
-          localRef.current.srcObject = s;
-        }
-
+        localRef.current.srcObject = s;
         localRef.current.muted = true;
         localRef.current.play().catch(() => {});
-
-        joinViaRedisMatch().catch(() => {});
+        joinViaRedisMatch().catch((e) => console.warn("joinViaRedisMatch failed", e));
         setReady(true);
       }
     };
 
     const mobileOptimizer = getMobileOptimizer();
-    const unsubMob = mobileOptimizer.subscribe((vp) => {});
+    const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
 
     initMediaWithPermissionChecks().catch(() => {});
 
     return () => {
-      off1(); off2(); off3(); off4(); off5(); off6(); off7(); off8();
-      offOpenMsg(); offCloseMsg(); offRemoteAudio(); offTogglePlay(); offToggleMasks(); offMirror(); offUpsell();
-      offCountry(); offGender(); offRtcPhase(); offRtcPair(); offRtcTrack();
+      off1();
+      off2();
+      off3();
+      off4();
+      off5();
+      off6();
+      off7();
+      off8();
+      offOpenMsg();
+      offCloseMsg();
+      offRemoteAudio();
+      offTogglePlay();
+      offToggleMasks();
+      offMirror();
+      offUpsell();
+      offCountry();
+      offGender();
+      offRtcPhase();
+      offRtcPair();
+      offRtcTrack();
       if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
-      try { const room = lkRoomRef.current; lkRoomRef.current = null; if (room) { try { room.disconnect(); } catch {} } } catch {}
+
+      try {
+        const room = lkRoomRef.current;
+        lkRoomRef.current = null;
+        if (room) {
+          try {
+            room.disconnect();
+          } catch {}
+        }
+      } catch {}
+
       unsubMob();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pair.id, vip, ffa, router, beauty]);
+  }, [pair.id, vip, ffa, router]);
 
-  useEffect(() => () => {
-    try {
-      const room = lkRoomRef.current;
-      lkRoomRef.current = null;
-      if (room) { try { room.disconnect(); } catch {} }
-    } catch {}
-  }, []);
+  // stop-like hook on unmount
+  useEffect(
+    () => () => {
+      try {
+        const room = lkRoomRef.current;
+        lkRoomRef.current = null;
+        (globalThis as any).__ditonaDataChannel?.detach?.();
+        if (room) {
+          try {
+            room.disconnect();
+          } catch {}
+        }
+      } catch {}
+    },
+    []
+  );
 
+  // swipe next/prev
   useEffect(() => {
     if (!isBrowser) return;
     let x0 = 0, y0 = 0;
@@ -504,7 +542,10 @@ export default function ChatClient() {
     };
     window.addEventListener("pointerdown", down);
     window.addEventListener("pointerup", up);
-    return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("pointerup", up); };
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointerup", up);
+    };
   }, [vip, ffa]);
 
   /* =================== Matchmaking + LiveKit =================== */
@@ -515,18 +556,23 @@ export default function ChatClient() {
     window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
 
     try {
+      // enqueue with current filters
       let selfCountry: string | null = null;
-      try { const g = JSON.parse(localStorage.getItem("ditona_geo") || "null"); if (g?.country) selfCountry = String(g.country).toUpperCase(); } catch {}
+      try {
+        const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+        if (g?.country) selfCountry = String(g.country).toUpperCase();
+      } catch {}
       const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
         vip: !!vip,
-        selfGender: (profile?.gender === "male" || profile?.gender === "female") ? profile.gender : "u",
+        selfGender: profile?.gender === "male" || profile?.gender === "female" ? profile.gender : "u",
         selfCountry,
-        filterGenders: (gender === "male" || gender === "female") ? gender : "all",
+        filterGenders: gender === "male" || gender === "female" ? gender : "all",
         filterCountries: Array.isArray(countries) ? countries : [],
       });
 
+      // poll next up to ~8s
       let roomName: string | null = null;
       for (let i = 0; i < 3 && !roomName; i++) {
         roomName = await nextReq(ticket);
@@ -544,7 +590,9 @@ export default function ChatClient() {
       room.on(RoomEvent.ParticipantConnected, () => {
         setRtcPhase("matched");
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "matched" } }));
-        window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: roomName, role: "caller" } }));
+        window.dispatchEvent(
+          new CustomEvent("rtc:pair", { detail: { pairId: roomName, role: "caller" } })
+        );
       });
 
       room.on(
@@ -594,8 +642,10 @@ export default function ChatClient() {
       });
 
       room.on(RoomEvent.ParticipantDisconnected, () => {
-        setRtcPhase("searching");
-        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
+        if (room.numParticipants === 0) {
+          setRtcPhase("searching");
+          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
+        }
       });
 
       room.on(RoomEvent.Disconnected, () => {
@@ -608,13 +658,12 @@ export default function ChatClient() {
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
 
-      // attach shim to real room
-      (window as any).__ditonaDataChannel?.attach?.(room);
+      // اربط الشيم بالغرفة
       exposeCompatDC(room);
 
       // publish local tracks
-      const src = (effectsStream ?? getLocalStream()) || null;
-      if (src) for (const t of src.getTracks()) { try { await room.localParticipant.publishTrack(t); } catch {} }
+      const src = effectsStream ?? getLocalStream();
+      if (src) for (const t of src.getTracks()) try { await room.localParticipant.publishTrack(t); } catch {}
     } finally {
       joiningRef.current = false;
     }
@@ -627,10 +676,14 @@ export default function ChatClient() {
         <FilterBar />
         <div className="h-full grid grid-rows-2 gap-2 p-2">
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
-            <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm">Loading...</div>
+            <div className="absolute inset-0 flex items-center justify-center text-slate-300/80 text-sm">
+              Loading...
+            </div>
           </section>
           <section className="relative rounded-2xl bg-black/20 overflow-hidden pb-28 md:pb-24">
-            <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">Initializing...</div>
+            <div className="absolute inset-0 flex items-center justify-center text-slate-300 text-sm">
+              Initializing...
+            </div>
           </section>
         </div>
       </div>
@@ -640,12 +693,20 @@ export default function ChatClient() {
   return (
     <>
       <LikeHud />
-      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
+      <div
+        className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100"
+        data-chat-container
+      >
         <div className="h-full grid grid-rows-2 gap-2 p-2">
-          {/* remote */}
+          {/* ======= remote ======= */}
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
             <PeerInfoCard peerInfo={peerInfo} />
-            <PeerMetadata country={peerInfo.country} city={peerInfo.city} gender={peerInfo.gender} age={peerInfo.age} />
+            <PeerMetadata
+              country={peerInfo.country}
+              city={peerInfo.city}
+              gender={peerInfo.gender}
+              age={peerInfo.age}
+            />
             <FilterBar />
             <MessageHud />
 
@@ -653,7 +714,14 @@ export default function ChatClient() {
               <LikeSystem />
             </div>
 
-            <video ref={remoteRef} id="remoteVideo" data-role="remote" className="w-full h-full object-cover" playsInline autoPlay />
+            <video
+              ref={remoteRef}
+              id="remoteVideo"
+              data-role="remote"
+              className="w-full h-full object-cover"
+              playsInline
+              autoPlay
+            />
             <audio ref={remoteAudioRef} id="remoteAudio" autoPlay playsInline hidden />
 
             {rtcPhase === "searching" && (
@@ -669,7 +737,7 @@ export default function ChatClient() {
             )}
           </section>
 
-          {/* local */}
+          {/* ======= local ======= */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
@@ -700,9 +768,13 @@ export default function ChatClient() {
                             }
                           })
                           .catch((error) => {
+                            console.warn("Retry failed:", error);
                             if ((error as any)?.name === "NotAllowedError") {
                               setCameraPermissionHint("Allow camera and microphone from browser settings");
-                            } else if ((error as any)?.name === "NotReadableError" || (error as any)?.name === "AbortError") {
+                            } else if (
+                              (error as any)?.name === "NotReadableError" ||
+                              (error as any)?.name === "AbortError"
+                            ) {
                               setCameraPermissionHint("Close the other tab or allow camera");
                             } else {
                               setCameraPermissionHint("Camera access error — check permissions");
