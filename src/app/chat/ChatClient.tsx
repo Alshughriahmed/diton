@@ -1,3 +1,4 @@
+// src/app/chat/ChatClient.tsx
 "use client";
 
 /* ======================= boot / guards ======================= */
@@ -66,7 +67,8 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 
-/* ======================= consts ======================= */
+/* ======================= types / consts ======================= */
+type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 700;
 const isBrowser = typeof window !== "undefined";
 
@@ -86,7 +88,7 @@ export default function ChatClient() {
   const [ready, setReady] = useState(false);
   const [like, setLike] = useState(false);
   const [peerLikes, setPeerLikes] = useState(0);
-  const [rtcPhase, setRtcPhase] = useState<"idle" | "searching" | "matched" | "connected" | "stopped">("idle");
+  const [rtcPhase, setRtcPhase] = useState<Phase>("idle");
   const [pair, setPair] = useState<{ id?: string; role?: "caller" | "callee" }>({});
   const { isVip: vip, gender, countries } = useFilters();
   const { profile } = useProfile();
@@ -107,8 +109,8 @@ export default function ChatClient() {
       const k = "ditona_did";
       const v = localStorage.getItem(k);
       if (typeof v === "string" && v.length > 0) return v;
-      const gen = (crypto as any)?.randomUUID?.() || ("did-" + Math.random().toString(36).slice(2, 10));
-      localStorage.setItem(k, String(gen));
+      const gen = crypto?.randomUUID?.() || ("did-" + Math.random().toString(36).slice(2, 10));
+      localStorage.setItem(k, gen);
       return String(gen);
     } catch {
       return "did-" + Math.random().toString(36).slice(2, 10);
@@ -118,22 +120,21 @@ export default function ChatClient() {
   function identity(): string {
     const base = String((profile?.displayName || "anon")).trim() || "anon";
     const did = String(stableDid());
-    const tail = did.slice(0, 6);
+    const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
     return `${base}#${tail}`;
   }
 
-  // map UI genders → match API ("all" | "male" | "female")
-  function mapGenderFilter(g: any): "all" | "male" | "female" {
-    const v = String(g || "").toLowerCase();
-    if (v === "male") return "male";
-    if (v === "female") return "female";
-    // "everyone" | "couples" | "lgbt" → all
+  function normalizeGenderFilter(g: any): "all" | "male" | "female" {
+    // Your UI has Everyone/Female/Male/Couples/LGBT. We map Couples/LGBT -> "all".
+    if (g === "male" || g === "female") return g;
     return "all";
-    }
+  }
 
-  function normCountries(cs: any): string[] {
-    if (!Array.isArray(cs)) return [];
-    return cs.map((x) => String(x || "").toUpperCase()).filter((x) => /^[A-Z]{2}$/.test(x));
+  function sanitizeCountries(list: any): string[] {
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((x) => String(x || "").trim().toUpperCase())
+      .filter((x) => /^[A-Z]{2}$/.test(x));
   }
 
   async function enqueueReq(body: any) {
@@ -144,7 +145,10 @@ export default function ChatClient() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error("enqueue failed " + r.status);
+    if (!r.ok) {
+      const txt = await r.text().catch(() => "");
+      throw new Error("enqueue failed " + r.status + (txt ? ` :: ${txt}` : ""));
+    }
     const j = await r.json();
     return j.ticket as string;
   }
@@ -161,35 +165,71 @@ export default function ChatClient() {
   }
 
   async function tokenReq(room: string, id: string) {
-    const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
-      credentials: "include",
-      cache: "no-store",
-    });
+    const r = await fetch(
+      `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
+      { credentials: "include", cache: "no-store" }
+    );
     if (!r.ok) throw new Error("token failed " + r.status);
     const j = await r.json();
     return j.token as string;
   }
 
+  /** Full compat wrapper for legacy DC users (addEventListener/onmessage/send). */
   function exposeCompatDC(room: Room) {
-    const wrap = {
-      _closed: false,
-      readyState: "open",
-      close() { (this as any)._closed = true; },
-      send: (s: string | ArrayBuffer | Uint8Array) => {
-        try {
-          if (!(lkRoomRef.current) || (wrap as any)._closed) return;
-          const u8 =
-            typeof s === "string"
-              ? new TextEncoder().encode(s)
-              : s instanceof Uint8Array
-              ? s
-              : new Uint8Array(s as ArrayBuffer);
-          (room.localParticipant as any).publishData(u8, { reliable: true });
-        } catch {}
+    type DCListener = (ev: { data: string | Uint8Array; type: "message" }) => void;
+    const listeners = new Set<DCListener>();
+    const compat = {
+      readyState: "open" as "open" | "closed",
+      onmessage: null as null | DCListener,
+      addEventListener(type: string, cb: any) {
+        if (type !== "message" || typeof cb !== "function") return;
+        listeners.add(cb as DCListener);
       },
-    } as any;
+      removeEventListener(type: string, cb: any) {
+        if (type !== "message" || typeof cb !== "function") return;
+        listeners.delete(cb as DCListener);
+      },
+      close() {
+        (compat.readyState as any) = "closed";
+        listeners.clear();
+        (compat.onmessage as any) = null;
+      },
+      send(payload: string | ArrayBuffer | Uint8Array) {
+        try {
+          if (!room || (room as any).state !== "connected") return;
+          const u8 =
+            typeof payload === "string"
+              ? new TextEncoder().encode(payload)
+              : payload instanceof Uint8Array
+              ? payload
+              : new Uint8Array(payload as ArrayBuffer);
+          (room.localParticipant as any).publishData(u8, { reliable: true });
+        } catch {
+          /* no-op */
+        }
+      },
+    };
+    // bridge incoming -> compat
+    room.on(RoomEvent.DataReceived, (u8) => {
+      try {
+        const txt = new TextDecoder().decode(u8);
+        const data = /^\s*\{/.test(txt) ? txt : u8; // pass string if JSON-like, else bytes
+        const ev = { data, type: "message" as const };
+        compat.onmessage?.(ev);
+        listeners.forEach((fn) => {
+          try {
+            fn(ev);
+          } catch {
+            /* ignore */
+          }
+        });
+      } catch {
+        /* ignore */
+      }
+    });
+
+    (globalThis as any).__ditonaDataChannel = compat;
     (globalThis as any).__lkRoom = room;
-    (globalThis as any).__ditonaDataChannel = wrap;
   }
 
   async function leaveRoom() {
@@ -199,11 +239,10 @@ export default function ChatClient() {
       const dc: any = (globalThis as any).__ditonaDataChannel;
       if (dc && typeof dc.close === "function") dc.close();
       (globalThis as any).__lkRoom = null;
-      if (r) {
-        try { r.removeAllListeners?.(); } catch {}
-        try { r.disconnect(true); } catch {}
-      }
-    } catch {}
+      if (r) await r.disconnect();
+    } catch {
+      /* ignore */
+    }
   }
 
   function updatePeerBadges(meta: any) {
@@ -284,7 +323,11 @@ export default function ChatClient() {
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
 
         try {
-          await safeFetch("/api/age/allow", { method: "POST", credentials: "include", cache: "no-store" });
+          await safeFetch("/api/age/allow", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+          });
         } catch {}
 
         emit("ui:next");
@@ -328,7 +371,9 @@ export default function ChatClient() {
               } catch {}
             }
             for (const t of newStream.getTracks()) {
-              try { await room.localParticipant.publishTrack(t); } catch {}
+              try {
+                await room.localParticipant.publishTrack(t);
+              } catch {}
             }
           } catch {}
         }
@@ -337,23 +382,38 @@ export default function ChatClient() {
       }
     });
 
-    const off4 = on("ui:openSettings", () => { try { window.location.href = "/settings"; } catch {} });
+    const off4 = on("ui:openSettings", () => {
+      try {
+        window.location.href = "/settings";
+      } catch {}
+    });
 
     const off5 = on("ui:like", async () => {
       const room = lkRoomRef.current;
-      if (!room) { toast("No active connection for like"); return; }
-      const newLike = !like; setLike(newLike);
+      if (!room) {
+        toast("No active connection for like");
+        return;
+      }
+      const newLike = !like;
+      setLike(newLike);
       try {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
         await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-      } catch (e) { console.warn("publishData failed", e); }
+      } catch (e) {
+        console.warn("publishData failed", e);
+      }
       toast(`Like ${newLike ? "❤️" : "💔"}`);
     });
 
-    const off6 = on("ui:report", async () => { try { toast("Report sent. Moving on"); } catch {} });
+    const off6 = on("ui:report", async () => {
+      try {
+        toast("Report sent. Moving on");
+      } catch {}
+    });
 
     const off7 = on("ui:next", async () => {
-      const now = Date.now(); if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
+      const now = Date.now();
+      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
       lastNextTsRef.current = now;
       toast("⏭️ Next");
       await leaveRoom();
@@ -362,8 +422,13 @@ export default function ChatClient() {
 
     const off8 = on("ui:prev", () => {
       if (ffa) console.log("FFA_FORCE: enabled");
-      if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); }
-      else { toast("⏮️ Attempting to go back…"); tryPrevOrRandom(); }
+      if (!vip && !ffa) {
+        toast("🔒 Going back is VIP only");
+        emit("ui:upsell", "prev");
+      } else {
+        toast("⏮️ Attempting to go back…");
+        tryPrevOrRandom();
+      }
     });
 
     const offOpenMsg = on("ui:openMessaging" as any, () => setShowMessaging(true));
@@ -383,7 +448,11 @@ export default function ChatClient() {
     const offToggleMasks = on("ui:toggleMasks", () => toast("Enable/disable masks"));
 
     const offMirror = on("ui:toggleMirror", () => {
-      setIsMirrored((prev) => { const s = !prev; toast(s ? "Mirror on" : "Mirror off"); return s; });
+      setIsMirrored((prev) => {
+        const s = !prev;
+        toast(s ? "Mirror on" : "Mirror off");
+        return s;
+      });
     });
 
     const offUpsell = on("ui:upsell", (d: any) => {
@@ -391,8 +460,10 @@ export default function ChatClient() {
       router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
     });
 
-    // filters events — UX only
-    const reEnqueue = async () => { toast("Filters updated"); };
+    // filters events — UX only; server enqueue on next
+    const reEnqueue = async () => {
+      toast("Filters updated");
+    };
     const offCountry = on("filters:country", reEnqueue);
     const offGender = on("filters:gender", reEnqueue);
 
@@ -414,7 +485,9 @@ export default function ChatClient() {
             remoteAudio.play?.().catch(() => {});
           }
         } catch {}
-        try { remoteVideo.play?.().catch(() => {}); } catch {}
+        try {
+          remoteVideo.play?.().catch(() => {});
+        } catch {}
       }
     });
 
@@ -429,7 +502,7 @@ export default function ChatClient() {
       });
     }
 
-    // init media, then Connect via matchmaking
+    // init media, then LiveKit connect through matchmaking
     const initMediaWithPermissionChecks = async () => {
       try {
         if (typeof document !== "undefined" && document.visibilityState !== "visible") {
@@ -441,8 +514,10 @@ export default function ChatClient() {
         setCameraPermissionHint("");
       } catch (error: any) {
         console.warn("Media initialization failed:", error);
-        if (error?.name === "NotAllowedError") setCameraPermissionHint("Allow camera and microphone from browser settings");
-        else if (error?.name === "NotReadableError" || error?.name === "AbortError") setCameraPermissionHint("Close the other tab or allow camera");
+        if (error?.name === "NotAllowedError")
+          setCameraPermissionHint("Allow camera and microphone from browser settings");
+        else if (error?.name === "NotReadableError" || error?.name === "AbortError")
+          setCameraPermissionHint("Close the other tab or allow camera");
         else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
         else setCameraPermissionHint("Camera access error — check permissions");
         return;
@@ -490,40 +565,99 @@ export default function ChatClient() {
     initMediaWithPermissionChecks().catch(() => {});
 
     return () => {
-      off1(); off2(); off3(); off4(); off5(); off6(); off7(); off8();
-      offOpenMsg(); offCloseMsg(); offRemoteAudio(); offTogglePlay(); offToggleMasks(); offMirror(); offUpsell();
-      offCountry(); offGender(); offRtcPhase(); offRtcPair(); offRtcTrack();
+      off1();
+      off2();
+      off3();
+      off4();
+      off5();
+      off6();
+      off7();
+      off8();
+      offOpenMsg();
+      offCloseMsg();
+      offRemoteAudio();
+      offTogglePlay();
+      offToggleMasks();
+      offMirror();
+      offUpsell();
+      offCountry();
+      offGender();
+      offRtcPhase();
+      offRtcPair();
+      offRtcTrack();
       if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
 
-      // LiveKit cleanup
-      leaveRoom().catch(() => {});
+      try {
+        const room = lkRoomRef.current;
+        lkRoomRef.current = null;
+        const dc: any = (globalThis as any).__ditonaDataChannel;
+        if (dc && typeof dc.close === "function") dc.close();
+        (globalThis as any).__lkRoom = null;
+        if (room) {
+          try {
+            room.disconnect();
+          } catch {}
+        }
+      } catch {}
+
       unsubMob();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pair.id, vip, ffa, router]);
 
-  // stop-like hook on unmount
-  useEffect(() => () => { leaveRoom().catch(() => {}); }, []);
+  // stop-like hook on unmount for legacy rtcFlow parity
+  useEffect(
+    () => () => {
+      try {
+        const room = lkRoomRef.current;
+        lkRoomRef.current = null;
+        const dc: any = (globalThis as any).__ditonaDataChannel;
+        if (dc && typeof dc.close === "function") dc.close();
+        (globalThis as any).__lkRoom = null;
+        if (room) {
+          try {
+            room.disconnect();
+          } catch {}
+        }
+      } catch {}
+    },
+    []
+  );
 
   // swipe next/prev
   useEffect(() => {
     if (!isBrowser) return;
-    let x0 = 0, y0 = 0;
-    const down = (e: PointerEvent) => { x0 = e.clientX; y0 = e.clientY; };
+    let x0 = 0,
+      y0 = 0;
+    const down = (e: PointerEvent) => {
+      x0 = e.clientX;
+      y0 = e.clientY;
+    };
     const up = (e: PointerEvent) => {
-      const dx = e.clientX - x0, dy = e.clientY - y0;
+      const dx = e.clientX - x0,
+        dy = e.clientY - y0;
       if (Math.abs(dx) > 60 && Math.abs(dy) < 60 && Math.abs(dx) > Math.abs(dy)) {
-        if (dx < 0) { toast("⏭️ Swiped to next"); emit("ui:next"); }
-        else {
+        if (dx < 0) {
+          toast("⏭️ Swiped to next");
+          emit("ui:next");
+        } else {
           if (ffa) console.log("FFA_FORCE: enabled");
-          if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); }
-          else { toast("⏮️ Attempting to go back…"); emit("ui:prev"); }
+          if (!vip && !ffa) {
+            toast("🔒 Going back is VIP only");
+            emit("ui:upsell", "prev");
+          } else {
+            toast("⏮️ Attempting to go back…");
+            emit("ui:prev");
+          }
         }
       }
     };
     window.addEventListener("pointerdown", down);
     window.addEventListener("pointerup", up);
-    return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("pointerup", up); };
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointerup", up);
+    };
   }, [vip, ffa]);
 
   /* =================== Matchmaking + LiveKit =================== */
@@ -536,20 +670,26 @@ export default function ChatClient() {
     try {
       // enqueue with current filters
       let selfCountry: string | null = null;
-      try { const g = JSON.parse(localStorage.getItem("ditona_geo") || "null"); if (g?.country) selfCountry = String(g.country).toUpperCase(); } catch {}
+      try {
+        const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+        if (g?.country) selfCountry = String(g.country).toUpperCase();
+      } catch {}
+
       const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
         vip: !!vip,
         selfGender: (profile?.gender === "male" || profile?.gender === "female") ? profile.gender : "u",
         selfCountry,
-        filterGenders: mapGenderFilter(gender),
-        filterCountries: normCountries(countries),
+        filterGenders: normalizeGenderFilter(gender),
+        filterCountries: sanitizeCountries(countries),
       });
 
-      // poll next up to ~8s (server widens after 3s)
+      // poll next up to ~8s with widen-after-3s server-side
       let roomName: string | null = null;
-      for (let i = 0; i < 3 && !roomName; i++) roomName = await nextReq(ticket);
+      for (let i = 0; i < 3 && !roomName; i++) {
+        roomName = await nextReq(ticket);
+      }
       if (!roomName) {
         setRtcPhase("stopped");
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
@@ -566,52 +706,52 @@ export default function ChatClient() {
         window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId: roomName, role: "caller" } }));
       });
 
-      room.on(RoomEvent.TrackSubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
-        try {
-          if (pub.kind === Track.Kind.Video) {
-            const vt = pub.track;
-            if (vt && remoteRef.current) {
-              const ms = new MediaStream([vt.mediaStreamTrack]);
-              remoteRef.current.srcObject = ms as any;
-              remoteRef.current.play?.().catch(() => {});
-              window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: ms } }));
+      room.on(
+        RoomEvent.TrackSubscribed,
+        (_t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
+          try {
+            if (pub.kind === Track.Kind.Video) {
+              const vt = pub.track;
+              if (vt && remoteRef.current) {
+                const ms = new MediaStream([vt.mediaStreamTrack]);
+                remoteRef.current.srcObject = ms as any;
+                remoteRef.current.play?.().catch(() => {});
+                window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream: ms } }));
+              }
+            } else if (pub.kind === Track.Kind.Audio) {
+              const at = pub.track;
+              if (at && remoteAudioRef.current) {
+                const ms = new MediaStream([at.mediaStreamTrack]);
+                remoteAudioRef.current.srcObject = ms as any;
+                remoteAudioRef.current.muted = false;
+                remoteAudioRef.current.play?.().catch(() => {});
+              }
             }
-          } else if (pub.kind === Track.Kind.Audio) {
-            const at = pub.track;
-            if (at && remoteAudioRef.current) {
-              const ms = new MediaStream([at.mediaStreamTrack]);
-              remoteAudioRef.current.srcObject = ms as any;
-              remoteAudioRef.current.muted = false;
-              remoteAudioRef.current.play?.().catch(() => {});
-            }
-          }
-          setRtcPhase("connected");
-          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
-        } catch {}
-      });
+            setRtcPhase("connected");
+            window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "connected" } }));
+          } catch {}
+        }
+      );
 
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
-          const txt = new TextDecoder().decode(payload);
-          if (!txt || !/^\s*\{/.test(txt)) return;
-          const j = JSON.parse(txt);
-          if (j?.t === "chat" && j.text) {
-            window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } }));
-          }
-          if (j?.t === "peer-meta" && j.payload) {
-            window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
-          }
-          if (j?.t === "like" || j?.type === "like:toggled") {
-            window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { pairId: roomName } }));
+          const msg = new TextDecoder().decode(payload);
+          if (!msg) return;
+          if (/^\s*\{/.test(msg)) {
+            const j = JSON.parse(msg);
+            if (j?.t === "chat" && j.text)
+              window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } }));
+            if (j?.t === "peer-meta" && j.payload)
+              window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
+            if (j?.t === "like" || j?.type === "like:toggled")
+              window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { pairId: roomName } }));
           }
         } catch {}
       });
 
       room.on(RoomEvent.ParticipantDisconnected, () => {
-        if (room.numParticipants === 0) {
-          setRtcPhase("searching");
-          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
-        }
+        setRtcPhase("searching");
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
       });
 
       room.on(RoomEvent.Disconnected, () => {
@@ -623,13 +763,16 @@ export default function ChatClient() {
       const token = await tokenReq(roomName, id);
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
+
       exposeCompatDC(room);
 
-      // publish local tracks after connect
+      // publish local tracks
       const src = (effectsStream ?? getLocalStream()) || null;
       if (src) {
         for (const t of src.getTracks()) {
-          try { await room.localParticipant.publishTrack(t); } catch {}
+          try {
+            await room.localParticipant.publishTrack(t);
+          } catch {}
         }
       }
     } finally {
