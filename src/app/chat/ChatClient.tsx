@@ -1,5 +1,4 @@
-// "use client";
-
+"use client";
 /* ======================= boot / guards ======================= */
 import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
