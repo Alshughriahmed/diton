@@ -678,12 +678,17 @@ export default function ChatClient() {
         } catch {}
       });
 
-      room.on(RoomEvent.ParticipantDisconnected, () => {
-        if (room.numParticipants === 0) {
-          setRtcPhase("searching");
-          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
-        }
-      });
+      room.on(RoomEvent.ParticipantDisconnected, async () => {
+  if (room.numParticipants === 0) {
+    setRtcPhase("searching");
+    window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
+
+    // افصل جلسة الغرفة الحالية ثم أعد الدخول للطابور بهدوء
+    await leaveRoom();
+    await new Promise((r) => setTimeout(r, NEXT_COOLDOWN_MS));
+    await joinViaRedisMatch();
+  }
+});
 
       room.on(RoomEvent.Disconnected, () => {
         setRtcPhase("stopped");
