@@ -9,8 +9,6 @@
 declare global {
   interface Window {
     __msgSendMounted?: 1;
-    __lkRoom?: any;                 // keep as any to match global.d.ts
-    __ditonaDataChannel?: any;      // shim or real DC; dynamic shape
   }
 }
 
@@ -34,7 +32,7 @@ async function sendChat(text: string): Promise<boolean> {
   const payloadTxt = JSON.stringify(payloadObj);
   const payloadBin = new TextEncoder().encode(payloadTxt);
 
-  const room = window.__lkRoom;
+  const room = (window as any).__lkRoom;
   if (room && room.state === "connected" && room.localParticipant?.publishData) {
     try {
       await room.localParticipant.publishData(payloadBin, { reliable: true, topic: "chat" });
@@ -43,7 +41,7 @@ async function sendChat(text: string): Promise<boolean> {
       // fall through
     }
   }
-  const dc = window.__ditonaDataChannel;
+  const dc = (window as any).__ditonaDataChannel;
   if (dc?.send) {
     try {
       dc.send(payloadTxt);
@@ -76,10 +74,10 @@ if (typeof window !== "undefined" && !window.__msgSendMounted) {
   };
 
   try {
-    const dc = window.__ditonaDataChannel;
+    const dc = (window as any).__ditonaDataChannel;
     dc?.addEventListener?.("message", onDCMessage);
     dc?.setSendGuard?.(() => {
-      const room = window.__lkRoom;
+      const room = (window as any).__lkRoom;
       return !!room && room.state === "connected";
     });
   } catch {}
@@ -102,7 +100,7 @@ if (typeof window !== "undefined" && !window.__msgSendMounted) {
     "pagehide",
     () => {
       try {
-        const dc = window.__ditonaDataChannel;
+        const dc = (window as any).__ditonaDataChannel;
         dc?.removeEventListener?.("message", onDCMessage);
         window.removeEventListener("ditona:chat:send", onSend as any);
       } catch {}
