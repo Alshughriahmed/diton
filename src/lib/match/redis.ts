@@ -1,16 +1,18 @@
 // src/lib/match/redis.ts
 import crypto from "node:crypto";
 
-/* ======================= Types ======================= */
-export type Gender = "all" | "male" | "female";
+// أنواع موسعة
+export type GenderFilter = "all" | "male" | "female" | "couples" | "lgbt";
+export type SelfGender = "male" | "female" | "couples" | "lgbt" | "u";
+
 export type Entry = {
   ticket: string;
   identity: string;
   deviceId: string;
   vip: boolean;
-  selfGender: "male" | "female" | "u";
+  selfGender: SelfGender;
   selfCountry: string | null;
-  filterGenders: Gender;
+  filterGenders: GenderFilter;
   filterCountries: string[];
   ts: number;
 };
@@ -127,11 +129,14 @@ function accepts(a: Entry, b: Entry): boolean {
   const genderOk =
     a.filterGenders === "all" ||
     (b.selfGender !== "u" && a.filterGenders === b.selfGender);
+
   const countryOk =
     a.filterCountries.length === 0 ||
     (!!b.selfCountry && a.filterCountries.includes(b.selfCountry.toUpperCase()));
+
   return genderOk && countryOk;
 }
+
 
 /**
  * يحاول مطابقة تذكرة. إذا widen=true يتساهل بالقبول FIFO.
