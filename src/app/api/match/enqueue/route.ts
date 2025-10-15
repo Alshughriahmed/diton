@@ -52,9 +52,10 @@ export async function POST(req: NextRequest) {
     deviceId,
     vip: !!j.vip,
     selfGender: j.selfGender === "male" || j.selfGender === "female" ? j.selfGender : "u",
-    selfCountry: typeof j.selfCountry === "string" && j.selfCountry.length === 2
-      ? j.selfCountry.toUpperCase()
-      : null,
+    selfCountry:
+      typeof j.selfCountry === "string" && j.selfCountry.length === 2
+        ? j.selfCountry.toUpperCase()
+        : null,
     filterGenders:
       j.filterGenders === "male" || j.filterGenders === "female" ? j.filterGenders : "all",
     filterCountries: Array.isArray(j.filterCountries)
@@ -62,6 +63,7 @@ export async function POST(req: NextRequest) {
       : [],
   };
 
+  // enqueue() تُرجع string مباشرة
   const ticket = await enqueue(body, j.ticket);
   return NextResponse.json({ ticket }, { headers: hNoStore(req) });
 }
