@@ -779,36 +779,34 @@ await room.connect(ws, token);
                     <div className="mb-2 text-yellow-400">⚠️</div>
                     <div className="mb-4">{cameraPermissionHint}</div>
                     <button
-                      onClick={() => {
-                        setCameraPermissionHint("");
-                        initLocalMedia()
-                          .then(async () => {
-                            const s = getLocalStream();
-                            if (localRef.current && s) {
-                              localRef.current.srcObject = s;
-                              localRef.current.muted = true;
-                              localRef.current.play().catch(() => {});
-                              setReady(true);
-                            }
-                          })
-                          .catch((error) => {
-                            console.warn("Retry failed:", error);
-                            if ((error as any)?.name === "NotAllowedError") {
-                              setCameraPermissionHint("Allow camera and microphone from browser settings");
-                            } else if (
-                              (error as any)?.name === "NotReadableError" ||
-                              (error as any)?.name === "AbortError"
-                            ) {
-                              setCameraPermissionHint("Close the other tab or allow camera");
-                            } else {
-                              setCameraPermissionHint("Camera access error — check permissions");
-                            }
-                          });
-                      }}
-                      className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
-                    >
-                      Retry
-                    </button>
+                   onClick={async () => {
+  try {
+    setCameraPermissionHint("");
+    await initLocalMedia();                     // تجهيز الوسائط فقط
+    const s = getLocalStream();
+    if (localRef.current && s) {
+      localRef.current.srcObject = s as MediaStream;
+      localRef.current.muted = true;
+      await localRef.current.play().catch(() => {});
+      setReady(true);                           // لا مطابقة هنا
+    }
+  } catch (error: any) {
+    console.warn("Retry failed:", error);
+    if (error?.name === "NotAllowedError") {
+      setCameraPermissionHint("Allow camera and microphone from browser settings");
+    } else if (error?.name === "NotReadableError" || error?.name === "AbortError") {
+      setCameraPermissionHint("Close the other tab or allow camera");
+    } else if (error?.name === "NotFoundError") {
+      setCameraPermissionHint("No camera or microphone found");
+    } else {
+      setCameraPermissionHint("Camera access error — check permissions");
+    }
+  }
+}}
+className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
+>
+  Retry
+</button> 
                   </>
                 ) : (
                   <div>Requesting camera/mic…</div>
