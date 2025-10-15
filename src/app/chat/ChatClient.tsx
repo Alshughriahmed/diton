@@ -91,7 +91,7 @@ export default function ChatClient() {
   // LiveKit
   const lkRoomRef = useRef<Room | null>(null);
   const joiningRef = useRef(false);
-  const leavingRef = useRef(false); // NEW: حارس أثناء الفصل
+  const leavingRef = useRef(false); // guard while leaving
 
   /* ---------- helpers ---------- */
   function stableDid(): string {
@@ -172,7 +172,7 @@ export default function ChatClient() {
   }
 
   async function leaveRoom() {
-    leavingRef.current = true; // NEW: نعلن بدء الفصل
+    leavingRef.current = true;
     const r = lkRoomRef.current;
     lkRoomRef.current = null;
 
@@ -186,7 +186,6 @@ export default function ChatClient() {
 
       if (r) {
         try {
-          // امنع تسريب/إطلاق أحداث من الغرفة السابقة
           (r as any).removeAllListeners?.();
         } catch {}
 
@@ -206,7 +205,6 @@ export default function ChatClient() {
           }
         } catch {}
 
-        // wait for disconnect completion or fallback
         await new Promise<void>((resolve) => {
           let done = false;
           const finish = () => {
@@ -232,7 +230,7 @@ export default function ChatClient() {
 
       (globalThis as any).__lkRoom = null;
     } catch {} finally {
-      leavingRef.current = false; // NEW: انتهى الفصل
+      leavingRef.current = false;
     }
   }
 
@@ -381,7 +379,6 @@ export default function ChatClient() {
 
     offs.push(
       on("ui:next", async () => {
-        // حارس أثناء connecting
         const st = lkRoomRef.current?.state;
         if (st === "connecting") {
           toast("Wait… connecting");
@@ -395,7 +392,7 @@ export default function ChatClient() {
         toast("⏭️ Next");
         await leaveRoom();
 
-        // NEW: إعادة إرفاق معاينة الكاميرا المحلية فورًا
+        // reattach local preview immediately
         const s = getLocalStream();
         if (localRef.current && s) {
           localRef.current.srcObject = s;
@@ -672,6 +669,29 @@ export default function ChatClient() {
         }
       );
 
+      // NEW: cleanup remote media when unsubscribed
+      room.on(RoomEvent.TrackUnsubscribed, (_t: RemoteTrack, pub: RemoteTrackPublication) => {
+        try {
+          if (pub.kind === Track.Kind.Video && remoteRef.current) {
+            remoteRef.current.srcObject = null;
+          }
+          if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = null;
+          }
+        } catch {}
+      });
+
+      // NEW: stabilize UI on connection state changes
+      room.on(RoomEvent.ConnectionStateChanged, (state) => {
+        if (state === "reconnecting") {
+          setRtcPhase("searching");
+        } else if (state === "connected") {
+          setRtcPhase("connected");
+          try { remoteRef.current?.play?.(); } catch {}
+          try { remoteAudioRef.current?.play?.(); } catch {}
+        }
+      });
+
       room.on(RoomEvent.DataReceived, (payload) => {
         try {
           const txt = new TextDecoder().decode(payload);
@@ -692,14 +712,12 @@ export default function ChatClient() {
       });
 
       room.on(RoomEvent.ParticipantDisconnected, async () => {
-        // NEW: لا تعاود أثناء الفصل/الانضمام
         if (leavingRef.current || joiningRef.current) return;
         if (room.numParticipants === 0) {
           setRtcPhase("searching");
           window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
           await leaveRoom();
 
-          // NEW: إعادة إرفاق المعاينة فورًا
           const s = getLocalStream();
           if (localRef.current && s) {
             localRef.current.srcObject = s;
@@ -732,7 +750,7 @@ export default function ChatClient() {
       exposeCompatDC(room);
       try { (globalThis as any).__ditonaDataChannel?.setConnected?.(true); } catch {}
 
-      // اطلب ميتاداتا الطرف الآخر
+      // ask peer meta
       try {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
         await room.localParticipant.publishData(payload, { reliable: true, topic: "meta" });
@@ -755,7 +773,7 @@ export default function ChatClient() {
   /* ========= UI ========= */
   if (!hydrated) {
     return (
-      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to slate-950 text-slate-100">
+      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
         <FilterBar />
         <div className="h-full grid grid-rows-2 gap-2 p-2">
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
