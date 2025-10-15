@@ -54,6 +54,7 @@ import LikeHud from "./LikeHud";
 /* ========= Types / consts ========= */
 type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 800;
+const DISCONNECT_WAIT_MS = 1800;
 const isBrowser = typeof window !== "undefined";
 
 /* ========= Component ========= */
@@ -178,9 +179,15 @@ export default function ChatClient() {
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
 
     try {
+      (globalThis as any).__ditonaDataChannel?.setConnected?.(false);
       (globalThis as any).__ditonaDataChannel?.detach?.();
 
       if (r) {
+        try {
+          // امنع تسريب/إطلاق أحداث من الغرفة السابقة
+          (r as any).removeAllListeners?.();
+        } catch {}
+
         try {
           const lp: any = r.localParticipant;
           const pubs =
@@ -197,7 +204,7 @@ export default function ChatClient() {
           }
         } catch {}
 
-        // wait for disconnect completion or small timeout
+        // wait for disconnect completion or fallback
         await new Promise<void>((resolve) => {
           let done = false;
           const finish = () => {
@@ -217,7 +224,7 @@ export default function ChatClient() {
           } catch {
             finish();
           }
-          setTimeout(finish, 1200);
+          setTimeout(finish, DISCONNECT_WAIT_MS);
         });
       }
 
@@ -370,9 +377,17 @@ export default function ChatClient() {
 
     offs.push(
       on("ui:next", async () => {
+        // حارس أثناء connecting
+        const st = lkRoomRef.current?.state;
+        if (st === "connecting") {
+          toast("Wait… connecting");
+          return;
+        }
+
         const now = Date.now();
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
+
         toast("⏭️ Next");
         await leaveRoom();
         await new Promise((r) => setTimeout(r, NEXT_COOLDOWN_MS));
@@ -409,11 +424,7 @@ export default function ChatClient() {
     );
 
     offs.push(on("ui:togglePlay", () => toast("Toggle matching state")));
-    offs.push(
-      on("ui:toggleMasks", () => {
-        toast("Enable/disable masks");
-      })
-    );
+    offs.push(on("ui:toggleMasks", () => { toast("Enable/disable masks"); }));
 
     offs.push(
       on("ui:toggleMirror", () => {
@@ -677,6 +688,7 @@ export default function ChatClient() {
       room.on(RoomEvent.Disconnected, () => {
         setRtcPhase("stopped");
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
+        try { (globalThis as any).__ditonaDataChannel?.setConnected?.(false); } catch {}
       });
 
       const roomNameStr =
@@ -689,8 +701,9 @@ export default function ChatClient() {
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
 
-      // attach DC shim
+      // attach DC shim and mark connected
       exposeCompatDC(room);
+      try { (globalThis as any).__ditonaDataChannel?.setConnected?.(true); } catch {}
 
       // publish local tracks
       const src = effectsStream ?? getLocalStream();
@@ -709,7 +722,7 @@ export default function ChatClient() {
   /* ========= UI ========= */
   if (!hydrated) {
     return (
-      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
+      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to slate-950 text-slate-100">
         <FilterBar />
         <div className="h-full grid grid-rows-2 gap-2 p-2">
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
