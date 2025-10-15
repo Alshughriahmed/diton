@@ -63,6 +63,9 @@ export default function ChatClient() {
   const router = useRouter();
   const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
+ 
+  useKeyboardShortcuts();
+  useGestures();
 
   // refs / state
   const localRef = useRef<HTMLVideoElement>(null);
@@ -254,8 +257,6 @@ export default function ChatClient() {
     const offs: Array<() => void> = [];
 
     // keyboard / gestures
-    useKeyboardShortcuts();
-    useGestures();
 
     // media & controls
     offs.push(on("ui:toggleMic", () => toggleMic()));
