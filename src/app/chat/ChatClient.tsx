@@ -249,10 +249,17 @@ export default function ChatClient() {
     if (room) {
       try {
         // unpublish without stopping local tracks
-        const pubs = Array.from(room.localParticipant.tracks.values());
-        for (const p of pubs) {
-          try { await room.localParticipant.unpublishTrack(p.track!, { stop: false }); } catch {}
-        }
+        const lp: any = room.localParticipant;
+const pubs =
+  typeof lp.getTrackPublications === "function"
+    ? lp.getTrackPublications()
+    : Array.from(lp.trackPublications?.values?.() ?? []);
+for (const pub of pubs) {
+  try {
+    const tr: any = (pub as any).track;
+    if (tr) await lp.unpublishTrack(tr, { stop: false });
+  } catch {}
+}
       } catch {}
 
       await new Promise<void>((resolve) => {
@@ -490,12 +497,19 @@ export default function ChatClient() {
         }
         const room = roomRef.current;
         if (room && room.state === "connected") {
-          const pubs = Array.from(room.localParticipant.tracks.values());
-          for (const p of pubs) {
-            if (p.kind === Track.Kind.Video || (p as any).source === "camera") {
-              try { await room.localParticipant.unpublishTrack(p.track!, { stop: false }); } catch {}
-            }
-          }
+          const lp: any = room.localParticipant;
+const pubs =
+  typeof lp.getTrackPublications === "function"
+    ? lp.getTrackPublications()
+    : Array.from(lp.trackPublications?.values?.() ?? []);
+for (const pub of pubs) {
+  const k = (pub as any).kind;
+  const src = (pub as any).source;
+  const tr: any = (pub as any).track;
+  if ((k === Track.Kind.Video || src === "camera") && tr) {
+    try { await lp.unpublishTrack(tr, { stop: false }); } catch {}
+  }
+}
           const nv = newStream.getVideoTracks()[0];
           if (nv) { try { await room.localParticipant.publishTrack(nv); } catch {} }
         }
