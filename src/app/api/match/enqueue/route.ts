@@ -1,20 +1,33 @@
 // src/app/api/match/enqueue/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { enqueue } from "@/lib/match/redis";
+import { enqueue, haveRedisEnv } from "@/lib/match/redis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const preferredRegion = ["fra1", "iad1"];
 
-function noStore(h: Headers) {
-  h.set("cache-control", "no-store");
-  return h;
+function noStore(h?: Headers) {
+  const hh = h ?? new Headers();
+  hh.set("cache-control", "no-store");
+  hh.set("content-type", "application/json");
+  return hh;
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: noStore(new Headers()) });
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
+    if (!haveRedisEnv()) {
+      return new NextResponse(JSON.stringify({ error: "redis env missing" }), {
+        status: 503,
+        headers: noStore(),
+      });
+    }
+
+    const body = await req.json().catch(() => ({} as any));
     const {
       identity,
       deviceId,
@@ -26,38 +39,31 @@ export async function POST(req: NextRequest) {
     } = body || {};
 
     if (!identity || !deviceId) {
-      return new NextResponse(
-        JSON.stringify({ error: "identity and deviceId are required" }),
-        { status: 400, headers: noStore(new Headers({ "content-type": "application/json" })) }
-      );
+      return new NextResponse(JSON.stringify({ error: "identity and deviceId are required" }), {
+        status: 400,
+        headers: noStore(),
+      });
     }
 
     const { ticket } = await enqueue({
-      identity,
-      deviceId,
-      selfGender,
-      selfCountry,
-      filterGenders,
-      filterCountries,
-      vip,
+      identity: String(identity),
+      deviceId: String(deviceId),
+      selfGender: selfGender ? String(selfGender) : null,
+      selfCountry: selfCountry ? String(selfCountry) : null,
+      filterGenders: Array.isArray(filterGenders) ? filterGenders.map(String) : null,
+      filterCountries: Array.isArray(filterCountries) ? filterCountries.map(String) : null,
+      vip: !!vip,
     });
 
     return new NextResponse(JSON.stringify({ ok: true, ticket }), {
       status: 200,
-      headers: noStore(new Headers({ "content-type": "application/json" })),
+      headers: noStore(),
     });
   } catch (e: any) {
     const msg = String(e?.message || e || "enqueue failed");
     return new NextResponse(JSON.stringify({ error: msg }), {
       status: 500,
-      headers: noStore(new Headers({ "content-type": "application/json" })),
+      headers: noStore(),
     });
   }
-}
-
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: noStore(new Headers()),
-  });
 }
