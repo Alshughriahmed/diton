@@ -185,7 +185,7 @@ export default function ChatClient() {
         for (const pub of pubs) {
             try {
               const tr: any = (pub as any).track;
-              if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr);
+              if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr, { stop: false });
             } catch {}
           }
         } catch {}
