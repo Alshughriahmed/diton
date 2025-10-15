@@ -480,74 +480,119 @@ export default function ChatClient() {
     };
     boot().catch(()=>{});
 
-    // UI event bus
-    const off1 = on("ui:toggleMic", () => toggleMic());
-    const off2 = on("ui:toggleCam", () => toggleCam());
-    const off3 = on("ui:switchCamera", async () => {
-      try {
-        const newStream = await switchCamera();
-        if (localRef.current && newStream) {
-          localRef.current.srcObject = newStream;
-          localRef.current.play().catch(() => {});
+   // UI event bus
+const off1 = on("ui:toggleMic", () => toggleMic());
+const off2 = on("ui:toggleCam", () => toggleCam());
+const off3 = on("ui:switchCamera", async () => {
+  try {
+    const newStream = await switchCamera();
+    if (localRef.current && newStream) {
+      localRef.current.srcObject = newStream;
+      localRef.current.play().catch(() => {});
+    }
+    const room = roomRef.current;
+    if (room && room.state === "connected") {
+      // Unpublish previous video tracks only, keep audio
+      const pubs =
+        typeof room.localParticipant.getTrackPublications === "function"
+          ? room.localParticipant.getTrackPublications()
+          : Array.from(
+              (room.localParticipant as any).trackPublications?.values?.() ?? []
+            );
+
+      for (const pub of pubs as any[]) {
+        const kind = pub?.kind ?? pub?.track?.kind;
+        const tr = pub?.track;
+        if (kind === Track.Kind.Video || pub?.source === "camera") {
+          try {
+            await room.localParticipant.unpublishTrack(tr, { stop: false });
+          } catch {}
         }
-        const room = roomRef.current;
-        if (room && room.state === "connected") {
-          // Unpublish previous video tracks only, keep audio
-          const pubs = Array.from(room.localParticipant.tracks.values());
-          for (const p of pubs) {
-            if (p.kind === Track.Kind.Video || p.source === "camera") {
-              try { await room.localParticipant.unpublishTrack(p.track!, { stop: false }); } catch {}
-            }
-          }
-          const nv = newStream.getVideoTracks()[0];
-          if (nv) { try { await room.localParticipant.publishTrack(nv); } catch {} }
-        }
-      } catch (e) { console.warn("Camera switch failed:", e); }
-    });
-    const off4 = on("ui:openSettings", () => { try { window.location.href = "/settings"; } catch {} });
-
-    const off5 = on("ui:like", async () => {
-      const room = roomRef.current;
-      if (!room || room.state !== "connected") { toast("No active connection for like"); return; }
-      const newLike = !like; setLike(newLike);
-      try {
-        const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-        await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-      } catch (e) { console.warn("publishData failed", e); }
-      toast(`Like ${newLike ? "❤️" : "💔"}`);
-    });
-    const off6 = on("ui:report", async () => { toast("Report sent. Moving on"); });
-
-    const off7 = on("ui:next", async () => {
-      const now = Date.now();
-      if (joiningRef.current || leavingRef.current || roomRef.current?.state === "connecting") return;
-      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
-      lastNextTsRef.current = now;
-      toast("⏭️ Next");
-      const sid = newSid();         // invalidate any in-flight work
-      await leaveRoom();            // cleanly detach old room
-      await new Promise(r => setTimeout(r, 120)); // short cool-down
-      await joinViaRedisMatch(sid);
-    });
-
-    const off8 = on("ui:prev", () => {
-      if (ffa) console.log("FFA_FORCE: enabled");
-      if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); }
-      else { toast("⏮️ Attempting to go back…"); tryPrevOrRandom(); }
-    });
-
-    const offOpenMsg = on("ui:openMessaging" as any, () => setShowMessaging(true));
-    const offCloseMsg = on("ui:closeMessaging" as any, () => setShowMessaging(false));
-
-    const offRemoteAudio = on("ui:toggleRemoteAudio" as any, () => {
-      const a = remoteAudioRef.current;
-      const v = remoteRef.current;
-      const target: any = a ?? v;
-      if (target) {
-        target.muted = !target.muted;
-        toast(target.muted ? "Remote muted" : "Remote unmuted");
       }
+
+      // Publish the new camera track
+      const nv = newStream.getVideoTracks()[0];
+      if (nv) {
+        try {
+          await room.localParticipant.publishTrack(nv);
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn("Camera switch failed:", e);
+  }
+});
+const off4 = on("ui:openSettings", () => {
+  try {
+    window.location.href = "/settings";
+  } catch {}
+});
+
+const off5 = on("ui:like", async () => {
+  const room = roomRef.current;
+  if (!room || room.state !== "connected") {
+    toast("No active connection for like");
+    return;
+  }
+  const newLike = !like;
+  setLike(newLike);
+  try {
+    const payload = new TextEncoder().encode(
+      JSON.stringify({ t: "like", liked: newLike })
+    );
+    await (room.localParticipant as any).publishData(payload, {
+      reliable: true,
+      topic: "like",
     });
+  } catch (e) {
+    console.warn("publishData failed", e);
+  }
+  toast(`Like ${newLike ? "❤️" : "💔"}`);
+});
+const off6 = on("ui:report", async () => {
+  toast("Report sent. Moving on");
+});
+
+const off7 = on("ui:next", async () => {
+  const now = Date.now();
+  if (
+    joiningRef.current ||
+    leavingRef.current ||
+    roomRef.current?.state === "connecting"
+  )
+    return;
+  if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
+  lastNextTsRef.current = now;
+  toast("⏭️ Next");
+  const sid = newSid(); // invalidate any in-flight work
+  await leaveRoom(); // cleanly detach old room
+  await new Promise((r) => setTimeout(r, 120)); // short cool-down
+  await joinViaRedisMatch(sid);
+});
+
+const off8 = on("ui:prev", () => {
+  if (ffa) console.log("FFA_FORCE: enabled");
+  if (!vip && !ffa) {
+    toast("🔒 Going back is VIP only");
+    emit("ui:upsell", "prev");
+  } else {
+    toast("⏮️ Attempting to go back…");
+    tryPrevOrRandom();
+  }
+});
+
+const offOpenMsg = on("ui:openMessaging" as any, () => setShowMessaging(true));
+const offCloseMsg = on("ui:closeMessaging" as any, () => setShowMessaging(false));
+
+const offRemoteAudio = on("ui:toggleRemoteAudio" as any, () => {
+  const a = remoteAudioRef.current;
+  const v = remoteRef.current;
+  const target: any = a ?? v;
+  if (target) {
+    target.muted = !target.muted;
+    toast(target.muted ? "Remote muted" : "Remote unmuted");
+  }
+});
 
     const offTogglePlay = on("ui:togglePlay", () => toast("Toggle matching state"));
     const offToggleMasks = on("ui:toggleMasks", () => toast("Enable/disable masks"));
