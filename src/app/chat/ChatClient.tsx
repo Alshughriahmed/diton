@@ -1,9 +1,11 @@
+// src/app/chat/ChatClient.tsx
 "use client";
 
 /* ========= الشِّيم يجب أن تُحمَّل أولًا ========= */
 import "@/app/chat/dcShim.client";
 
 /* ======================= boot / guards ======================= */
+import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 import "./freeForAllBridge";
@@ -147,6 +149,7 @@ export default function ChatClient() {
     if (!r.ok) throw new Error("next failed " + r.status);
     const j = await r.json();
 
+    // تطبيع قيمة الغرفة
     const raw = j?.room;
     let room: string | null = null;
     if (typeof raw === "string") room = raw;
@@ -187,10 +190,28 @@ export default function ChatClient() {
     const r = lkRoomRef.current;
     lkRoomRef.current = null;
     try {
+      // فك الربط مع قناة البيانات
       (globalThis as any).__ditonaDataChannel?.detach?.();
+
+      // أزل نشر التراكات من الغرفة الحالية دون إيقافها
+      if (r) {
+        try {
+          const lp: any = r.localParticipant;
+          const pubs =
+            typeof lp.getTrackPublications === "function"
+              ? lp.getTrackPublications()
+              : Array.from(lp.trackPublications?.values?.() ?? []);
+          for (const pub of pubs) {
+            try {
+              const tr: any = (pub as any).track;
+              if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr);
+            } catch {}
+          }
+        } catch {}
+        // لا توقف التراكات المحلية
+        r.disconnect(false);
+      }
       (globalThis as any).__lkRoom = null;
-      // لا توقف المسارات المحليّة
-      r?.disconnect(false as any);
     } catch {}
   }
 
@@ -249,9 +270,44 @@ export default function ChatClient() {
     updatePeerBadges(meta);
   };
 
-  /* ---------- لا تشغيل مزدوج ---------- */
-  // أزلنا تأثير autostart الذي كان يطلق ui:next.
-  // الاعتماد فقط على initMediaWithPermissionChecks أدناه.
+  /* ---------- autostart: إعداد الوسائط فقط دون بدء المطابقة ---------- */
+  useEffect(() => {
+    if (!hydrated || !isBrowser) return;
+    if ((window as any).__ditonaAutostartDone) return;
+    (window as any).__ditonaAutostartDone = 1;
+
+    const doAutoStart = async () => {
+      try {
+        const { prefetchGeo } = await import("@/lib/geoCache");
+        prefetchGeo();
+
+        await new Promise((r) => setTimeout(r, 300));
+
+        const stream = await initLocalMedia();
+        if (stream && localRef.current) {
+          localRef.current.srcObject = stream;
+          localRef.current.play().catch(() => {});
+        }
+
+        await new Promise((r) => setTimeout(r, 150));
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
+
+        try {
+          await safeFetch("/api/age/allow", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+          });
+        } catch {}
+        // لا emit("ui:next") هنا. الانطلاقة الوحيدة ستكون من joinViaRedisMatch أدناه.
+      } catch (err) {
+        console.warn("[auto-start] Failed:", err);
+      }
+    };
+
+    const t = setTimeout(doAutoStart, 100);
+    return () => clearTimeout(t);
+  }, [hydrated]);
 
   /* ---------- global UI events ---------- */
   useKeyboardShortcuts();
@@ -302,8 +358,8 @@ export default function ChatClient() {
     });
 
     const off5 = on("ui:like", async () => {
-      const room = lkRoomRef.current;
-      if (!room) {
+      const room = lkRoomRef.current as any;
+      if (!room || room.state !== "connected") {
         toast("No active connection for like");
         return;
       }
@@ -311,7 +367,7 @@ export default function ChatClient() {
       setLike(newLike);
       try {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-        await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+        await room.localParticipant.publishData(payload, { reliable: true, topic: "like" });
       } catch (e) {
         console.warn("publishData failed", e);
       }
@@ -438,7 +494,7 @@ export default function ChatClient() {
         localRef.current.srcObject = s;
         localRef.current.muted = true;
         localRef.current.play().catch(() => {});
-        // تشغيل واحد فقط بعد تجهيز الوسائط
+        // تشغيل وحيد للمطابقة
         joinViaRedisMatch().catch((e) => console.warn("joinViaRedisMatch failed", e));
         setReady(true);
       }
@@ -477,9 +533,11 @@ export default function ChatClient() {
         lkRoomRef.current = null;
         if (room) {
           try {
-            room.disconnect(false as any);
+            room.disconnect(false); // لا توقف التراكات عند الخروج
           } catch {}
         }
+        (globalThis as any).__ditonaDataChannel?.detach?.();
+        (globalThis as any).__lkRoom = null;
       } catch {}
 
       unsubMob();
@@ -496,9 +554,10 @@ export default function ChatClient() {
         (globalThis as any).__ditonaDataChannel?.detach?.();
         if (room) {
           try {
-            room.disconnect(false as any);
+            room.disconnect(false); // لا توقف التراكات
           } catch {}
         }
+        (globalThis as any).__lkRoom = null;
       } catch {}
     },
     []
@@ -546,13 +605,16 @@ export default function ChatClient() {
         identity: identity(),
         deviceId: stableDid(),
         vip: !!vip,
-        selfGender: profile?.gender === "male" || profile?.gender === "female" ? profile.gender : "u",
+        selfGender:
+          profile?.gender === "male" || profile?.gender === "female" ? profile.gender : "u",
         selfCountry,
-        filterGenders: gender === "male" || gender === "female" ? gender : "all",
+        // مرِّر فلاتر صحيحة كـ array
+        filterGenders:
+          gender === "male" || gender === "female" ? [gender] : [],
         filterCountries: Array.isArray(countries) ? countries : [],
       });
 
-      // poll next up to ~8s
+      // poll next up to ~8s x3
       let roomName: string | null = null;
       for (let i = 0; i < 3 && !roomName; i++) {
         roomName = await nextReq(ticket);
@@ -633,9 +695,14 @@ export default function ChatClient() {
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
       });
 
-      // token + connect
+      // تطبيع اسم الغرفة قبل طلب التوكن
+      const roomNameStr =
+        typeof roomName === "string"
+          ? roomName
+          : String((roomName as any)?.name || (roomName as any)?.id || (roomName as any)?.room || roomName);
+
       const id = identity();
-      const token = await tokenReq(roomName, id);
+      const token = await tokenReq(roomNameStr, id);
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
 
@@ -644,7 +711,11 @@ export default function ChatClient() {
 
       // publish local tracks
       const src = effectsStream ?? getLocalStream();
-      if (src) for (const t of src.getTracks()) try { await room.localParticipant.publishTrack(t); } catch {}
+      if (src)
+        for (const t of src.getTracks())
+          try {
+            await room.localParticipant.publishTrack(t);
+          } catch {}
     } finally {
       joiningRef.current = false;
     }
