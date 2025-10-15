@@ -1,6 +1,7 @@
 // src/lib/match/redis.ts
 
-type EnqueueInput = {
+// ===== Types =====
+export type EnqueueInput = {
   identity: string;
   deviceId: string;
   selfGender?: string | null;
@@ -21,13 +22,14 @@ type Attr = {
   ts: number;
 };
 
+// ===== Consts =====
 const TTL_MS = 45_000;
 const Q_KEY = "mq:q";
 const DEV = (d: string) => `mq:dev:${d}`;
 const ATTR = (t: string) => `mq:attr:${t}`;
 const ROOM = (t: string) => `mq:room:${t}`;
 
-// ← جديد: تحقق ENV دون رميٍ عند الاستيراد
+// ===== ENV helpers =====
 export function haveRedisEnv(): boolean {
   return !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
 }
@@ -38,6 +40,7 @@ function getRedis() {
   return { url, token };
 }
 
+// ===== Low-level REST helpers (Upstash REST v2) =====
 async function rpost<T = any>(path: string, body: any) {
   const { url, token } = getRedis();
   const res = await fetch(`${url}${path}`, {
@@ -61,9 +64,10 @@ async function pipeline(cmds: (string | number)[][]) {
   return rpost<any[]>("/pipeline", arr);
 }
 
-function now() { return Date.now(); }
-function toCSV(a?: string[] | null) { return Array.isArray(a) ? a.join(",") : ""; }
-function fromCSV(s?: string | null): string[] { return (s || "").split(",").filter(Boolean); }
+// ===== Utils =====
+const now = () => Date.now();
+const toCSV = (a?: string[] | null) => (Array.isArray(a) ? a.join(",") : "");
+const fromCSV = (s?: string | null) => (s || "").split(",").filter(Boolean);
 function ticketId(): string {
   const t = now().toString(36);
   const r = Math.random().toString(36).slice(2, 8);
@@ -76,11 +80,12 @@ function roomId(a: string, b: string) {
   return `pair-${t}-${A}${B}`;
 }
 
+// ===== Public API =====
 export async function enqueue(input: EnqueueInput) {
   const ts = now();
   const devKey = DEV(input.deviceId);
 
-  // إعادة استخدام التذكرة إن وُجدت
+  // Reuse device ticket if warm
   const devGet = await cmd<{ result: string | null }>("GET", devKey);
   let ticket = devGet?.result || "";
   if (!ticket) ticket = ticketId();
@@ -98,58 +103,34 @@ export async function enqueue(input: EnqueueInput) {
   const attrKey = ATTR(ticket);
 
   const p: (string | number)[][] = [
-    ["HSET", attrKey,
-      "identity", attr.identity,
-      "deviceId", attr.deviceId,
-      "selfGender", attr.selfGender || "",
-      "selfCountry", attr.selfCountry || "",
-      "filterGenders", toCSV(attr.filterGenders),
-      "filterCountries", toCSV(attr.filterCountries),
-      "vip", attr.vip ? "1" : "0",
-      "ts", String(attr.ts),
+    [
+      "HSET",
+      attrKey,
+      "identity",
+      attr.identity,
+      "deviceId",
+      attr.deviceId,
+      "selfGender",
+      attr.selfGender || "",
+      "selfCountry",
+      attr.selfCountry || "",
+      "filterGenders",
+      toCSV(attr.filterGenders),
+      "filterCountries",
+      toCSV(attr.filterCountries),
+      "vip",
+      attr.vip ? "1" : "0",
+      "ts",
+      String(attr.ts),
     ],
     ["PEXPIRE", attrKey, TTL_MS],
     ["ZADD", Q_KEY, "NX", ts, ticket],
     ["SET", devKey, ticket, "PX", TTL_MS],
   ];
   const rsp = await pipeline(p);
-  const zaddOk = rsp[2]?.result !== null && !rsp[2]?.error;
-  if (!zaddOk && rsp[2]?.error) throw new Error(`enqueue ZADD error: ${rsp[2].error}`);
+  const zaddOk = rsp[2] && !rsp[2].error;
+  if (!zaddOk) throw new Error(`enqueue ZADD error: ${rsp[2]?.error || "unknown"}`);
   return { ticket };
-}
-
-async function readAttr(ticket: string): Promise<Attr | null> {
-  const a = await cmd<{ result: (string | null)[] | null }>(
-    "HMGET", ATTR(ticket),
-    "identity","deviceId","selfGender","selfCountry","filterGenders","filterCountries","vip","ts"
-  );
-  const v = a?.result;
-  if (!v || v.every((x) => x === null)) return null;
-  return {
-    identity: v[0] || "",
-    deviceId: v[1] || "",
-    selfGender: v[2] || "",
-    selfCountry: v[3] || "",
-    filterGenders: fromCSV(v[4]),
-    filterCountries: fromCSV(v[5]),
-    vip: v[6] === "1",
-    ts: Number(v[7] || "0"),
-  };
-}
-
-function matchOK(me: Attr, other: Attr, widen: boolean) {
-  if (widen) return true;
-  const meG = me.filterGenders?.length ? me.filterGenders : null;
-  const meC = me.filterCountries?.length ? me.filterCountries : null;
-  const otG = other.selfGender || "";
-  const otC = other.selfCountry || "";
-  const otherG = other.filterGenders?.length ? other.filterGenders : null;
-  const otherC = other.filterCountries?.length ? other.filterCountries : null;
-  const myG = me.selfGender || "";
-  const myC = me.selfCountry || "";
-  const gOK = (!meG || meG.includes(otG)) && (!otherG || otherG.includes(myG));
-  const cOK = (!meC || meC.includes(otC)) && (!otherC || otherC.includes(myC));
-  return gOK && cOK;
 }
 
 export async function getRoom(ticket: string) {
@@ -158,6 +139,7 @@ export async function getRoom(ticket: string) {
 }
 
 export async function tryMatch(ticket: string, widen: boolean) {
+  // Already assigned?
   const existing = await getRoom(ticket);
   if (existing) return existing;
 
@@ -166,13 +148,24 @@ export async function tryMatch(ticket: string, widen: boolean) {
 
   const tNow = now();
   const min = tNow - TTL_MS;
+
+  // FIFO-ish: recent window
   const zr = await cmd<{ result: string[] | null }>("ZRANGEBYSCORE", Q_KEY, min, tNow);
   const candidates = (zr?.result || []).filter((t) => t !== ticket);
   if (!candidates.length) return null;
 
+  // Bulk-read candidate attrs
   const cmds = candidates.slice(0, 64).map((t) => [
-    "HMGET", ATTR(t),
-    "identity","deviceId","selfGender","selfCountry","filterGenders","filterCountries","vip","ts",
+    "HMGET",
+    ATTR(t),
+    "identity",
+    "deviceId",
+    "selfGender",
+    "selfCountry",
+    "filterGenders",
+    "filterCountries",
+    "vip",
+    "ts",
   ]);
   const res = cmds.length ? await pipeline(cmds) : [];
   for (let i = 0; i < res.length; i++) {
@@ -191,12 +184,15 @@ export async function tryMatch(ticket: string, widen: boolean) {
       ts: Number(v[7] || "0"),
     };
     const otherTicket = candidates[i];
+    if (!other.identity) continue;
 
+    // Skip if the other already has a room
     const otherRoom = await cmd<{ result: string | null }>("GET", ROOM(otherTicket));
     if (otherRoom?.result) continue;
 
     if (!matchOK(me, other, widen)) continue;
 
+    // Commit match
     const room = roomId(ticket, otherTicket);
     const commit: (string | number)[][] = [
       ["SET", ROOM(ticket), room, "PX", TTL_MS],
@@ -209,4 +205,51 @@ export async function tryMatch(ticket: string, widen: boolean) {
     if (ok) return room;
   }
   return null;
+}
+
+// ===== Internals =====
+async function readAttr(ticket: string): Promise<Attr | null> {
+  const a = await cmd<{ result: (string | null)[] | null }>(
+    "HMGET",
+    ATTR(ticket),
+    "identity",
+    "deviceId",
+    "selfGender",
+    "selfCountry",
+    "filterGenders",
+    "filterCountries",
+    "vip",
+    "ts"
+  );
+  const v = a?.result;
+  if (!v || v.every((x) => x === null)) return null;
+  return {
+    identity: v[0] || "",
+    deviceId: v[1] || "",
+    selfGender: v[2] || "",
+    selfCountry: v[3] || "",
+    filterGenders: fromCSV(v[4]),
+    filterCountries: fromCSV(v[5]),
+    vip: v[6] === "1",
+    ts: Number(v[7] || "0"),
+  };
+}
+
+function matchOK(me: Attr, other: Attr, widen: boolean) {
+  if (widen) return true;
+
+  const meG = me.filterGenders?.length ? me.filterGenders : null;
+  const meC = me.filterCountries?.length ? me.filterCountries : null;
+  const otG = other.selfGender || "";
+  const otC = other.selfCountry || "";
+
+  const otherG = other.filterGenders?.length ? other.filterGenders : null;
+  const otherC = other.filterCountries?.length ? other.filterCountries : null;
+  const myG = me.selfGender || "";
+  const myC = me.selfCountry || "";
+
+  const gOK = (!meG || meG.includes(otG)) && (!otherG || otherG.includes(myG));
+  const cOK = (!meC || meC.includes(otC)) && (!otherC || otherC.includes(myC));
+
+  return gOK && cOK;
 }
