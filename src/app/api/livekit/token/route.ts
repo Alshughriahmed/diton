@@ -1,24 +1,51 @@
+// src/app/api/livekit/token/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
 
-const API_KEY = process.env.LIVEKIT_API_KEY!;
-const API_SECRET = process.env.LIVEKIT_API_SECRET!;
-const LK_URL = process.env.LIVEKIT_URL || process.env.NEXT_PUBLIC_LIVEKIT_WS_URL;
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const preferredRegion = ["fra1", "iad1"];
+
+function noStore(h?: Headers) {
+  const hh = h ?? new Headers();
+  hh.set("cache-control", "no-store");
+  hh.set("content-type", "application/json");
+  return hh;
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: noStore(new Headers()) });
+}
 
 export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const room = searchParams.get("room") || "";
+  const identity = searchParams.get("identity") || "";
+
+  if (!room || !identity) {
+    return new NextResponse(JSON.stringify({ error: "room and identity are required" }), {
+      status: 400,
+      headers: noStore(),
+    });
+  }
+
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  if (!apiKey || !apiSecret) {
+    return new NextResponse(JSON.stringify({ error: "livekit env missing" }), {
+      status: 503,
+      headers: noStore(),
+    });
+  }
+
   try {
-    const { searchParams } = new URL(req.url);
-    const room = searchParams.get("room") || "ditona-public";
-    const identity = searchParams.get("identity"); // يجب أن تأتي من العميل
+    const at = new AccessToken(apiKey, apiSecret, {
+      identity,
+      name: identity,
+      ttl: "5m",
+    });
 
-    if (!LK_URL || !API_KEY || !API_SECRET) {
-      return NextResponse.json({ error: "LiveKit env missing" }, { status: 500 });
-    }
-    if (!identity) {
-      return NextResponse.json({ error: "identity required" }, { status: 400 });
-    }
-
-    const at = new AccessToken(API_KEY, API_SECRET, { identity });
     at.addGrant({
       room,
       roomJoin: true,
@@ -28,8 +55,9 @@ export async function GET(req: NextRequest) {
     });
 
     const token = await at.toJwt();
-    return NextResponse.json({ token });
-  } catch (e) {
-    return NextResponse.json({ error: "token-gen-failed" }, { status: 500 });
+    return new NextResponse(JSON.stringify({ token }), { status: 200, headers: noStore() });
+  } catch (e: any) {
+    const msg = String(e?.message || e || "token generation failed");
+    return new NextResponse(JSON.stringify({ error: msg }), { status: 500, headers: noStore() });
   }
 }
