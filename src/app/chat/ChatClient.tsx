@@ -40,7 +40,6 @@ import {
 } from "livekit-client";
 
 /* ========= UI components ========= */
-import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import PeerInfoCard from "@/components/chat/PeerInfoCard";
 import PeerMetadata from "@/components/chat/PeerMetadata";
@@ -63,7 +62,8 @@ export default function ChatClient() {
   const router = useRouter();
   const hydrated = useHydrated();
   const { next, prev } = useNextPrev();
- 
+
+  // mandatory hooks at top-level
   useKeyboardShortcuts();
   useGestures();
 
@@ -172,8 +172,11 @@ export default function ChatClient() {
   async function leaveRoom() {
     const r = lkRoomRef.current;
     lkRoomRef.current = null;
+
+    // clear renders immediately
     if (remoteRef.current) remoteRef.current.srcObject = null;
-if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+
     try {
       (globalThis as any).__ditonaDataChannel?.detach?.();
 
@@ -184,26 +187,40 @@ if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
             typeof lp.getTrackPublications === "function"
               ? lp.getTrackPublications()
               : Array.from(lp.trackPublications?.values?.() ?? []);
-        for (const pub of pubs) {
+          for (const pub of pubs) {
             try {
               const tr: any = (pub as any).track;
-              if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr, { stop: false });
+              if (tr && typeof lp.unpublishTrack === "function") {
+                lp.unpublishTrack(tr, { stop: false });
+              }
             } catch {}
           }
         } catch {}
-      await new Promise<void>((resolve) => {
-  let done = false;
-  const finish = () => { if (!done) { done = true; resolve(); } };
-  try {
-    const handler = () => finish();
-    r?.on(RoomEvent.Disconnected, handler);
-    setTimeout(finish, 1200);
-  } catch { finish(); }
-});
- try { r?.off?.(RoomEvent.Disconnected, handler); } catch {}       
-await r.disconnect(false);
-  // do not stop local tracks
+
+        // wait for disconnect completion or small timeout
+        await new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (!done) {
+              done = true;
+              try {
+                r.off?.(RoomEvent.Disconnected, finish);
+              } catch {}
+              resolve();
+            }
+          };
+          try {
+            r.on?.(RoomEvent.Disconnected, finish);
+          } catch {}
+          try {
+            r.disconnect(false);
+          } catch {
+            finish();
+          }
+          setTimeout(finish, 1200);
+        });
       }
+
       (globalThis as any).__lkRoom = null;
     } catch {}
   }
@@ -269,41 +286,47 @@ await r.disconnect(false);
 
     const offs: Array<() => void> = [];
 
-    // keyboard / gestures
-
     // media & controls
     offs.push(on("ui:toggleMic", () => toggleMic()));
     offs.push(on("ui:toggleCam", () => toggleCam()));
 
+    // switch camera: replace only video track
     offs.push(
       on("ui:switchCamera", async () => {
         try {
           const newStream = await switchCamera();
+
           if (localRef.current && newStream) {
             localRef.current.srcObject = newStream;
             localRef.current.play().catch(() => {});
           }
+
           const room = lkRoomRef.current;
           if (room) {
-            try {
-              const lp: any = room.localParticipant;
-              const pubs =
-                typeof lp.getTrackPublications === "function"
-                  ? lp.getTrackPublications()
-                  : Array.from(lp.trackPublications?.values?.() ?? []);
-           for (const pub of pubs) {
-  try {
-    if ((pub as any).kind === Track.Kind.Video) {
-      const tr: any = (pub as any).track;
-      if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr, { stop: false });
-    }
-  } catch {}
-}
-const nv = newStream.getVideoTracks()[0];
-if (nv) {
-  try { await room.localParticipant.publishTrack(nv); } catch {}
-}
-  
+            const lp: any = room.localParticipant;
+            const pubs =
+              typeof lp.getTrackPublications === "function"
+                ? lp.getTrackPublications()
+                : Array.from(lp.trackPublications?.values?.() ?? []);
+
+            for (const pub of pubs) {
+              try {
+                if ((pub as any).kind === Track.Kind.Video) {
+                  const tr: any = (pub as any).track;
+                  if (tr && typeof lp.unpublishTrack === "function") {
+                    lp.unpublishTrack(tr, { stop: false });
+                  }
+                }
+              } catch {}
+            }
+
+            const nv = newStream.getVideoTracks()[0];
+            if (nv) {
+              try {
+                await room.localParticipant.publishTrack(nv);
+              } catch {}
+            }
+          }
         } catch (e) {
           console.warn("Camera switch failed:", e);
         }
@@ -457,7 +480,7 @@ if (nv) {
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
 
-    // init media then start matching exactly once
+    // init media then start matching once
     (async () => {
       try {
         const { prefetchGeo } = await import("@/lib/geoCache");
@@ -497,26 +520,19 @@ if (nv) {
       unsubMob();
       for (const off of offs) try { off(); } catch {}
       if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
-      // لا نفصل الغرفة هنا. الفصل يتم في leaveRoom() أو عند unmount فقط.
+      // no room disconnect here
     };
-    // mount-only
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated]);
+  }, [hydrated, ffa, vip, router]);
 
-  // Unmount cleanup: disconnect room without stopping tracks
+  // Unmount cleanup
   useEffect(
     () => () => {
-      try {
-        const room = lkRoomRef.current;
-        lkRoomRef.current = null;
-        (globalThis as any).__ditonaDataChannel?.detach?.();
-        if (room) {
-          try {
-            room.disconnect(false);
-          } catch {}
-        }
-        (globalThis as any).__lkRoom = null;
-      } catch {}
+      (async () => {
+        try {
+          await leaveRoom();
+        } catch {}
+      })();
     },
     []
   );
@@ -678,11 +694,13 @@ if (nv) {
 
       // publish local tracks
       const src = effectsStream ?? getLocalStream();
-      if (src)
-        for (const t of src.getTracks())
+      if (src) {
+        for (const t of src.getTracks()) {
           try {
             await room.localParticipant.publishTrack(t);
           } catch {}
+        }
+      }
     } finally {
       joiningRef.current = false;
     }
