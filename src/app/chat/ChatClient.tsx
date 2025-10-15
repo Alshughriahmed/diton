@@ -1,10 +1,10 @@
 // src/app/chat/ChatClient.tsx
 "use client";
 
-/* ========= الشِّيم يجب أن تُحمَّل أولًا ========= */
+/* ========= Load DC shim first ========= */
 import "@/app/chat/dcShim.client";
 
-/* ======================= boot / guards ======================= */
+/* ========= Boot side-effects ========= */
 import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
@@ -13,32 +13,14 @@ import "./dcMetaResponder.client";
 import "./likeSyncClient";
 import "./msgSendClient";
 
-if (process.env.NODE_ENV !== "production") {
-  if (typeof window !== "undefined") {
-    window.addEventListener("unhandledrejection", (e) => {
-      const r = (e as any).reason;
-      const msg = String((r && r.message) || "");
-      if ((r && r.name === "AbortError") || /aborted/i.test(msg)) e.preventDefault();
-    });
-  }
-}
-
-/* ======================= react & app hooks ======================= */
+/* ========= React / app hooks ========= */
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
-
 import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useGestures } from "@/hooks/useGestures";
 import { useHydrated } from "@/hooks/useHydrated";
-import {
-  initLocalMedia,
-  getLocalStream,
-  toggleMic,
-  toggleCam,
-  switchCamera,
-} from "@/lib/media";
-
+import { initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera } from "@/lib/media";
 import { useFilters } from "@/state/filters";
 import { useFFA } from "@/lib/useFFA";
 import { useRouter } from "next/navigation";
@@ -47,7 +29,7 @@ import { toast } from "@/lib/ui/toast";
 import { tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
 
-/* ======================= LiveKit ======================= */
+/* ========= LiveKit ========= */
 import {
   Room,
   RoomEvent,
@@ -57,7 +39,7 @@ import {
   RemoteTrack,
 } from "livekit-client";
 
-/* ======================= UI components ======================= */
+/* ========= UI components ========= */
 import ChatComposer from "@/components/chat/ChatComposer";
 import LikeSystem from "@/components/chat/LikeSystem";
 import PeerInfoCard from "@/components/chat/PeerInfoCard";
@@ -70,12 +52,12 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 
-/* ======================= types / consts ======================= */
+/* ========= Types / consts ========= */
 type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
-const NEXT_COOLDOWN_MS = 700;
+const NEXT_COOLDOWN_MS = 350;
 const isBrowser = typeof window !== "undefined";
 
-/* ============================================================= */
+/* ========= Component ========= */
 export default function ChatClient() {
   const ffa = useFFA();
   const router = useRouter();
@@ -149,7 +131,6 @@ export default function ChatClient() {
     if (!r.ok) throw new Error("next failed " + r.status);
     const j = await r.json();
 
-    // تطبيع قيمة الغرفة
     const raw = j?.room;
     let room: string | null = null;
     if (typeof raw === "string") room = raw;
@@ -177,7 +158,6 @@ export default function ChatClient() {
     return j.token as string;
   }
 
-  /** اربط الشِّيم فقط. لا تنشئ أو تستبدل __ditonaDataChannel هنا. */
   function exposeCompatDC(room: Room) {
     const w: any = globalThis;
     w.__lkRoom = room;
@@ -190,10 +170,8 @@ export default function ChatClient() {
     const r = lkRoomRef.current;
     lkRoomRef.current = null;
     try {
-      // فك الربط مع قناة البيانات
       (globalThis as any).__ditonaDataChannel?.detach?.();
 
-      // أزل نشر التراكات من الغرفة الحالية دون إيقافها
       if (r) {
         try {
           const lp: any = r.localParticipant;
@@ -201,15 +179,14 @@ export default function ChatClient() {
             typeof lp.getTrackPublications === "function"
               ? lp.getTrackPublications()
               : Array.from(lp.trackPublications?.values?.() ?? []);
-          for (const pub of pubs) {
+        for (const pub of pubs) {
             try {
               const tr: any = (pub as any).track;
               if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr);
             } catch {}
           }
         } catch {}
-        // لا توقف التراكات المحلية
-        r.disconnect(false);
+        r.disconnect(false); // do not stop local tracks
       }
       (globalThis as any).__lkRoom = null;
     } catch {}
@@ -248,7 +225,7 @@ export default function ChatClient() {
     return () => window.removeEventListener("ditona:peer-meta-ui", handler as any);
   }, []);
 
-  /* ---------- peer meta from remote (events) ---------- */
+  /* ---------- peer meta store ---------- */
   const [peerInfo, setPeerInfo] = useState({
     name: "Anonymous",
     isVip: false,
@@ -270,193 +247,186 @@ export default function ChatClient() {
     updatePeerBadges(meta);
   };
 
-  /* ---------- autostart: إعداد الوسائط فقط دون بدء المطابقة ---------- */
+  /* ========= MOUNT-ONLY effect ========= */
   useEffect(() => {
     if (!hydrated || !isBrowser) return;
-    if ((window as any).__ditonaAutostartDone) return;
-    (window as any).__ditonaAutostartDone = 1;
 
-    const doAutoStart = async () => {
-      try {
-        const { prefetchGeo } = await import("@/lib/geoCache");
-        prefetchGeo();
+    const offs: Array<() => void> = [];
 
-        await new Promise((r) => setTimeout(r, 300));
+    // keyboard / gestures
+    useKeyboardShortcuts();
+    useGestures();
 
-        const stream = await initLocalMedia();
-        if (stream && localRef.current) {
-          localRef.current.srcObject = stream;
-          localRef.current.play().catch(() => {});
-        }
-
-        await new Promise((r) => setTimeout(r, 150));
-        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
-
-        try {
-          await safeFetch("/api/age/allow", {
-            method: "POST",
-            credentials: "include",
-            cache: "no-store",
-          });
-        } catch {}
-        // لا emit("ui:next") هنا. الانطلاقة الوحيدة ستكون من joinViaRedisMatch أدناه.
-      } catch (err) {
-        console.warn("[auto-start] Failed:", err);
-      }
-    };
-
-    const t = setTimeout(doAutoStart, 100);
-    return () => clearTimeout(t);
-  }, [hydrated]);
-
-  /* ---------- global UI events ---------- */
-  useKeyboardShortcuts();
-  useGestures();
-
-  useEffect(() => {
     // media & controls
-    const off1 = on("ui:toggleMic", () => toggleMic());
-    const off2 = on("ui:toggleCam", () => toggleCam());
+    offs.push(on("ui:toggleMic", () => toggleMic()));
+    offs.push(on("ui:toggleCam", () => toggleCam()));
 
-    const off3 = on("ui:switchCamera", async () => {
-      try {
-        const newStream = await switchCamera();
-        if (localRef.current && newStream) {
-          localRef.current.srcObject = newStream;
-          localRef.current.play().catch(() => {});
+    offs.push(
+      on("ui:switchCamera", async () => {
+        try {
+          const newStream = await switchCamera();
+          if (localRef.current && newStream) {
+            localRef.current.srcObject = newStream;
+            localRef.current.play().catch(() => {});
+          }
+          const room = lkRoomRef.current;
+          if (room) {
+            try {
+              const lp: any = room.localParticipant;
+              const pubs =
+                typeof lp.getTrackPublications === "function"
+                  ? lp.getTrackPublications()
+                  : Array.from(lp.trackPublications?.values?.() ?? []);
+              for (const pub of pubs) {
+                try {
+                  const tr: any = (pub as any).track;
+                  if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr);
+                } catch {}
+              }
+              for (const t of newStream.getTracks()) {
+                try {
+                  await room.localParticipant.publishTrack(t);
+                } catch {}
+              }
+            } catch {}
+          }
+        } catch (e) {
+          console.warn("Camera switch failed:", e);
         }
-        const room = lkRoomRef.current;
-        if (room) {
-          try {
-            const lp: any = room.localParticipant;
-            const pubs =
-              typeof lp.getTrackPublications === "function"
-                ? lp.getTrackPublications()
-                : Array.from(lp.trackPublications?.values?.() ?? []);
-            for (const pub of pubs) {
-              try {
-                const tr: any = (pub as any).track;
-                if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr);
-              } catch {}
-            }
-            for (const t of newStream.getTracks()) {
-              try {
-                await room.localParticipant.publishTrack(t);
-              } catch {}
-            }
-          } catch {}
+      })
+    );
+
+    offs.push(
+      on("ui:openSettings", () => {
+        try {
+          window.location.href = "/settings";
+        } catch {}
+      })
+    );
+
+    offs.push(
+      on("ui:like", async () => {
+        const room = lkRoomRef.current as any;
+        if (!room || room.state !== "connected") {
+          toast("No active connection for like");
+          return;
         }
-      } catch (e) {
-        console.warn("Camera switch failed:", e);
-      }
-    });
+        const newLike = !like;
+        setLike(newLike);
+        try {
+          const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
+          await room.localParticipant.publishData(payload, { reliable: true, topic: "like" });
+        } catch (e) {
+          console.warn("publishData failed", e);
+        }
+        toast(`Like ${newLike ? "❤️" : "💔"}`);
+      })
+    );
 
-    const off4 = on("ui:openSettings", () => {
-      try {
-        window.location.href = "/settings";
-      } catch {}
-    });
+    offs.push(
+      on("ui:report", async () => {
+        try {
+          toast("Report sent. Moving on");
+        } catch {}
+      })
+    );
 
-    const off5 = on("ui:like", async () => {
-      const room = lkRoomRef.current as any;
-      if (!room || room.state !== "connected") {
-        toast("No active connection for like");
-        return;
-      }
-      const newLike = !like;
-      setLike(newLike);
-      try {
-        const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-        await room.localParticipant.publishData(payload, { reliable: true, topic: "like" });
-      } catch (e) {
-        console.warn("publishData failed", e);
-      }
-      toast(`Like ${newLike ? "❤️" : "💔"}`);
-    });
+    offs.push(
+      on("ui:next", async () => {
+        const now = Date.now();
+        if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
+        lastNextTsRef.current = now;
+        toast("⏭️ Next");
+        await leaveRoom();
+        await new Promise((r) => setTimeout(r, NEXT_COOLDOWN_MS));
+        await joinViaRedisMatch();
+      })
+    );
 
-    const off6 = on("ui:report", async () => {
-      try {
-        toast("Report sent. Moving on");
-      } catch {}
-    });
+    offs.push(
+      on("ui:prev", () => {
+        if (ffa) console.log("FFA_FORCE: enabled");
+        if (!vip && !ffa) {
+          toast("🔒 Going back is VIP only");
+          emit("ui:upsell", "prev");
+        } else {
+          toast("⏮️ Attempting to go back…");
+          tryPrevOrRandom();
+        }
+      })
+    );
 
-    const off7 = on("ui:next", async () => {
-      const now = Date.now();
-      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
-      lastNextTsRef.current = now;
-      toast("⏭️ Next");
-      await leaveRoom();
-      await joinViaRedisMatch();
-    });
+    offs.push(on("ui:openMessaging" as any, () => setShowMessaging(true)));
+    offs.push(on("ui:closeMessaging" as any, () => setShowMessaging(false)));
 
-    const off8 = on("ui:prev", () => {
-      if (ffa) console.log("FFA_FORCE: enabled");
-      if (!vip && !ffa) {
-        toast("🔒 Going back is VIP only");
-        emit("ui:upsell", "prev");
-      } else {
-        toast("⏮️ Attempting to go back…");
-        tryPrevOrRandom();
-      }
-    });
+    offs.push(
+      on("ui:toggleRemoteAudio" as any, () => {
+        const a = remoteAudioRef.current;
+        const v = remoteRef.current;
+        const target: any = a ?? v;
+        if (target) {
+          target.muted = !target.muted;
+          toast(target.muted ? "Remote muted" : "Remote unmuted");
+        }
+      })
+    );
 
-    const offOpenMsg = on("ui:openMessaging" as any, () => setShowMessaging(true));
-    const offCloseMsg = on("ui:closeMessaging" as any, () => setShowMessaging(false));
+    offs.push(on("ui:togglePlay", () => toast("Toggle matching state")));
+    offs.push(
+      on("ui:toggleMasks", () => {
+        toast("Enable/disable masks");
+      })
+    );
 
-    const offRemoteAudio = on("ui:toggleRemoteAudio" as any, () => {
-      const a = remoteAudioRef.current;
-      const v = remoteRef.current;
-      const target: any = a ?? v;
-      if (target) {
-        target.muted = !target.muted;
-        toast(target.muted ? "Remote muted" : "Remote unmuted");
-      }
-    });
+    offs.push(
+      on("ui:toggleMirror", () => {
+        setIsMirrored((prev) => {
+          const s = !prev;
+          toast(s ? "Mirror on" : "Mirror off");
+          return s;
+        });
+      })
+    );
 
-    const offTogglePlay = on("ui:togglePlay", () => toast("Toggle matching state"));
-    const offToggleMasks = on("ui:toggleMasks", () => toast("Enable/disable masks"));
-
-    const offMirror = on("ui:toggleMirror", () => {
-      setIsMirrored((prev) => {
-        const s = !prev;
-        toast(s ? "Mirror on" : "Mirror off");
-        return s;
-      });
-    });
-
-    const offUpsell = on("ui:upsell", (d: any) => {
-      if (ffa) return;
-      router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
-    });
+    offs.push(
+      on("ui:upsell", (d: any) => {
+        if (ffa) return;
+        router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`);
+      })
+    );
 
     const reEnqueue = async () => {
       toast("Filters updated");
     };
-    const offCountry = on("filters:country", reEnqueue);
-    const offGender = on("filters:gender", reEnqueue);
+    offs.push(on("filters:country", reEnqueue));
+    offs.push(on("filters:gender", reEnqueue));
 
-    const offRtcPhase = on("rtc:phase" as any, (data) => setRtcPhase(data.phase));
-    const offRtcPair = on("rtc:pair" as any, (data) => {
-      setPair({ id: data.pairId, role: data.role });
-      setPeerInfo((p) => ({ ...p, name: "Partner", likes: Math.floor(Math.random() * 500) }));
-    });
-    const offRtcTrack = on("rtc:remote-track" as any, (data) => {
-      const remoteVideo = remoteRef.current;
-      if (remoteVideo && data.stream) {
-        remoteVideo.srcObject = data.stream;
-        try {
-          const remoteAudio = remoteAudioRef.current;
-          if (remoteAudio) {
-            remoteAudio.srcObject = remoteVideo.srcObject as any;
-            remoteAudio.muted = false;
-            remoteAudio.play?.().catch(() => {});
-          }
-        } catch {}
-        try {
-          remoteVideo.play?.().catch(() => {});
-        } catch {}
-      }
-    });
+    offs.push(on("rtc:phase" as any, (data) => setRtcPhase(data.phase)));
+    offs.push(
+      on("rtc:pair" as any, (data) => {
+        setPair({ id: data.pairId, role: data.role });
+        setPeerInfo((p) => ({ ...p, name: "Partner", likes: Math.floor(Math.random() * 500) }));
+      })
+    );
+    offs.push(
+      on("rtc:remote-track" as any, (data) => {
+        const remoteVideo = remoteRef.current;
+        if (remoteVideo && data.stream) {
+          remoteVideo.srcObject = data.stream;
+          try {
+            const remoteAudio = remoteAudioRef.current;
+            if (remoteAudio) {
+              remoteAudio.srcObject = remoteVideo.srcObject as any;
+              remoteAudio.muted = false;
+              remoteAudio.play?.().catch(() => {});
+            }
+          } catch {}
+          try {
+            remoteVideo.play?.().catch(() => {});
+          } catch {}
+        }
+      })
+    );
 
     if (isBrowser) {
       window.addEventListener("ditona:peer-meta", handlePeerMeta as any);
@@ -469,15 +439,35 @@ export default function ChatClient() {
       });
     }
 
-    const initMediaWithPermissionChecks = async () => {
+    // Mobile viewport logs
+    const mobileOptimizer = getMobileOptimizer();
+    const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
+
+    // init media then start matching exactly once
+    (async () => {
       try {
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-          setCameraPermissionHint("Return to the tab to enable camera");
-          return;
+        const { prefetchGeo } = await import("@/lib/geoCache");
+        prefetchGeo();
+      } catch {}
+      try {
+        await new Promise((r) => setTimeout(r, 200));
+        const stream = await initLocalMedia();
+        if (stream && localRef.current) {
+          localRef.current.srcObject = stream;
+          localRef.current.muted = true;
+          localRef.current.play().catch(() => {});
         }
-        setCameraPermissionHint("");
-        await initLocalMedia();
-        setCameraPermissionHint("");
+        await new Promise((r) => setTimeout(r, 120));
+        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
+        try {
+          await safeFetch("/api/age/allow", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+          });
+        } catch {}
+        setReady(true);
+        await joinViaRedisMatch();
       } catch (error: any) {
         console.warn("Media initialization failed:", error);
         if (error?.name === "NotAllowedError")
@@ -486,66 +476,20 @@ export default function ChatClient() {
           setCameraPermissionHint("Close the other tab or allow camera");
         else if (error?.name === "NotFoundError") setCameraPermissionHint("No camera or microphone found");
         else setCameraPermissionHint("Camera access error — check permissions");
-        return;
       }
-
-      const s = getLocalStream();
-      if (localRef.current && s) {
-        localRef.current.srcObject = s;
-        localRef.current.muted = true;
-        localRef.current.play().catch(() => {});
-        // تشغيل وحيد للمطابقة
-        joinViaRedisMatch().catch((e) => console.warn("joinViaRedisMatch failed", e));
-        setReady(true);
-      }
-    };
-
-    const mobileOptimizer = getMobileOptimizer();
-    const unsubMob = mobileOptimizer.subscribe((vp) => console.log("Viewport changed:", vp));
-
-    initMediaWithPermissionChecks().catch(() => {});
+    })();
 
     return () => {
-      off1();
-      off2();
-      off3();
-      off4();
-      off5();
-      off6();
-      off7();
-      off8();
-      offOpenMsg();
-      offCloseMsg();
-      offRemoteAudio();
-      offTogglePlay();
-      offToggleMasks();
-      offMirror();
-      offUpsell();
-      offCountry();
-      offGender();
-      offRtcPhase();
-      offRtcPair();
-      offRtcTrack();
-      if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
-
-      try {
-        const room = lkRoomRef.current;
-        lkRoomRef.current = null;
-        if (room) {
-          try {
-            room.disconnect(false); // لا توقف التراكات عند الخروج
-          } catch {}
-        }
-        (globalThis as any).__ditonaDataChannel?.detach?.();
-        (globalThis as any).__lkRoom = null;
-      } catch {}
-
       unsubMob();
+      for (const off of offs) try { off(); } catch {}
+      if (isBrowser) window.removeEventListener("ditona:peer-meta", handlePeerMeta as any);
+      // لا نفصل الغرفة هنا. الفصل يتم في leaveRoom() أو عند unmount فقط.
     };
+    // mount-only
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pair.id, vip, ffa, router]);
+  }, [hydrated]);
 
-  // stop-like hook on unmount
+  // Unmount cleanup: disconnect room without stopping tracks
   useEffect(
     () => () => {
       try {
@@ -554,7 +498,7 @@ export default function ChatClient() {
         (globalThis as any).__ditonaDataChannel?.detach?.();
         if (room) {
           try {
-            room.disconnect(false); // لا توقف التراكات
+            room.disconnect(false);
           } catch {}
         }
         (globalThis as any).__lkRoom = null;
@@ -566,16 +510,28 @@ export default function ChatClient() {
   // swipe next/prev
   useEffect(() => {
     if (!isBrowser) return;
-    let x0 = 0, y0 = 0;
-    const down = (e: PointerEvent) => { x0 = e.clientX; y0 = e.clientY; };
+    let x0 = 0,
+      y0 = 0;
+    const down = (e: PointerEvent) => {
+      x0 = e.clientX;
+      y0 = e.clientY;
+    };
     const up = (e: PointerEvent) => {
-      const dx = e.clientX - x0, dy = e.clientY - y0;
+      const dx = e.clientX - x0,
+        dy = e.clientY - y0;
       if (Math.abs(dx) > 60 && Math.abs(dy) < 60 && Math.abs(dx) > Math.abs(dy)) {
-        if (dx < 0) { toast("⏭️ Swiped to next"); emit("ui:next"); }
-        else {
+        if (dx < 0) {
+          toast("⏭️ Swiped to next");
+          emit("ui:next");
+        } else {
           if (ffa) console.log("FFA_FORCE: enabled");
-          if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); }
-          else { toast("⏮️ Attempting to go back…"); emit("ui:prev"); }
+          if (!vip && !ffa) {
+            toast("🔒 Going back is VIP only");
+            emit("ui:upsell", "prev");
+          } else {
+            toast("⏮️ Attempting to go back…");
+            emit("ui:prev");
+          }
         }
       }
     };
@@ -587,7 +543,7 @@ export default function ChatClient() {
     };
   }, [vip, ffa]);
 
-  /* =================== Matchmaking + LiveKit =================== */
+  /* ========= Matchmaking + LiveKit ========= */
   async function joinViaRedisMatch() {
     if (joiningRef.current) return;
     joiningRef.current = true;
@@ -595,7 +551,7 @@ export default function ChatClient() {
     window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
 
     try {
-      // enqueue with current filters
+      // enqueue with filters
       let selfCountry: string | null = null;
       try {
         const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
@@ -608,9 +564,7 @@ export default function ChatClient() {
         selfGender:
           profile?.gender === "male" || profile?.gender === "female" ? profile.gender : "u",
         selfCountry,
-        // مرِّر فلاتر صحيحة كـ array
-        filterGenders:
-          gender === "male" || gender === "female" ? [gender] : [],
+        filterGenders: gender === "male" || gender === "female" ? [gender] : [],
         filterCountries: Array.isArray(countries) ? countries : [],
       });
 
@@ -695,7 +649,6 @@ export default function ChatClient() {
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
       });
 
-      // تطبيع اسم الغرفة قبل طلب التوكن
       const roomNameStr =
         typeof roomName === "string"
           ? roomName
@@ -706,7 +659,7 @@ export default function ChatClient() {
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
 
-      // اربط الشيم بالغرفة
+      // attach DC shim
       exposeCompatDC(room);
 
       // publish local tracks
@@ -721,7 +674,7 @@ export default function ChatClient() {
     }
   }
 
-  /* ======================= UI ======================= */
+  /* ========= UI ========= */
   if (!hydrated) {
     return (
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100">
