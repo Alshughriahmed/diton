@@ -19,12 +19,10 @@ export default function LiveKitMinimal({ roomName }: { roomName: string }) {
         room = new Room();
         await room.connect(wsUrl, token);
 
-        // فعّل الصوت
         await room.localParticipant.setMicrophoneEnabled(true);
 
-        // فعّل الكاميرا وأرفق الـtrack المحلي للفيديو
-        const camPub = await room.localParticipant.setCameraEnabled(true); // LocalTrackPublication | undefined
-        const camTrack = camPub?.track; // LocalVideoTrack | undefined
+        const camPub = await room.localParticipant.setCameraEnabled(true);
+        const camTrack = camPub?.track;
         if (localVideoRef.current && camTrack) {
           camTrack.attach(localVideoRef.current);
           localVideoRef.current.muted = true;
@@ -32,7 +30,6 @@ export default function LiveKitMinimal({ roomName }: { roomName: string }) {
           localVideoRef.current.autoplay = true;
         }
 
-        // عند الاشتراك بمسار بعيد
         room.on(
           RoomEvent.TrackSubscribed,
           (track: RemoteTrack, pub: RemoteTrackPublication, participant) => {
@@ -46,7 +43,6 @@ export default function LiveKitMinimal({ roomName }: { roomName: string }) {
           }
         );
 
-        // تنظيف عند إلغاء الاشتراك
         room.on(RoomEvent.TrackUnsubscribed, (track) => {
           track.detach().forEach((el) => el.remove());
         });
@@ -56,7 +52,7 @@ export default function LiveKitMinimal({ roomName }: { roomName: string }) {
     })();
 
     return () => {
-      try { room?.disconnect(); } catch {}
+      try { room?.disconnect(false as any); } catch {}
       room = null;
     };
   }, [roomName]);
