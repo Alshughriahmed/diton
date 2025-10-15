@@ -54,7 +54,7 @@ import LikeHud from "./LikeHud";
 
 /* ========= Types / consts ========= */
 type Phase = "idle" | "searching" | "matched" | "connected" | "stopped";
-const NEXT_COOLDOWN_MS = 350;
+const NEXT_COOLDOWN_MS = 800;
 const isBrowser = typeof window !== "undefined";
 
 /* ========= Component ========= */
@@ -172,6 +172,8 @@ export default function ChatClient() {
   async function leaveRoom() {
     const r = lkRoomRef.current;
     lkRoomRef.current = null;
+    if (remoteRef.current) remoteRef.current.srcObject = null;
+if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
     try {
       (globalThis as any).__ditonaDataChannel?.detach?.();
 
@@ -189,7 +191,18 @@ export default function ChatClient() {
             } catch {}
           }
         } catch {}
-        r.disconnect(false); // do not stop local tracks
+      await new Promise<void>((resolve) => {
+  let done = false;
+  const finish = () => { if (!done) { done = true; resolve(); } };
+  try {
+    const handler = () => finish();
+    r?.on(RoomEvent.Disconnected, handler);
+    setTimeout(finish, 1200);
+  } catch { finish(); }
+});
+ try { r?.off?.(RoomEvent.Disconnected, handler); } catch {}       
+await r.disconnect(false);
+  // do not stop local tracks
       }
       (globalThis as any).__lkRoom = null;
     } catch {}
@@ -278,19 +291,19 @@ export default function ChatClient() {
                 typeof lp.getTrackPublications === "function"
                   ? lp.getTrackPublications()
                   : Array.from(lp.trackPublications?.values?.() ?? []);
-              for (const pub of pubs) {
-                try {
-                  const tr: any = (pub as any).track;
-                  if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr);
-                } catch {}
-              }
-              for (const t of newStream.getTracks()) {
-                try {
-                  await room.localParticipant.publishTrack(t);
-                } catch {}
-              }
-            } catch {}
-          }
+           for (const pub of pubs) {
+  try {
+    if ((pub as any).kind === Track.Kind.Video) {
+      const tr: any = (pub as any).track;
+      if (tr && typeof lp.unpublishTrack === "function") lp.unpublishTrack(tr, { stop: false });
+    }
+  } catch {}
+}
+const nv = newStream.getVideoTracks()[0];
+if (nv) {
+  try { await room.localParticipant.publishTrack(nv); } catch {}
+}
+  
         } catch (e) {
           console.warn("Camera switch failed:", e);
         }
