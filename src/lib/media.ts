@@ -1,157 +1,99 @@
-"use client";
+// src/lib/media.ts
+// إدارة وسائط محلية بدون إيقاف التراكات بين Next/Prev.
+// وظائف مستخدمة: initLocalMedia, getLocalStream, toggleMic, toggleCam, switchCamera.
 
-type MediaState = {
-  stream: MediaStream | null; 
-  micOn: boolean; 
-  camOn: boolean; 
-  facing: "user" | "environment";
-  cameras: MediaDeviceInfo[];
-  currentCameraIndex: number;
-};
+let _stream: MediaStream | null = null;
+let _lastDeviceId: string | null = null;
 
-const mediaState: MediaState = {
-  stream: null,
-  micOn: true,
-  camOn: true,
-  facing: "user",
-  cameras: [],
-  currentCameraIndex: 0
-};
-
-// Initialize local media stream
-export async function initLocalMedia(): Promise<MediaStream> {
-  if (mediaState.stream) return mediaState.stream;
-  
-  // Get available cameras first
-  await updateAvailableCameras();
-  
-  const constraints: MediaStreamConstraints = {
-    audio: true,
-    video: {
-      facingMode: mediaState.facing,
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
-    }
-  };
-  
-  const stream = await navigator.mediaDevices.getUserMedia(constraints);
-  mediaState.stream = stream;
-  return stream;
+// أداة آمنة لاستدعاء mediaDevices
+function md() {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices) {
+    throw new Error("mediaDevices unavailable");
+  }
+  return navigator.mediaDevices;
 }
 
-// Get current local stream
 export function getLocalStream(): MediaStream | null {
-  return mediaState.stream;
+  return _stream;
 }
 
-// Toggle microphone
-export function toggleMic(): boolean {
-  const stream = mediaState.stream;
-  if (!stream) return false;
-  
-  mediaState.micOn = !mediaState.micOn;
-  stream.getAudioTracks().forEach(track => track.enabled = mediaState.micOn);
-  return mediaState.micOn;
-}
-
-// Toggle camera
-export function toggleCam(): boolean {
-  const stream = mediaState.stream;
-  if (!stream) return false;
-  
-  mediaState.camOn = !mediaState.camOn;
-  stream.getVideoTracks().forEach(track => track.enabled = mediaState.camOn);
-  return mediaState.camOn;
-}
-
-// Get available cameras
-export async function updateAvailableCameras(): Promise<MediaDeviceInfo[]> {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    mediaState.cameras = devices.filter(device => device.kind === 'videoinput');
-    return mediaState.cameras;
-  } catch (error) {
-    console.error('Failed to get cameras:', error);
-    return [];
+export async function initLocalMedia(): Promise<MediaStream> {
+  // إن وُجدت جلسة حيّة استعملها
+  if (_stream && _stream.getTracks().some((t) => t.readyState === "live")) {
+    return _stream;
   }
-}
 
-// Switch to next available camera
-export async function switchCamera(): Promise<MediaStream> {
-  if (mediaState.cameras.length < 2) {
-    // Fallback to facingMode switching for mobile
-    mediaState.facing = mediaState.facing === "user" ? "environment" : "user";
-    const newStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: { facingMode: mediaState.facing }
-    });
-    
-    mediaState.stream?.getTracks().forEach(track => track.stop());
-    mediaState.stream = newStream;
-    return newStream;
-  }
-  
-  // Desktop: cycle through available cameras
-  mediaState.currentCameraIndex = (mediaState.currentCameraIndex + 1) % mediaState.cameras.length;
-  const selectedCamera = mediaState.cameras[mediaState.currentCameraIndex];
-  
   const constraints: MediaStreamConstraints = {
-    audio: true,
-    video: {
-      deviceId: { exact: selectedCamera.deviceId },
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
-    }
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
   };
-  
-  const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-  
-  // Replace tracks in existing stream if available, or create new stream
-  if (mediaState.stream) {
-    const currentVideoTrack = mediaState.stream.getVideoTracks()[0];
-    const newVideoTrack = newStream.getVideoTracks()[0];
-    
-    if (currentVideoTrack && newVideoTrack) {
-      // Replace track for WebRTC connections
-      await mediaState.stream.removeTrack(currentVideoTrack);
-      currentVideoTrack.stop();
-      mediaState.stream.addTrack(newVideoTrack);
-      
-      // Keep existing audio
-      newStream.getAudioTracks().forEach(track => track.stop());
-    } else {
-      // Fallback: replace entire stream
-      mediaState.stream.getTracks().forEach(track => track.stop());
-      mediaState.stream = newStream;
-    }
+
+  _stream = await md().getUserMedia(constraints);
+  const v = _stream.getVideoTracks()[0];
+  if (v) {
+    const s = v.getSettings();
+    _lastDeviceId = (s.deviceId as string) || null;
+  }
+  return _stream;
+}
+
+export function toggleMic(): boolean {
+  if (!_stream) return false;
+  const tracks = _stream.getAudioTracks();
+  if (!tracks.length) return false;
+  const enabled = !tracks.every((t) => t.enabled === true);
+  // إن لم تكن كلها مُمكّنة، فعِّل الكل، وإلا عطّل الكل
+  const next = tracks.some((t) => t.enabled === false) ? true : !enabled;
+  tracks.forEach((t) => (t.enabled = next));
+  return next;
+}
+
+export function toggleCam(): boolean {
+  if (!_stream) return false;
+  const tracks = _stream.getVideoTracks();
+  if (!tracks.length) return false;
+  const next = !tracks[0].enabled;
+  tracks.forEach((t) => (t.enabled = next));
+  return next;
+}
+
+export async function switchCamera(): Promise<MediaStream> {
+  // احصل على قائمة كاميرات
+  const devices = await md().enumerateDevices();
+  const cams = devices.filter((d) => d.kind === "videoinput");
+  if (!cams.length) throw new Error("no cameras");
+
+  // اختر التالية بعد الحالية
+  let idx = 0;
+  if (_lastDeviceId) {
+    const curIdx = cams.findIndex((d) => d.deviceId === _lastDeviceId);
+    idx = (curIdx + 1) % cams.length;
+  }
+  const target = cams[idx];
+
+  // أنشئ دفقًا جديدًا من الكاميرا المختارة. لا توقف المايك.
+  const newVideo = await md().getUserMedia({
+    video: { deviceId: { exact: target.deviceId } },
+    audio: false,
+  });
+
+  // دمج: استبدل فيديو فقط داخل الـstream الحالي أو اعتمده كجديد
+  if (_stream) {
+    // انزع الفيديو القديم من _stream وأوقفه لتحرير الكاميرا السابقة فقط
+    _stream.getVideoTracks().forEach((t) => {
+      try {
+        _stream!.removeTrack(t);
+        t.stop();
+      } catch {}
+    });
+    // أضف فيديو جديد
+    const nv = newVideo.getVideoTracks()[0];
+    if (nv) _stream.addTrack(nv);
   } else {
-    mediaState.stream = newStream;
+    // إن لم توجد جلسة سابقة، أنشئ واحدة بفيديو فقط
+    _stream = new MediaStream(newVideo.getVideoTracks());
   }
-  
-  return mediaState.stream;
-}
 
-// Get camera info
-export function getCameraInfo(): { facing: string; available: number; current: number } {
-  return {
-    facing: mediaState.facing,
-    available: mediaState.cameras.length,
-    current: mediaState.currentCameraIndex
-  };
-}
-
-// Get media state
-export function getMediaState(): { micOn: boolean; camOn: boolean } {
-  return {
-    micOn: mediaState.micOn,
-    camOn: mediaState.camOn
-  };
-}
-
-// Clean up media resources
-export function stopLocalMedia(): void {
-  if (mediaState.stream) {
-    mediaState.stream.getTracks().forEach(track => track.stop());
-    mediaState.stream = null;
-  }
+  _lastDeviceId = target.deviceId;
+  return _stream!;
 }
