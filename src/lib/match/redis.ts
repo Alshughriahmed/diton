@@ -97,15 +97,19 @@ export async function tryMatch(myTicket: string, widen: boolean): Promise<string
   if (!my || my.length === 0) return null;
   const myObj = hToObj(my);
 
-  // scan queue in FIFO order
-  const now = Date.now();
-  const windowStart = now - TTL * 1000;
-  const z = await rget<[string, number][]>(["ZRANGE", Q, "0", "-1", "WITHSCORES"], [])!;
-  for (let i = 0; i < z.length; i += 2) {
-    const t = z[i] as unknown as string;
-    const ts = Number(z[i + 1]);
-    if (!t || t === myTicket) continue;
-    if (ts < windowStart) continue;
+ // scan queue in FIFO order
+const now = Date.now();
+const windowStart = now - TTL * 1000;
+
+// WITHSCORES يرجع [member, score, member, score, ...] وقد تكون النتيجة null
+const flat = await rget<string[] | null>(["ZRANGE", Q, "0", "-1", "WITHSCORES"], null);
+const z: string[] = Array.isArray(flat) ? flat : [];
+
+for (let i = 0; i < z.length; i += 2) {
+  const t = String(z[i] ?? "");
+  const ts = Number(z[i + 1] ?? NaN);
+  if (!t || t === myTicket) continue;
+  if (!Number.isFinite(ts) || ts < windowStart) continue;
 
     // skip if peer already paired
     const mapped = await getRoom(t);
