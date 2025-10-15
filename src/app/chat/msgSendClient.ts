@@ -9,21 +9,8 @@
 declare global {
   interface Window {
     __msgSendMounted?: 1;
-    __lkRoom?: {
-      state?: string;
-      localParticipant?: {
-        publishData?: (
-          payload: Uint8Array,
-          opts?: { reliable?: boolean; topic?: string }
-        ) => Promise<void> | void;
-      };
-    } | null;
-    __ditonaDataChannel?: {
-      addEventListener?: (type: "message", handler: (ev: MessageEvent) => void) => void;
-      removeEventListener?: (type: "message", handler: (ev: MessageEvent) => void) => void;
-      setSendGuard?: (fn: () => boolean) => void;
-      send?: (data: string | ArrayBufferView | ArrayBuffer) => void;
-    } | null;
+    __lkRoom?: any;                 // keep as any to match global.d.ts
+    __ditonaDataChannel?: any;      // shim or real DC; dynamic shape
   }
 }
 
@@ -76,7 +63,7 @@ if (typeof window !== "undefined" && !window.__msgSendMounted) {
     const j = parseJSONFromDC(ev);
     if (!j) return;
 
-    // Supported inbound formats
+    // Supported inbound formats:
     // { t: "chat", text: "..." }
     // { type: "chat", payload: { text: "..." } }
     let txt: string | undefined;
