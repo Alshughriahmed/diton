@@ -1,111 +1,127 @@
-"use client";
-import safeFetch from '@/app/chat/safeFetch';
-// side-effect module, runs in client because it's imported by a client component
-// Minimal-Diff wiring for message sending with per-pair limit handled server-side.
+// src/app/chat/msgSendClient.ts
+/**
+ * Idempotent client module for chat messaging over LiveKit Data.
+ * - Listens to DC "message" and emits "ditona:chat:recv".
+ * - Sends on "ditona:chat:send" events.
+ * - Falls back to shim .send() if room.publishData is unavailable.
+ */
 
-import { busOn as on, busEmit as emit } from "@/utils/bus";
-
-let currentPairId: string = "";
-let wiredForms = new WeakSet<HTMLFormElement>();
-
-function readCookie(name: string): string {
-  if (typeof document === "undefined") return "";
-  const m = document.cookie.match(new RegExp("(^|; )" + name.replace(/[-[\]/{}()*+?.\\^$|]/g, "\\$&") + "=([^;]*)"));
-  return m ? decodeURIComponent(m[2]) : "";
+declare global {
+  interface Window {
+    __msgSendMounted?: 1;
+    __lkRoom?: {
+      state?: string;
+      localParticipant?: {
+        publishData?: (
+          payload: Uint8Array,
+          opts?: { reliable?: boolean; topic?: string }
+        ) => Promise<void> | void;
+      };
+    } | null;
+    __ditonaDataChannel?: {
+      addEventListener?: (type: "message", handler: (ev: MessageEvent) => void) => void;
+      removeEventListener?: (type: "message", handler: (ev: MessageEvent) => void) => void;
+      setSendGuard?: (fn: () => boolean) => void;
+      send?: (data: string | ArrayBufferView | ArrayBuffer) => void;
+    } | null;
+  }
 }
 
-function getAnon(): string {
-  // try multiple cookie names
-  const c1 = readCookie("anon");
-  const c2 = readCookie("ditona_anon");
-  return c1 || c2 || "";
-}
-
-async function send(text: string, pairId: string): Promise<"ok"|"limit"|"err"> {
+function parseJSONFromDC(ev: MessageEvent) {
+  const d = ev?.data;
+  let s: string | null = null;
+  if (typeof d === "string") s = d;
+  else if (d instanceof ArrayBuffer) s = new TextDecoder().decode(new Uint8Array(d));
+  else if (ArrayBuffer.isView(d)) s = new TextDecoder().decode(d as any);
+  if (!s || !/^\s*\{/.test(s)) return null;
   try {
-    // Check message allowance for non-VIP first
-    const ok = await safeFetch('/api/message/allow', {
-      method:'POST',
-      headers:{ 'content-type':'application/json' },
-      body: JSON.stringify({ pairId })
-    }).then(r => r.ok).catch(()=>false);
-    if(!ok) return "limit"; // Will trigger upsell
-
-    const r = await safeFetch("/api/message", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-anon": getAnon(),
-      },
-      body: JSON.stringify({ text, pairId }),
-    });
-    if (r.status === 429) return "limit";
-    if (!r.ok) return "err";
-    return "ok";
+    return JSON.parse(s);
   } catch {
-    return "err";
+    return null;
   }
 }
 
-function bindForm(form: HTMLFormElement) {
-  if (!form || wiredForms.has(form)) return;
-  const input = form.querySelector<HTMLInputElement>('[data-ui="msg-input"], input[name="message"], textarea[name="message"]');
-  const btn   = form.querySelector<HTMLButtonElement>('[data-ui="msg-send"], button[type="submit"]');
-  if (!input) return;
+async function sendChat(text: string): Promise<boolean> {
+  if (!text || !text.trim()) return false;
+  const payloadObj = { t: "chat", text: String(text).slice(0, 2000) };
+  const payloadTxt = JSON.stringify(payloadObj);
+  const payloadBin = new TextEncoder().encode(payloadTxt);
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = (input.value || "").trim();
-    if (!text) return;
+  const room = window.__lkRoom;
+  if (room && room.state === "connected" && room.localParticipant?.publishData) {
     try {
-      btn?.setAttribute("disabled", "");
-      const res = await send(text, currentPairId);
-      if (res === "ok") {
-        input.value = "";
-        emit("ui:msg:sent", { text, pairId: currentPairId });
-      } else if (res === "limit") {
-        emit("ui:upsell", "messages");
-      } else {
-        emit("ui:toast", { type: "error", text: "Message failed" });
-      }
-    } finally {
-      btn?.removeAttribute("disabled");
-    }
-  });
-
-  wiredForms.add(form);
-}
-
-function scanAndBind() {
-  if (typeof document === "undefined") return;
-  document.querySelectorAll<HTMLFormElement>('[data-ui="msg-form"], form[data-msg], form#chat-msg-form')
-    .forEach(bindForm);
-}
-
-function setupObserver() {
-  if (typeof MutationObserver === "undefined" || typeof document === "undefined") return;
-  const obs = new MutationObserver(() => scanAndBind());
-  obs.observe(document.body, { subtree: true, childList: true });
-  scanAndBind();
-}
-
-// reset count perspective per pair and keep latest pairId
-on("rtc:pair", (p: any) => {
-  currentPairId = (p?.pairId || p?.id || "") + "";
-  // optional UI hook
-  emit("ui:msg:pair", { pairId: currentPairId });
-});
-
-// initial kick
-if (typeof window !== "undefined") {
-  if (!(window as any).__ditona_msg_wired) {
-    (window as any).__ditona_msg_wired = true;
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", () => { setupObserver(); });
-    } else {
-      setupObserver();
+      await room.localParticipant.publishData(payloadBin, { reliable: true, topic: "chat" });
+      return true;
+    } catch {
+      // fall through
     }
   }
+  const dc = window.__ditonaDataChannel;
+  if (dc?.send) {
+    try {
+      dc.send(payloadTxt);
+      return true;
+    } catch {
+      // ignore
+    }
+  }
+  return false;
+}
+
+if (typeof window !== "undefined" && !window.__msgSendMounted) {
+  window.__msgSendMounted = 1;
+
+  // Incoming messages
+  const onDCMessage = (ev: MessageEvent) => {
+    const j = parseJSONFromDC(ev);
+    if (!j) return;
+
+    // Supported inbound formats
+    // { t: "chat", text: "..." }
+    // { type: "chat", payload: { text: "..." } }
+    let txt: string | undefined;
+    if (j?.t === "chat" && typeof j.text === "string") txt = j.text;
+    else if (j?.type === "chat" && j?.payload && typeof j.payload.text === "string") txt = j.payload.text;
+
+    if (txt && txt.length) {
+      window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: txt } }));
+    }
+  };
+
+  try {
+    const dc = window.__ditonaDataChannel;
+    dc?.addEventListener?.("message", onDCMessage);
+    dc?.setSendGuard?.(() => {
+      const room = window.__lkRoom;
+      return !!room && room.state === "connected";
+    });
+  } catch {}
+
+  // Outgoing messages via UI event
+  const onSend = async (e: Event) => {
+    try {
+      const detail = (e as CustomEvent)?.detail;
+      const text = typeof detail?.text === "string" ? detail.text : "";
+      await sendChat(text);
+    } catch {
+      // ignore
+    }
+  };
+
+  window.addEventListener("ditona:chat:send", onSend as any);
+
+  // Cleanup on pagehide
+  window.addEventListener(
+    "pagehide",
+    () => {
+      try {
+        const dc = window.__ditonaDataChannel;
+        dc?.removeEventListener?.("message", onDCMessage);
+        window.removeEventListener("ditona:chat:send", onSend as any);
+      } catch {}
+    },
+    { once: true }
+  );
 }
 
 export {};
