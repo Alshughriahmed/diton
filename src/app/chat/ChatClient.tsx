@@ -709,6 +709,11 @@ export default function ChatClient() {
       // attach DC shim and mark connected
       exposeCompatDC(room);
       try { (globalThis as any).__ditonaDataChannel?.setConnected?.(true); } catch {}
+       // اطلب ميتاداتا الطرف الآخر
+       try {
+        const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
+        await room.localParticipant.publishData(payload, { reliable: true, topic: "meta" });
+    } catch {}
 
       // publish local tracks
       const src = effectsStream ?? getLocalStream();
