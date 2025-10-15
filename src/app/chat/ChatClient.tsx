@@ -256,7 +256,7 @@ export default function ChatClient() {
           try {
             const tr: any = (pub as any).track;
             if (tr && typeof lp.unpublishTrack === "function") {
-              await lp.unpublishTrack(tr, { stop: false });
+             await lp.unpublishTrack(tr as any, false);
             }
           } catch {}
         }
@@ -505,7 +505,7 @@ const off3 = on("ui:switchCamera", async () => {
         const tr = pub?.track;
         if (kind === Track.Kind.Video || pub?.source === "camera") {
           try {
-            await room.localParticipant.unpublishTrack(tr, { stop: false });
+            await room.localParticipant.unpublishTrack(tr as any, false);
           } catch {}
         }
       }
