@@ -4,7 +4,6 @@
 import "@/app/chat/dcShim.client";
 
 /* ======================= boot / guards ======================= */
-import safeFetch from "@/app/chat/safeFetch";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 import "./freeForAllBridge";
@@ -140,42 +139,40 @@ export default function ChatClient() {
   }
 
   async function nextReq(ticket: string) {
-  const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=8000`, {
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (r.status === 204) return null;
-  if (!r.ok) throw new Error("next failed " + r.status);
-  const j = await r.json();
+    const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=8000`, {
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (r.status === 204) return null;
+    if (!r.ok) throw new Error("next failed " + r.status);
+    const j = await r.json();
 
-  // تطبيع قيمة الغرفة إلى نص دائمًا
-  const raw = j?.room;
-  let room: string | null = null;
-  if (typeof raw === "string") room = raw;
-  else if (raw && typeof raw === "object") {
-    room = String((raw as any).name || (raw as any).id || (raw as any).room || JSON.stringify(raw));
+    const raw = j?.room;
+    let room: string | null = null;
+    if (typeof raw === "string") room = raw;
+    else if (raw && typeof raw === "object") {
+      room = String((raw as any).name || (raw as any).id || (raw as any).room || JSON.stringify(raw));
+    }
+    if (!room) throw new Error("invalid room payload");
+    return room;
   }
-  if (!room) throw new Error("invalid room payload");
-  return room;
-}
 
+  async function tokenReq(room: unknown, id: string) {
+    const roomName =
+      typeof room === "string"
+        ? room
+        : String((room as any)?.name || (room as any)?.id || (room as any)?.room || room);
 
- async function tokenReq(room: unknown, id: string) {
-  const roomName =
-    typeof room === "string"
-      ? room
-      : String((room as any)?.name || (room as any)?.id || (room as any)?.room || room);
+    if (!roomName || typeof roomName !== "string") throw new Error("bad room name");
 
-  if (!roomName || typeof roomName !== "string") throw new Error("bad room name");
-
-  const r = await fetch(
-    `/api/livekit/token?room=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(id)}`,
-    { credentials: "include", cache: "no-store" }
-  );
-  if (!r.ok) throw new Error("token failed " + r.status);
-  const j = await r.json();
-  return j.token as string;
-}
+    const r = await fetch(
+      `/api/livekit/token?room=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(id)}`,
+      { credentials: "include", cache: "no-store" }
+    );
+    if (!r.ok) throw new Error("token failed " + r.status);
+    const j = await r.json();
+    return j.token as string;
+  }
 
   /** اربط الشِّيم فقط. لا تنشئ أو تستبدل __ditonaDataChannel هنا. */
   function exposeCompatDC(room: Room) {
@@ -192,7 +189,8 @@ export default function ChatClient() {
     try {
       (globalThis as any).__ditonaDataChannel?.detach?.();
       (globalThis as any).__lkRoom = null;
-      r?.disconnect(true);
+      // لا توقف المسارات المحليّة
+      r?.disconnect(false as any);
     } catch {}
   }
 
@@ -251,45 +249,9 @@ export default function ChatClient() {
     updatePeerBadges(meta);
   };
 
-  /* ---------- autostart ---------- */
-  useEffect(() => {
-    if (!hydrated || !isBrowser) return;
-    if ((window as any).__ditonaAutostartDone) return;
-    (window as any).__ditonaAutostartDone = 1;
-
-    const doAutoStart = async () => {
-      try {
-        const { prefetchGeo } = await import("@/lib/geoCache");
-        prefetchGeo();
-
-        await new Promise((r) => setTimeout(r, 300));
-
-        const stream = await initLocalMedia();
-        if (stream && localRef.current) {
-          localRef.current.srcObject = stream;
-          localRef.current.play().catch(() => {});
-        }
-
-        await new Promise((r) => setTimeout(r, 150));
-        window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "boot" } }));
-
-        try {
-          await safeFetch("/api/age/allow", {
-            method: "POST",
-            credentials: "include",
-            cache: "no-store",
-          });
-        } catch {}
-
-        emit("ui:next");
-      } catch (err) {
-        console.warn("[auto-start] Failed:", err);
-      }
-    };
-
-    const t = setTimeout(doAutoStart, 100);
-    return () => clearTimeout(t);
-  }, [hydrated]);
+  /* ---------- لا تشغيل مزدوج ---------- */
+  // أزلنا تأثير autostart الذي كان يطلق ui:next.
+  // الاعتماد فقط على initMediaWithPermissionChecks أدناه.
 
   /* ---------- global UI events ---------- */
   useKeyboardShortcuts();
@@ -476,6 +438,7 @@ export default function ChatClient() {
         localRef.current.srcObject = s;
         localRef.current.muted = true;
         localRef.current.play().catch(() => {});
+        // تشغيل واحد فقط بعد تجهيز الوسائط
         joinViaRedisMatch().catch((e) => console.warn("joinViaRedisMatch failed", e));
         setReady(true);
       }
@@ -514,7 +477,7 @@ export default function ChatClient() {
         lkRoomRef.current = null;
         if (room) {
           try {
-            room.disconnect();
+            room.disconnect(false as any);
           } catch {}
         }
       } catch {}
@@ -533,7 +496,7 @@ export default function ChatClient() {
         (globalThis as any).__ditonaDataChannel?.detach?.();
         if (room) {
           try {
-            room.disconnect();
+            room.disconnect(false as any);
           } catch {}
         }
       } catch {}
@@ -670,17 +633,11 @@ export default function ChatClient() {
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
       });
 
-      // تطبيع اسم الغرفة قبل طلب التوكن
-let roomNameStr =
-  typeof roomName === "string"
-    ? roomName
-    : String((roomName as any)?.name || (roomName as any)?.id || (roomName as any)?.room || roomName);
-
-const id = identity();
-const token = await tokenReq(roomNameStr, id);
-const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
-await room.connect(ws, token);
-
+      // token + connect
+      const id = identity();
+      const token = await tokenReq(roomName, id);
+      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+      await room.connect(ws, token);
 
       // اربط الشيم بالغرفة
       exposeCompatDC(room);
@@ -779,34 +736,34 @@ await room.connect(ws, token);
                     <div className="mb-2 text-yellow-400">⚠️</div>
                     <div className="mb-4">{cameraPermissionHint}</div>
                     <button
-                   onClick={async () => {
-  try {
-    setCameraPermissionHint("");
-    await initLocalMedia();                     // تجهيز الوسائط فقط
-    const s = getLocalStream();
-    if (localRef.current && s) {
-      localRef.current.srcObject = s as MediaStream;
-      localRef.current.muted = true;
-      await localRef.current.play().catch(() => {});
-      setReady(true);                           // لا مطابقة هنا
-    }
-  } catch (error: any) {
-    console.warn("Retry failed:", error);
-    if (error?.name === "NotAllowedError") {
-      setCameraPermissionHint("Allow camera and microphone from browser settings");
-    } else if (error?.name === "NotReadableError" || error?.name === "AbortError") {
-      setCameraPermissionHint("Close the other tab or allow camera");
-    } else if (error?.name === "NotFoundError") {
-      setCameraPermissionHint("No camera or microphone found");
-    } else {
-      setCameraPermissionHint("Camera access error — check permissions");
-    }
-  }
-}}
-className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
->
-  Retry
-</button> 
+                      onClick={async () => {
+                        try {
+                          setCameraPermissionHint("");
+                          await initLocalMedia();
+                          const s = getLocalStream();
+                          if (localRef.current && s) {
+                            localRef.current.srcObject = s as MediaStream;
+                            localRef.current.muted = true;
+                            await localRef.current.play().catch(() => {});
+                            setReady(true);
+                          }
+                        } catch (error: any) {
+                          console.warn("Retry failed:", error);
+                          if (error?.name === "NotAllowedError") {
+                            setCameraPermissionHint("Allow camera and microphone from browser settings");
+                          } else if (error?.name === "NotReadableError" || error?.name === "AbortError") {
+                            setCameraPermissionHint("Close the other tab or allow camera");
+                          } else if (error?.name === "NotFoundError") {
+                            setCameraPermissionHint("No camera or microphone found");
+                          } else {
+                            setCameraPermissionHint("Camera access error — check permissions");
+                          }
+                        }
+                      }}
+                      className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
+                    >
+                      Retry
+                    </button>
                   </>
                 ) : (
                   <div>Requesting camera/mic…</div>
