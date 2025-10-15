@@ -1,156 +1,230 @@
 // src/lib/match/redis.ts
-// Queue + matching over Upstash Redis (HTTP REST)
+import crypto from "node:crypto";
 
-type Gender = "all" | "male" | "female";
-export type EnqueueBody = {
+/* ======================= Types ======================= */
+export type Gender = "all" | "male" | "female";
+export type Entry = {
+  ticket: string;
   identity: string;
   deviceId: string;
   vip: boolean;
   selfGender: "male" | "female" | "u";
   selfCountry: string | null;
   filterGenders: Gender;
-  filterCountries: string[]; // [] => ALL
+  filterCountries: string[];
+  ts: number;
 };
 
-const RURL = process.env.UPSTASH_REDIS_REST_URL!;
-const RTOK = process.env.UPSTASH_REDIS_REST_TOKEN!;
+/* ======================= ENV / Consts ======================= */
+const TTL_SEC = parseInt(process.env.MATCH_TTL_SEC || "", 10) || 45;
 
+const URL = process.env.UPSTASH_REDIS_REST_URL || "";
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+
+/** تستخدمها مسارات API للتحقق السريع قبل النداء */
 export function haveRedisEnv() {
-  return !!RURL && !!RTOK;
+  return !!URL && !!TOKEN;
+}
+function assertEnv() {
+  if (!URL || !TOKEN) {
+    throw new Error(
+      "UPSTASH env missing: " + JSON.stringify({ hasUrl: !!URL, hasToken: !!TOKEN })
+    );
+  }
 }
 
-async function rget<T = unknown>(cmd: string[], fallback: T | null = null): Promise<T | null> {
-  const r = await fetch(RURL, {
+/* ======================= Upstash REST helpers ======================= */
+async function rc(cmd: (string | number)[]): Promise<any> {
+  assertEnv();
+  const r = await fetch(URL, {
     method: "POST",
-    headers: { authorization: `Bearer ${RTOK}`, "content-type": "application/json" },
-    body: JSON.stringify({ pipeline: [cmd] }),
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ command: cmd.map(String) }), // شكل صحيح لـ Upstash
     cache: "no-store",
   });
-  if (!r.ok) return fallback;
-  const j = (await r.json()) as { result: unknown }[];
-  const v = j?.[0]?.result ?? null;
-  return (v as T) ?? (fallback as any);
+  if (!r.ok) throw new Error(`redis ${cmd[0]} failed: ${r.status}`);
+  const j = await r.json();
+  return j?.result;
 }
-async function rpipe(cmds: string[][]) {
-  await fetch(RURL, {
+
+async function rcp(commands: (string | number)[][]): Promise<any[]> {
+  assertEnv();
+  const r = await fetch(URL + "/pipeline", {
     method: "POST",
-    headers: { authorization: `Bearer ${RTOK}`, "content-type": "application/json" },
-    body: JSON.stringify({ pipeline: cmds }),
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ commands: commands.map((a) => a.map(String)) }), // شكل صحيح
     cache: "no-store",
-  }).catch(() => {});
+  });
+  if (!r.ok) throw new Error(`redis pipeline failed: ${r.status}`);
+  const j = await r.json();
+  const arr = Array.isArray(j?.results) ? j.results : [];
+  return arr.map((x: any) => x?.result);
 }
 
-/* keys */
-const Q = "mq:q"; // ZSET ticket -> ts
-const A = (t: string) => `mq:attr:${t}`; // HSET
-const ROOM = (t: string) => `mq:room:${t}`; // STRING
+/* ======================= Keys ======================= */
+const KQ = "mq:q"; // ZSET: ts -> ticket
+const KATTR = (t: string) => `mq:attr:${t}`; // JSON per ticket
+const KROOM = (t: string) => `mq:room:${t}`; // room per ticket
+const KDEV = (d: string) => `mq:dev:${d}`; // deviceId -> ticket (للمعلومات فقط)
 
-const TTL = 60; // seconds
+/* ======================= Utils ======================= */
+const now = () => Date.now();
 
-function acc(a: EnqueueBody, b: EnqueueBody, widen: boolean) {
-  if (widen) return true;
-  const gOk = a.filterGenders === "all" || (b.selfGender !== "u" && a.filterGenders === b.selfGender);
-  const cOk =
+function parseJSON<T>(s: any): T | null {
+  try {
+    if (!s) return null;
+    return typeof s === "string" ? (JSON.parse(s) as T) : (s as T);
+  } catch {
+    return null;
+  }
+}
+
+function stableRoom(a: string, b: string): string {
+  const [x, y] = [a, b].sort();
+  const short = crypto.createHash("sha1").update(x + ":" + y).digest("hex").slice(0, 8);
+  return `pair-${short}-${x.slice(0, 4)}${y.slice(0, 4)}`;
+}
+
+/* ======================= Public API ======================= */
+
+/**
+ * دائمًا ينشئ تذكرة جديدة. لا يعيد استخدام تذاكر الأجهزة.
+ */
+export async function enqueue(
+  entry: Omit<Entry, "ticket" | "ts">
+): Promise<{ ticket: string }> {
+  const ticket = crypto.randomUUID();
+  const full: Entry = {
+    ticket,
+    identity: entry.identity,
+    deviceId: entry.deviceId,
+    vip: !!entry.vip,
+    selfGender: entry.selfGender,
+    selfCountry: entry.selfCountry ?? null,
+    filterGenders: entry.filterGenders,
+    filterCountries: entry.filterCountries || [],
+    ts: now(),
+  };
+
+  await rcp([
+    ["SET", KATTR(ticket), JSON.stringify(full)],
+    ["EXPIRE", KATTR(ticket), TTL_SEC],
+    ["SET", KDEV(entry.deviceId), ticket], // للمرجعة فقط
+    ["EXPIRE", KDEV(entry.deviceId), TTL_SEC],
+    ["ZADD", KQ, full.ts.toString(), ticket],
+  ]);
+
+  return { ticket };
+}
+
+function accepts(a: Entry, b: Entry): boolean {
+  const genderOk =
+    a.filterGenders === "all" ||
+    (b.selfGender !== "u" && a.filterGenders === b.selfGender);
+  const countryOk =
     a.filterCountries.length === 0 ||
-    (!!b.selfCountry && a.filterCountries.includes(String(b.selfCountry).toUpperCase()));
-  return gOk && cOk;
+    (!!b.selfCountry && a.filterCountries.includes(b.selfCountry.toUpperCase()));
+  return genderOk && countryOk;
 }
 
-/* ------------ public API ------------ */
+/**
+ * يحاول مطابقة تذكرة. إذا widen=true يتساهل بالقبول FIFO.
+ */
+export async function tryMatch(
+  ticket: string,
+  widen: boolean
+): Promise<{ room?: string } | null> {
+  // صفاتي
+  const myAttrStr = await rc(["GET", KATTR(ticket)]);
+  if (!myAttrStr) return null;
+  const me = parseJSON<Entry>(myAttrStr)!;
 
-export async function enqueue(entry: EnqueueBody, ticket?: string): Promise<string> {
-  const t = ticket || crypto.randomUUID();
+  // سبق وتمت خريطته لغرفة؟
+  const existing = await rc(["GET", KROOM(ticket)]);
+  if (existing) return { room: existing as string };
 
-  const cmds: string[][] = [
-    ["ZADD", Q, Date.now().toString(), t],
-    ["EXPIRE", Q, TTL.toString()],
-    // store attrs
-    ["HSET", A(t),
-      "identity", entry.identity,
-      "deviceId", entry.deviceId,
-      "vip", entry.vip ? "1" : "0",
-      "selfGender", entry.selfGender,
-      "selfCountry", entry.selfCountry ?? "",
-      "filterGenders", entry.filterGenders,
-      "filterCountries", JSON.stringify(entry.filterCountries ?? [])
-    ],
-    ["EXPIRE", A(t), TTL.toString()],
-  ];
-  await rpipe(cmds);
-  return t;
+  // تنظيف قديم في الـ ZSET
+  const cutoff = now() - TTL_SEC * 1000;
+  const old = (await rc(["ZRANGEBYSCORE", KQ, "-inf", String(cutoff)])) as string[] | null;
+  if (Array.isArray(old) && old.length) {
+    await rc(["ZREM", KQ, ...old]);
+  }
+
+  // فحص المرشحين FIFO (مع الدرجات)
+  const zRaw = (await rc(["ZRANGE", KQ, "0", "199", "WITHSCORES"])) as any[] | null;
+  const z: any[] = Array.isArray(zRaw) ? zRaw : [];
+  for (let i = 0; i < z.length; i += 2) {
+    const candT = String(z[i] ?? "");
+    const ts = Number(z[i + 1] ?? 0);
+    if (!candT || candT === ticket) continue;
+    if (ts < cutoff) continue;
+
+    const [cAttrStr, cRoom] = await rcp([
+      ["GET", KATTR(candT)],
+      ["GET", KROOM(candT)],
+    ]);
+    if (!cAttrStr || cRoom) continue;
+
+    const other = parseJSON<Entry>(cAttrStr);
+    if (!other) continue;
+
+    const ok = widen ? true : accepts(me, other) && accepts(other, me);
+    if (!ok) continue;
+
+    // احجز غرفة ثابتة للطرفين ثم أخرج من الصف
+    const room = stableRoom(ticket, candT);
+    await rcp([
+      ["SET", KROOM(ticket), room],
+      ["EXPIRE", KROOM(ticket), TTL_SEC],
+      ["SET", KROOM(candT), room],
+      ["EXPIRE", KROOM(candT), TTL_SEC],
+      ["ZREM", KQ, ticket, candT],
+    ]);
+    return { room };
+  }
+
+  // أعِد تأكيد وجودي في الصف مع آخر طابع زمني
+  await rc(["ZADD", KQ, "NX", String(now()), ticket]);
+  return null;
 }
 
 export async function getRoom(ticket: string): Promise<string | null> {
-  const v = await rget<{ result: string }>(["GET", ROOM(ticket)], null);
-  if (typeof (v as any)?.result === "string") return (v as any).result;
-  if (typeof (v as any) === "string") return v as any;
-  return null;
+  const r = await rc(["GET", KROOM(ticket)]);
+  return (r as string) || null;
 }
 
-export async function tryMatch(myTicket: string, widen: boolean): Promise<string | null> {
-  // already paired?
-  const exists = await getRoom(myTicket);
-  if (exists) return exists;
+export async function purge(): Promise<number> {
+  const cutoff = now() - TTL_SEC * 1000;
+  let removed = 0;
 
-  // get my attrs
-  const my = await rget<string[]>(["HGETALL", A(myTicket)], null);
-  if (!my || my.length === 0) return null;
-  const myObj = hToObj(my);
+  // أزل القديمة من الـ ZSET
+  const old = (await rc(["ZRANGEBYSCORE", KQ, "-inf", String(cutoff)])) as string[] | null;
+  if (Array.isArray(old) && old.length) {
+    await rc(["ZREM", KQ, ...old]);
+    removed += old.length;
+  }
 
- // scan queue in FIFO order
-const now = Date.now();
-const windowStart = now - TTL * 1000;
-
-// WITHSCORES يرجع [member, score, member, score, ...] وقد تكون النتيجة null
-const flat = await rget<string[] | null>(["ZRANGE", Q, "0", "-1", "WITHSCORES"], null);
-const z: string[] = Array.isArray(flat) ? flat : [];
-
-for (let i = 0; i < z.length; i += 2) {
-  const t = String(z[i] ?? "");
-  const ts = Number(z[i + 1] ?? NaN);
-  if (!t || t === myTicket) continue;
-  if (!Number.isFinite(ts) || ts < windowStart) continue;
-
-    // skip if peer already paired
-    const mapped = await getRoom(t);
-    if (mapped) continue;
-
-    const peerArr = await rget<string[]>(["HGETALL", A(t)], null);
-    if (!peerArr || peerArr.length === 0) continue;
-    const peer = hToObj(peerArr);
-
-    if (acc(myObj, peer, widen) && acc(peer, myObj, widen)) {
-      const room = stableRoom(myTicket, t);
-      await rpipe([
-        ["SET", ROOM(myTicket), room, "EX", TTL.toString()],
-        ["SET", ROOM(t), room, "EX", TTL.toString()],
-        ["ZREM", Q, myTicket],
-        ["ZREM", Q, t],
-      ]);
-      return room;
+  // تحقق من رؤوس الصف التي فقدت صفاتها
+  const head = (await rc(["ZRANGE", KQ, "0", "199"])) as string[] | null;
+  const list = Array.isArray(head) ? head : [];
+  for (const t of list) {
+    const a = await rc(["GET", KATTR(t)]);
+    if (!a) {
+      await rc(["ZREM", KQ, t]);
+      removed++;
     }
   }
-  return null;
+
+  return removed;
 }
 
-/* ------------ helpers ------------ */
-function hToObj(arr: string[]): EnqueueBody {
-  const o: any = {};
-  for (let i = 0; i < arr.length; i += 2) o[arr[i]] = arr[i + 1];
-  return {
-    identity: String(o.identity || ""),
-    deviceId: String(o.deviceId || ""),
-    vip: o.vip === "1",
-    selfGender: (o.selfGender === "male" || o.selfGender === "female") ? o.selfGender : "u",
-    selfCountry: o.selfCountry ? String(o.selfCountry) : null,
-    filterGenders: (o.filterGenders === "male" || o.filterGenders === "female") ? o.filterGenders : "all",
-    filterCountries: safeJSON(o.filterCountries, []),
-  };
-}
-function safeJSON<T>(s: string, d: T): T {
-  try { return JSON.parse(s); } catch { return d; }
-}
-function stableRoom(a: string, b: string) {
-  const [x, y] = [a, b].sort();
-  return `pair-${x.slice(0, 6)}${y.slice(0, 6)}`;
+export async function ping(): Promise<{ ok: boolean }> {
+  await rc(["PING"]);
+  return { ok: true };
 }
