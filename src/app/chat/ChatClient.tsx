@@ -140,25 +140,42 @@ export default function ChatClient() {
   }
 
   async function nextReq(ticket: string) {
-    const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=8000`, {
-      credentials: "include",
-      cache: "no-store",
-    });
-    if (r.status === 204) return null;
-    if (!r.ok) throw new Error("next failed " + r.status);
-    const j = await r.json();
-    return j.room as string;
-  }
+  const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=8000`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (r.status === 204) return null;
+  if (!r.ok) throw new Error("next failed " + r.status);
+  const j = await r.json();
 
-  async function tokenReq(room: string, id: string) {
-    const r = await fetch(
-      `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
-      { credentials: "include", cache: "no-store" }
-    );
-    if (!r.ok) throw new Error("token failed " + r.status);
-    const j = await r.json();
-    return j.token as string;
+  // تطبيع قيمة الغرفة إلى نص دائمًا
+  const raw = j?.room;
+  let room: string | null = null;
+  if (typeof raw === "string") room = raw;
+  else if (raw && typeof raw === "object") {
+    room = String((raw as any).name || (raw as any).id || (raw as any).room || JSON.stringify(raw));
   }
+  if (!room) throw new Error("invalid room payload");
+  return room;
+}
+
+
+ async function tokenReq(room: unknown, id: string) {
+  const roomName =
+    typeof room === "string"
+      ? room
+      : String((room as any)?.name || (room as any)?.id || (room as any)?.room || room);
+
+  if (!roomName || typeof roomName !== "string") throw new Error("bad room name");
+
+  const r = await fetch(
+    `/api/livekit/token?room=${encodeURIComponent(roomName)}&identity=${encodeURIComponent(id)}`,
+    { credentials: "include", cache: "no-store" }
+  );
+  if (!r.ok) throw new Error("token failed " + r.status);
+  const j = await r.json();
+  return j.token as string;
+}
 
   /** اربط الشِّيم فقط. لا تنشئ أو تستبدل __ditonaDataChannel هنا. */
   function exposeCompatDC(room: Room) {
@@ -653,10 +670,17 @@ export default function ChatClient() {
         window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "stopped" } }));
       });
 
-      const id = identity();
-      const token = await tokenReq(roomName, id);
-      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
-      await room.connect(ws, token);
+      // تطبيع اسم الغرفة قبل طلب التوكن
+let roomNameStr =
+  typeof roomName === "string"
+    ? roomName
+    : String((roomName as any)?.name || (roomName as any)?.id || (roomName as any)?.room || roomName);
+
+const id = identity();
+const token = await tokenReq(roomNameStr, id);
+const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+await room.connect(ws, token);
+
 
       // اربط الشيم بالغرفة
       exposeCompatDC(room);
