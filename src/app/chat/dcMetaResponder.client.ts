@@ -1,76 +1,99 @@
-"use client";
+// src/app/chat/dcMetaResponder.client.ts
 /**
- * Listens to RTCDataChannel messages and:
- *  - replies to {type:'meta:init'} with {type:'meta', payload:{...}}
- *  - forwards incoming {type:'meta'} to window 'ditona:peer-meta'
+ * Idempotent DC consumer for peer metadata.
+ * - Listens to DataChannel "message"
+ * - Dispatches "ditona:peer-meta" when remote meta arrives
+ * - Responds to "meta:init" by sending our lightweight meta
  */
 
-type AnyMsg = { type?: string; [k: string]: any };
+if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) {
+  (window as any).__dcMetaResponderMounted = 1;
 
-function getLocalMeta() {
-  // Country from localStorage ditona_geo if available
-  let country: string | undefined, city: string | undefined, gender: string | undefined;
-  try {
-    const j = JSON.parse(localStorage.getItem("ditona_geo") || "null");
-    country = j?.country || undefined;
-    city = j?.city || undefined;
-  } catch {}
-  // Gender heuristic: try persisted selection
-  try {
-    const g = localStorage.getItem("ditona_gender") || localStorage.getItem("gender") || "";
-    gender = g || undefined;
-  } catch {}
-  return { country, city, gender };
-}
-
-function wireDC(dc: RTCDataChannel) {
-  if (!dc) return;
-  try {
-    dc.removeEventListener("message", onMsg as any);
-    // no-op if not present
-  } catch {}
-  dc.addEventListener("message", onMsg as any, { passive: true });
-  if (dc.readyState === "open") {
-    try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
-    setTimeout(() => { try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {} }, 300);
-    /* P8_META_1200 */
-    setTimeout(() => {
-      try { dc.send(JSON.stringify({ type: "meta:init" })); } catch {}
-    }, 1200);
-  }
-}
-
-function onMsg(ev: MessageEvent) {
-  let d: AnyMsg = {};
-  try { d = JSON.parse(String(ev.data || "")); } catch { /* ignore non-JSON */ }
-  if (!d || !d.type) return;
-
-  if (d.type === "meta:init") {
-    const payload = getLocalMeta();
-    try { (ev.target as RTCDataChannel)?.send(JSON.stringify({ type: "meta", payload })); } catch {}
-    return;
-  }
-  if (d.type === "meta" && d.payload) {
-    try { 
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: d.payload })); 
+  const sendOverDC = async (obj: any) => {
+    try {
+      const txt = JSON.stringify(obj);
+      const room = (window as any).__lkRoom;
+      if (room && room.state === "connected" && room.localParticipant?.publishData) {
+        const bin = new TextEncoder().encode(txt);
+        await room.localParticipant.publishData(bin, { reliable: true, topic: "meta" });
+        return true;
+      }
+      const dc = (window as any).__ditonaDataChannel;
+      if (dc?.send) {
+        dc.send(txt);
+        return true;
       }
     } catch {}
-    return;
-  }
+    return false;
+  };
+
+  const getLocalMeta = () => {
+    let country: string | undefined;
+    let city: string | undefined;
+    try {
+      const geo = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+      if (geo?.country) country = String(geo.country).toUpperCase();
+      if (geo?.city) city = String(geo.city);
+    } catch {}
+    let gender: string | undefined;
+    try {
+      const g = localStorage.getItem("ditona_gender");
+      if (g && (g === "male" || g === "female" || g === "u")) gender = g;
+    } catch {}
+    return { country, city, gender };
+  };
+
+  const onDCMessage = (ev: MessageEvent) => {
+    try {
+      const d = ev?.data;
+      let s: string | null = null;
+      if (typeof d === "string") s = d;
+      else if (d instanceof ArrayBuffer) s = new TextDecoder().decode(new Uint8Array(d));
+      else if (ArrayBuffer.isView(d)) s = new TextDecoder().decode(d as any);
+      if (!s || !/^\s*\{/.test(s)) return;
+
+      const j = JSON.parse(s);
+
+      // Remote peer meta → UI bus
+      // Supported:
+      // { t: "peer-meta", payload: {...} }
+      // { type: "peer-meta", payload: {...} }
+      if ((j?.t === "peer-meta" || j?.type === "peer-meta") && j?.payload) {
+        window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
+        return;
+      }
+
+      // Meta init request → reply with our meta
+      if (j?.t === "meta:init" || j?.type === "meta:init") {
+        const payload = getLocalMeta();
+        sendOverDC({ t: "peer-meta", payload });
+        return;
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  try {
+    const dc = (window as any).__ditonaDataChannel;
+    dc?.addEventListener?.("message", onDCMessage);
+    dc?.setSendGuard?.(() => {
+      const room = (window as any).__lkRoom;
+      return !!room && room.state === "connected";
+    });
+  } catch {}
+
+  // Cleanup
+  window.addEventListener(
+    "pagehide",
+    () => {
+      try {
+        const dc = (window as any).__ditonaDataChannel;
+        dc?.removeEventListener?.("message", onDCMessage);
+      } catch {}
+    },
+    { once: true }
+  );
 }
 
-(function init(){
-  const w = typeof window !== "undefined" ? (window as any) : undefined;
-  const dc = (w?.__ditonaDataChannel ?? w?.__ditonaDataChannel2) as RTCDataChannel | undefined;
-  if (dc) wireDC(dc);
-
-  // When phases change, try to (re)wire the latest DC reference
-  if (typeof window !== "undefined") {
-    window.addEventListener("rtc:phase", () => {
-      const w = typeof window !== "undefined" ? (window as any) : undefined;
-      const ndc = (w?.__ditonaDataChannel ?? w?.__ditonaDataChannel2) as RTCDataChannel | undefined;
-      if (ndc) wireDC(ndc);
-    });
-  }
-})();
+export {};
