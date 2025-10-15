@@ -1,54 +1,37 @@
-import safeFetch from '@/app/chat/safeFetch';
-// use client
+// src/app/chat/freeForAllBridge.ts
 /**
- * Bridge window <-> internal event bus with loop-guard
- * Also bootstraps FFA runtime once.
+ * Idempotent side-effect module.
+ * لا إطلاق تلقائي لأي أحداث مثل "ui:next".
+ * يوفّر جسراً بسيطاً لأحداث الـpeer-meta نحو واجهة الشارات.
  */
-import { on, emit } from "@/utils/events";
 
-declare global {
-  interface Window {
-    __ditonaBridgeInit?: 1;
-    __ditonaFFALoaded?: 1;
-    __DITONA_FFA?: 0|1|boolean|string;
-  }
-}
+if (typeof window !== "undefined" && !(window as any).__ffaBridge) {
+  (window as any).__ffaBridge = 1;
 
-if (typeof window !== "undefined" && !window.__ditonaBridgeInit) {
-  window.__ditonaBridgeInit = 1;
+  const on = (t: string, h: EventListenerOrEventListenerObject) => {
+    window.addEventListener(t, h as any);
+    return () => window.removeEventListener(t, h as any);
+  };
 
-  // --- FFA bootstrap (runtime) ---
-  (async () => {
-    if (!window.__ditonaFFALoaded) {
-      try {
-        const r = await safeFetch("/api/rtc/env", { cache: "no-store" });
-        const j = await r.json().catch(() => ({}));
-        const ffa = (j?.server?.FREE_FOR_ALL === "1");
-window.__DITONA_FFA = ffa ? 1 : 0;
-        window.__ditonaFFALoaded = 1;
-        window.dispatchEvent(new CustomEvent("ffa:ready", { detail: { ffa: window.__DITONA_FFA } }));
-      } catch {}
+  // أعِد بثّ ميتاداتا النظير إلى قناة UI القياسية
+  on("ditona:peer-meta", (e: any) => {
+    try {
+      const detail = e?.detail ?? e;
+      window.dispatchEvent(new CustomEvent("ditona:peer-meta-ui", { detail }));
+    } catch {}
+  });
+
+  // حارس إرسال القناة: لا إرسال قبل اتصال الغرفة
+  try {
+    const dc = (window as any).__ditonaDataChannel;
+    if (dc && typeof dc.setSendGuard === "function") {
+      dc.setSendGuard(() => {
+        const room = (window as any).__lkRoom;
+        return !!room && room.state === "connected";
+      });
     }
-  })();
+  } catch {}
 
-  // --- Event bridge with bounce guard ---
-  const FLAG = "__bridge";
-  const names = ["rtc:phase", "rtc:pair", "ditona:peer-meta"] as const;
-
-  // window -> bus
-  for (const n of names) {
-    window.addEventListener(n, (ev: any) => {
-      const d = ev?.detail || {};
-      if (d && d[FLAG]) return; // already bridged
-      try { emit(n as any, { ...d, [FLAG]:"win" }); } catch {}
-    }, { passive: true });
-  }
-
-  // bus -> window
-  for (const n of names) {
-    on(n as any, (d: any) => {
-      if (d && d[FLAG]) return; // avoid echo
-      try { window.dispatchEvent(new CustomEvent(n, { detail: { ...d, [FLAG]:"bus" } })); } catch {}
-    });
-  }
+  // تنظيف خفيف عند إخفاء الصفحة (لا منطق ثقيل هنا)
+  on("pagehide", () => {});
 }
