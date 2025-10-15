@@ -1,235 +1,271 @@
 // src/lib/match/redis.ts
-import crypto from "node:crypto";
+/* Runtime: node. No new ENV. */
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL!;
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
+if (!REDIS_URL || !REDIS_TOKEN) throw new Error("Missing Upstash ENV");
 
-// أنواع موسعة
-export type GenderFilter = "all" | "male" | "female" | "couples" | "lgbt";
-export type SelfGender = "male" | "female" | "couples" | "lgbt" | "u";
-
-export type Entry = {
-  ticket: string;
+type EnqueueInput = {
   identity: string;
   deviceId: string;
-  vip: boolean;
-  selfGender: SelfGender;
-  selfCountry: string | null;
-  filterGenders: GenderFilter;
-  filterCountries: string[];
+  selfGender?: string | null;
+  selfCountry?: string | null;
+  filterGenders?: string[] | null;
+  filterCountries?: string[] | null;
+  vip?: boolean | null;
+};
+
+type Attr = {
+  identity: string;
+  deviceId: string;
+  selfGender?: string | null;
+  selfCountry?: string | null;
+  filterGenders?: string[];
+  filterCountries?: string[];
+  vip?: boolean | null;
   ts: number;
 };
 
-/* ======================= ENV / Consts ======================= */
-const TTL_SEC = parseInt(process.env.MATCH_TTL_SEC || "", 10) || 45;
+const TTL_MS = 45_000;
+const Q_KEY = "mq:q";
+const DEV = (d: string) => `mq:dev:${d}`;
+const ATTR = (t: string) => `mq:attr:${t}`;
+const ROOM = (t: string) => `mq:room:${t}`;
 
-const URL = process.env.UPSTASH_REDIS_REST_URL || "";
-const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
-
-/** تستخدمها مسارات API للتحقق السريع قبل النداء */
-export function haveRedisEnv() {
-  return !!URL && !!TOKEN;
-}
-function assertEnv() {
-  if (!URL || !TOKEN) {
-    throw new Error(
-      "UPSTASH env missing: " + JSON.stringify({ hasUrl: !!URL, hasToken: !!TOKEN })
-    );
-  }
-}
-
-/* ======================= Upstash REST helpers ======================= */
-async function rc(cmd: (string | number)[]): Promise<any> {
-  assertEnv();
-  const r = await fetch(URL, {
+async function rpost<T = any>(path: string, body: any) {
+  const res = await fetch(`${REDIS_URL}${path}`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${TOKEN}`,
-      "content-type": "application/json",
+      Authorization: `Bearer ${REDIS_TOKEN}`,
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify({ command: cmd.map(String) }), // شكل صحيح لـ Upstash
+    body: JSON.stringify(body),
+    // never cache
     cache: "no-store",
   });
-  if (!r.ok) throw new Error(`redis ${cmd[0]} failed: ${r.status}`);
-  const j = await r.json();
-  return j?.result;
-}
-
-async function rcp(commands: (string | number)[][]): Promise<any[]> {
-  assertEnv();
-  const r = await fetch(URL + "/pipeline", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${TOKEN}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ commands: commands.map((a) => a.map(String)) }), // شكل صحيح
-    cache: "no-store",
-  });
-  if (!r.ok) throw new Error(`redis pipeline failed: ${r.status}`);
-  const j = await r.json();
-  const arr = Array.isArray(j?.results) ? j.results : [];
-  return arr.map((x: any) => x?.result);
-}
-
-/* ======================= Keys ======================= */
-const KQ = "mq:q"; // ZSET: ts -> ticket
-const KATTR = (t: string) => `mq:attr:${t}`; // JSON per ticket
-const KROOM = (t: string) => `mq:room:${t}`; // room per ticket
-const KDEV = (d: string) => `mq:dev:${d}`; // deviceId -> ticket (للمعلومات فقط)
-
-/* ======================= Utils ======================= */
-const now = () => Date.now();
-
-function parseJSON<T>(s: any): T | null {
-  try {
-    if (!s) return null;
-    return typeof s === "string" ? (JSON.parse(s) as T) : (s as T);
-  } catch {
-    return null;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`redis ${path} failed: ${res.status} ${text}`);
   }
+  return res.json() as Promise<T>;
 }
 
-function stableRoom(a: string, b: string): string {
-  const [x, y] = [a, b].sort();
-  const short = crypto.createHash("sha1").update(x + ":" + y).digest("hex").slice(0, 8);
-  return `pair-${short}-${x.slice(0, 4)}${y.slice(0, 4)}`;
+async function cmd<T = any>(...args: (string | number)[]) {
+  // Single command: POST / with JSON array
+  const a = args.map((x) => (typeof x === "number" ? String(x) : x));
+  return rpost<T>("/", a);
 }
 
-/* ======================= Public API ======================= */
+async function pipeline(cmds: (string | number)[][]) {
+  // Pipeline: POST /pipeline with array of arrays
+  const arr = cmds.map((c) => c.map((x) => (typeof x === "number" ? String(x) : x)));
+  return rpost<any[]>("/pipeline", arr);
+}
 
-/**
- * دائمًا ينشئ تذكرة جديدة. لا يعيد استخدام تذاكر الأجهزة.
- */
-export async function enqueue(
-  entry: Omit<Entry, "ticket" | "ts">
-): Promise<{ ticket: string }> {
-  const ticket = crypto.randomUUID();
-  const full: Entry = {
-    ticket,
-    identity: entry.identity,
-    deviceId: entry.deviceId,
-    vip: !!entry.vip,
-    selfGender: entry.selfGender,
-    selfCountry: entry.selfCountry ?? null,
-    filterGenders: entry.filterGenders,
-    filterCountries: entry.filterCountries || [],
-    ts: now(),
+function now() {
+  return Date.now();
+}
+function toCSV(a?: string[] | null) {
+  return Array.isArray(a) ? a.join(",") : "";
+}
+function fromCSV(s?: string | null): string[] {
+  return (s || "").split(",").filter(Boolean);
+}
+function ticketId(): string {
+  const t = now().toString(36);
+  const r = Math.random().toString(36).slice(2, 8);
+  return `t-${t}-${r}`;
+}
+function roomId(a: string, b: string) {
+  const t = now().toString(36).slice(-4);
+  const A = a.slice(0, 4);
+  const B = b.slice(0, 4);
+  return `pair-${t}-${A}${B}`;
+}
+
+export async function enqueue(input: EnqueueInput) {
+  const ts = now();
+  const devKey = DEV(input.deviceId);
+
+  // Reuse ticket per device if still warm
+  const devGet = await cmd<{ result: string | null }>("GET", devKey);
+  let ticket = devGet?.result || "";
+
+  if (!ticket) ticket = ticketId();
+
+  const attr: Attr = {
+    identity: input.identity,
+    deviceId: input.deviceId,
+    selfGender: input.selfGender || null,
+    selfCountry: input.selfCountry || null,
+    filterGenders: input.filterGenders || null,
+    filterCountries: input.filterCountries || null,
+    vip: !!input.vip,
+    ts,
   };
 
-  await rcp([
-    ["SET", KATTR(ticket), JSON.stringify(full)],
-    ["EXPIRE", KATTR(ticket), TTL_SEC],
-    ["SET", KDEV(entry.deviceId), ticket], // للمرجعة فقط
-    ["EXPIRE", KDEV(entry.deviceId), TTL_SEC],
-    ["ZADD", KQ, full.ts.toString(), ticket],
-  ]);
+  const attrKey = ATTR(ticket);
 
+  // Build pipeline
+  const p: (string | number)[][] = [
+    // Attributes
+    [
+      "HSET",
+      attrKey,
+      "identity",
+      attr.identity,
+      "deviceId",
+      attr.deviceId,
+      "selfGender",
+      attr.selfGender || "",
+      "selfCountry",
+      attr.selfCountry || "",
+      "filterGenders",
+      toCSV(attr.filterGenders),
+      "filterCountries",
+      toCSV(attr.filterCountries),
+      "vip",
+      attr.vip ? "1" : "0",
+      "ts",
+      String(attr.ts),
+    ],
+    ["PEXPIRE", attrKey, TTL_MS],
+    // Queue insert FIFO by timestamp
+    ["ZADD", Q_KEY, "NX", ts, ticket],
+    // Device → ticket mapping with TTL
+    ["SET", devKey, ticket, "PX", TTL_MS],
+  ];
+
+  const rsp = await pipeline(p);
+  // rsp is array of results; we validate the ZADD succeeded (index 2)
+  const zaddOk = rsp[2]?.result !== null && rsp[2]?.error == null;
+  if (!zaddOk && rsp[2]?.error) {
+    throw new Error(`enqueue ZADD error: ${rsp[2].error}`);
+  }
   return { ticket };
 }
 
-function accepts(a: Entry, b: Entry): boolean {
-  const genderOk =
-    a.filterGenders === "all" ||
-    (b.selfGender !== "u" && a.filterGenders === b.selfGender);
-
-  const countryOk =
-    a.filterCountries.length === 0 ||
-    (!!b.selfCountry && a.filterCountries.includes(b.selfCountry.toUpperCase()));
-
-  return genderOk && countryOk;
+async function readAttr(ticket: string): Promise<Attr | null> {
+  const a = await cmd<{ result: (string | null)[] | null }>(
+    "HMGET",
+    ATTR(ticket),
+    "identity",
+    "deviceId",
+    "selfGender",
+    "selfCountry",
+    "filterGenders",
+    "filterCountries",
+    "vip",
+    "ts"
+  );
+  const v = a?.result;
+  if (!v || v.every((x) => x === null)) return null;
+  return {
+    identity: v[0] || "",
+    deviceId: v[1] || "",
+    selfGender: v[2] || "",
+    selfCountry: v[3] || "",
+    filterGenders: fromCSV(v[4]),
+    filterCountries: fromCSV(v[5]),
+    vip: v[6] === "1",
+    ts: Number(v[7] || "0"),
+  };
 }
 
+function matchOK(me: Attr, other: Attr, widen: boolean) {
+  if (widen) return true;
 
-/**
- * يحاول مطابقة تذكرة. إذا widen=true يتساهل بالقبول FIFO.
- */
-export async function tryMatch(
-  ticket: string,
-  widen: boolean
-): Promise<{ room?: string } | null> {
-  // صفاتي
-  const myAttrStr = await rc(["GET", KATTR(ticket)]);
-  if (!myAttrStr) return null;
-  const me = parseJSON<Entry>(myAttrStr)!;
+  const meG = (me.filterGenders && me.filterGenders.length) ? me.filterGenders : null;
+  const meC = (me.filterCountries && me.filterCountries.length) ? me.filterCountries : null;
+  const otG = other.selfGender || "";
+  const otC = other.selfCountry || "";
 
-  // سبق وتمت خريطته لغرفة؟
-  const existing = await rc(["GET", KROOM(ticket)]);
-  if (existing) return { room: existing as string };
+  const otherG = (other.filterGenders && other.filterGenders.length) ? other.filterGenders : null;
+  const otherC = (other.filterCountries && other.filterCountries.length) ? other.filterCountries : null;
+  const myG = me.selfGender || "";
+  const myC = me.selfCountry || "";
 
-  // تنظيف قديم في الـ ZSET
-  const cutoff = now() - TTL_SEC * 1000;
-  const old = (await rc(["ZRANGEBYSCORE", KQ, "-inf", String(cutoff)])) as string[] | null;
-  if (Array.isArray(old) && old.length) {
-    await rc(["ZREM", KQ, ...old]);
+  const gOK = (!meG || meG.includes(otG)) && (!otherG || otherG.includes(myG));
+  const cOK = (!meC || meC.includes(otC)) && (!otherC || otherC.includes(myC));
+
+  return gOK && cOK;
+}
+
+export async function getRoom(ticket: string) {
+  const r = await cmd<{ result: string | null }>("GET", ROOM(ticket));
+  return r?.result || null;
+}
+
+export async function tryMatch(ticket: string, widen: boolean) {
+  // Already assigned?
+  const existing = await getRoom(ticket);
+  if (existing) return existing;
+
+  // Read my attr
+  const me = await readAttr(ticket);
+  if (!me) return null;
+
+  const tNow = now();
+  const min = tNow - TTL_MS;
+  // Get recent tickets ascending by score
+  const zr = await cmd<{ result: string[] | null }>("ZRANGEBYSCORE", Q_KEY, min, tNow);
+  const candidates = (zr?.result || []).filter((t) => t !== ticket);
+  if (!candidates.length) return null;
+
+  // Fetch candidate attrs in pipeline
+  const cmds: (string | number)[][] = candidates.slice(0, 64).map((t) => [
+    "HMGET",
+    ATTR(t),
+    "identity",
+    "deviceId",
+    "selfGender",
+    "selfCountry",
+    "filterGenders",
+    "filterCountries",
+    "vip",
+    "ts",
+  ]);
+  const res = cmds.length ? await pipeline(cmds) : [];
+  for (let i = 0; i < res.length; i++) {
+    const row = res[i];
+    if (row?.error) continue;
+    const v = row?.result as (string | null)[];
+    if (!v) continue;
+
+    const other: Attr = {
+      identity: v[0] || "",
+      deviceId: v[1] || "",
+      selfGender: v[2] || "",
+      selfCountry: v[3] || "",
+      filterGenders: fromCSV(v[4]),
+      filterCountries: fromCSV(v[5]),
+      vip: v[6] === "1",
+      ts: Number(v[7] || "0"),
+    };
+    const otherTicket = candidates[i];
+
+    if (!other.identity) continue;
+
+    // Skip if the other already has a room
+    const otherRoom = await cmd<{ result: string | null }>("GET", ROOM(otherTicket));
+    if (otherRoom?.result) continue;
+
+    if (!matchOK(me, other, widen)) continue;
+
+    // Commit: assign room for both and remove from queue
+    const room = roomId(ticket, otherTicket);
+    const commit: (string | number)[][] = [
+      ["SET", ROOM(ticket), room, "PX", TTL_MS],
+      ["SET", ROOM(otherTicket), room, "PX", TTL_MS],
+      ["ZREM", Q_KEY, ticket],
+      ["ZREM", Q_KEY, otherTicket],
+    ];
+    const rCommit = await pipeline(commit);
+    const ok =
+      !rCommit[0]?.error &&
+      !rCommit[1]?.error &&
+      (rCommit[2]?.result === 1 || rCommit[2]?.result === 0) &&
+      (rCommit[3]?.result === 1 || rCommit[3]?.result === 0);
+    if (ok) return room;
   }
-
-  // فحص المرشحين FIFO (مع الدرجات)
-  const zRaw = (await rc(["ZRANGE", KQ, "0", "199", "WITHSCORES"])) as any[] | null;
-  const z: any[] = Array.isArray(zRaw) ? zRaw : [];
-  for (let i = 0; i < z.length; i += 2) {
-    const candT = String(z[i] ?? "");
-    const ts = Number(z[i + 1] ?? 0);
-    if (!candT || candT === ticket) continue;
-    if (ts < cutoff) continue;
-
-    const [cAttrStr, cRoom] = await rcp([
-      ["GET", KATTR(candT)],
-      ["GET", KROOM(candT)],
-    ]);
-    if (!cAttrStr || cRoom) continue;
-
-    const other = parseJSON<Entry>(cAttrStr);
-    if (!other) continue;
-
-    const ok = widen ? true : accepts(me, other) && accepts(other, me);
-    if (!ok) continue;
-
-    // احجز غرفة ثابتة للطرفين ثم أخرج من الصف
-    const room = stableRoom(ticket, candT);
-    await rcp([
-      ["SET", KROOM(ticket), room],
-      ["EXPIRE", KROOM(ticket), TTL_SEC],
-      ["SET", KROOM(candT), room],
-      ["EXPIRE", KROOM(candT), TTL_SEC],
-      ["ZREM", KQ, ticket, candT],
-    ]);
-    return { room };
-  }
-
-  // أعِد تأكيد وجودي في الصف مع آخر طابع زمني
-  await rc(["ZADD", KQ, "NX", String(now()), ticket]);
   return null;
-}
-
-export async function getRoom(ticket: string): Promise<string | null> {
-  const r = await rc(["GET", KROOM(ticket)]);
-  return (r as string) || null;
-}
-
-export async function purge(): Promise<number> {
-  const cutoff = now() - TTL_SEC * 1000;
-  let removed = 0;
-
-  // أزل القديمة من الـ ZSET
-  const old = (await rc(["ZRANGEBYSCORE", KQ, "-inf", String(cutoff)])) as string[] | null;
-  if (Array.isArray(old) && old.length) {
-    await rc(["ZREM", KQ, ...old]);
-    removed += old.length;
-  }
-
-  // تحقق من رؤوس الصف التي فقدت صفاتها
-  const head = (await rc(["ZRANGE", KQ, "0", "199"])) as string[] | null;
-  const list = Array.isArray(head) ? head : [];
-  for (const t of list) {
-    const a = await rc(["GET", KATTR(t)]);
-    if (!a) {
-      await rc(["ZREM", KQ, t]);
-      removed++;
-    }
-  }
-
-  return removed;
-}
-
-export async function ping(): Promise<{ ok: boolean }> {
-  await rc(["PING"]);
-  return { ok: true };
 }
