@@ -1,12 +1,17 @@
-import type { Room } from "livekit-client";
-interface DitonaDC extends EventTarget {
-  readyState: "connecting" | "open" | "closed";
-  onmessage: ((ev: MessageEvent)=>void) | null;
-  send(data: string | Uint8Array | ArrayBuffer): void;
-  close(): void;
-  attach?: (room: Room) => void;
-}
 declare global {
-  interface Window { __ditonaDataChannel?: DitonaDC; }
+  interface Window {
+    __ditonaDataChannel?: {
+      readyState: "connecting" | "open" | "closed";
+      attach: (room: any) => void;
+      detach: () => void;
+      send: (data: string | ArrayBuffer | Uint8Array) => void;
+      close: () => void;
+      onmessage: null | ((ev: MessageEvent) => void);
+      addEventListener: (t: string, cb: EventListenerOrEventListenerObject) => void;
+      removeEventListener: (t: string, cb: EventListenerOrEventListenerObject) => void;
+      dispatchEvent: (ev: Event) => boolean;
+    };
+    __lkRoom?: any;
+  }
 }
 export {};
