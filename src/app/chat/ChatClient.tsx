@@ -91,6 +91,7 @@ export default function ChatClient() {
   // LiveKit
   const lkRoomRef = useRef<Room | null>(null);
   const joiningRef = useRef(false);
+  const leavingRef = useRef(false); // NEW: حارس أثناء الفصل
 
   /* ---------- helpers ---------- */
   function stableDid(): string {
@@ -171,6 +172,7 @@ export default function ChatClient() {
   }
 
   async function leaveRoom() {
+    leavingRef.current = true; // NEW: نعلن بدء الفصل
     const r = lkRoomRef.current;
     lkRoomRef.current = null;
 
@@ -229,7 +231,9 @@ export default function ChatClient() {
       }
 
       (globalThis as any).__lkRoom = null;
-    } catch {}
+    } catch {} finally {
+      leavingRef.current = false; // NEW: انتهى الفصل
+    }
   }
 
   function updatePeerBadges(meta: any) {
@@ -390,6 +394,15 @@ export default function ChatClient() {
 
         toast("⏭️ Next");
         await leaveRoom();
+
+        // NEW: إعادة إرفاق معاينة الكاميرا المحلية فورًا
+        const s = getLocalStream();
+        if (localRef.current && s) {
+          localRef.current.srcObject = s;
+          localRef.current.muted = true;
+          localRef.current.play?.().catch(() => {});
+        }
+
         await new Promise((r) => setTimeout(r, NEXT_COOLDOWN_MS));
         await joinViaRedisMatch();
       })
@@ -679,16 +692,25 @@ export default function ChatClient() {
       });
 
       room.on(RoomEvent.ParticipantDisconnected, async () => {
-  if (room.numParticipants === 0) {
-    setRtcPhase("searching");
-    window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
+        // NEW: لا تعاود أثناء الفصل/الانضمام
+        if (leavingRef.current || joiningRef.current) return;
+        if (room.numParticipants === 0) {
+          setRtcPhase("searching");
+          window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: "searching" } }));
+          await leaveRoom();
 
-    // افصل جلسة الغرفة الحالية ثم أعد الدخول للطابور بهدوء
-    await leaveRoom();
-    await new Promise((r) => setTimeout(r, NEXT_COOLDOWN_MS));
-    await joinViaRedisMatch();
-  }
-});
+          // NEW: إعادة إرفاق المعاينة فورًا
+          const s = getLocalStream();
+          if (localRef.current && s) {
+            localRef.current.srcObject = s;
+            localRef.current.muted = true;
+            localRef.current.play?.().catch(() => {});
+          }
+
+          await new Promise((r) => setTimeout(r, NEXT_COOLDOWN_MS));
+          await joinViaRedisMatch();
+        }
+      });
 
       room.on(RoomEvent.Disconnected, () => {
         setRtcPhase("stopped");
@@ -709,11 +731,12 @@ export default function ChatClient() {
       // attach DC shim and mark connected
       exposeCompatDC(room);
       try { (globalThis as any).__ditonaDataChannel?.setConnected?.(true); } catch {}
-       // اطلب ميتاداتا الطرف الآخر
-       try {
+
+      // اطلب ميتاداتا الطرف الآخر
+      try {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
         await room.localParticipant.publishData(payload, { reliable: true, topic: "meta" });
-    } catch {}
+      } catch {}
 
       // publish local tracks
       const src = effectsStream ?? getLocalStream();
