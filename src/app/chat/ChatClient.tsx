@@ -568,7 +568,7 @@ export default function ChatClient() {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
         await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
       } catch {}
-      toast(`Like ${newLike ? ❤️" : "💔"}`);
+      toast(`Like ${newLike ? "❤️" : "💔"}`);
     }));
     offs.push(on("ui:report", () => { toast("Report sent. Moving on"); }));
 
