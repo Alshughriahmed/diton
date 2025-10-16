@@ -416,7 +416,7 @@ export default function ChatClient() {
         if (g?.country) selfCountry = String(g.country).toUpperCase();
       } catch {}
       const selected = normalizeGender(gender);
-      const gFilter = selected ? [selected] : [];
+      const gFilter = selected === "u" ? [] : [selected];
 
       // enqueue
       const ticket = await enqueueReq({
