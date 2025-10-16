@@ -217,6 +217,25 @@ export default function ChatClient() {
     try { await el.play(); } catch (e: any) { /* ignore AbortError/NotAllowedError */ }
   }
 
+  // Ensure local media is alive before any join
+  async function ensureLocalAliveLocal(): Promise<MediaStream | null> {
+    try {
+      let s = getLocalStream() as MediaStream | null;
+      const vt = s?.getVideoTracks?.()[0] || null;
+      const at = s?.getAudioTracks?.()[0] || null;
+      const videoEnded = !vt || vt.readyState === "ended";
+      const audioEnded = at ? at.readyState === "ended" : false;
+      if (!s || videoEnded || audioEnded) {
+        try { await initLocalMedia(); } catch {}
+        s = getLocalStream() as MediaStream | null;
+      }
+      return s ?? null;
+    } catch {
+      try { await initLocalMedia(); } catch {}
+      return (getLocalStream() as MediaStream | null) ?? null;
+    }
+  }
+
   // New helpers using LiveKit attach/detach
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
@@ -472,10 +491,9 @@ export default function ChatClient() {
     (async () => {
       setPhase("boot");
       try {
-        await initLocalMedia();
-        const s = getLocalStream();
-        if (localRef.current && s) {
-          (localRef.current as any).srcObject = s;
+        const s0 = await ensureLocalAliveLocal();
+        if (localRef.current && s0) {
+          (localRef.current as any).srcObject = s0;
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
@@ -548,6 +566,13 @@ export default function ChatClient() {
       const sid = newSid();          // invalidate in-flight work
       await leaveRoom();             // clean detach, keep local preview
       await new Promise(r => setTimeout(r, 250));
+      // ensure local media is alive before next join
+      const s1 = await ensureLocalAliveLocal();
+      if (localRef.current && s1) {
+        (localRef.current as any).srcObject = s1;
+        localRef.current.muted = true;
+        await safePlay(localRef.current);
+      }
       await joinViaRedisMatch(sid);
     }));
 
@@ -561,6 +586,13 @@ export default function ChatClient() {
       const sid = newSid();
       await leaveRoom();
       await new Promise(r => setTimeout(r, 250));
+      // ensure local media is alive before previous join
+      const s2 = await ensureLocalAliveLocal();
+      if (localRef.current && s2) {
+        (localRef.current as any).srcObject = s2;
+        localRef.current.muted = true;
+        await safePlay(localRef.current);
+      }
       await joinViaRedisMatch(sid);
     }));
 
