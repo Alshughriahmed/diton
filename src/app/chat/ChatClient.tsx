@@ -1,3 +1,4 @@
+// src/app/chat/ChatClient.tsx
 "use client";
 
 /**
@@ -271,6 +272,19 @@ export default function ChatClient() {
     }
   }
 
+  // publish peer meta helper (twice with a short delay)
+  async function requestPeerMetaTwice(room: Room) {
+    try {
+      const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
+      await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
+      setTimeout(async () => {
+        try {
+          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
+        } catch {}
+      }, 250);
+    } catch {}
+  }
+
   async function leaveRoom(): Promise<void> {
     if (leavingRef.current) return;
     leavingRef.current = true;
@@ -399,6 +413,11 @@ export default function ChatClient() {
     };
     room.on(RoomEvent.Disconnected, onDisc);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.Disconnected, onDisc); } catch {} });
+
+    // ensure peer meta after remote joins
+    const onPeerJoined = () => { if (isActiveSid(sid)) requestPeerMetaTwice(room); };
+    room.on(RoomEvent.ParticipantConnected, onPeerJoined);
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantConnected, onPeerJoined); } catch {} });
   }
 
   async function joinViaRedisMatch(sid: number): Promise<void> {
@@ -415,7 +434,9 @@ export default function ChatClient() {
         const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
         if (g?.country) selfCountry = String(g.country).toUpperCase();
       } catch {}
-      const selected = normalizeGender(gender);
+      // unified genders
+      const selfGender = normalizeGender(profile?.gender ?? gender ?? "u");
+      const selected = normalizeGender(gender ?? "u");
       const gFilter = selected === "u" ? [] : [selected];
 
       // enqueue
@@ -423,19 +444,15 @@ export default function ChatClient() {
         identity: identity(),
         deviceId: stableDid(),
         vip: !!vip,
-        selfGender: normalizeGender(profile?.gender) ?? "u",
+        selfGender,
         selfCountry,
         filterGenders: gFilter,
         filterCountries: Array.isArray(countries) ? countries : [],
       });
       if (!isActiveSid(sid)) return;
 
-      // next (two attempts)
-      let roomName: string | null = null;
-      for (let i = 0; i < 2 && !roomName; i++) {
-        roomName = await nextReq(ticket, 8000);
-        if (!isActiveSid(sid)) return;
-      }
+      // next (single attempt; rely on 8s wait on server)
+      const roomName = await nextReq(ticket, 8000);
       if (!roomName) { setPhase("stopped"); return; }
 
       // prepare room
@@ -461,11 +478,8 @@ export default function ChatClient() {
       (globalThis as any).__lkRoom = room;
       dcAttach(room);
 
-      // request peer meta
-      try {
-        const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
-        await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
-      } catch {}
+      // request peer meta twice (meta:init)
+      await requestPeerMetaTwice(room);
 
       // publish local tracks AFTER connected
       const src = (effectsStream ?? getLocalStream()) || null;
@@ -618,6 +632,7 @@ export default function ChatClient() {
     function onPeerMeta(e: any) {
       const meta = e?.detail;
       if (!meta) return;
+      // UI side-effects handled by peerMetaUi.client
     }
     window.addEventListener("ditona:peer-meta", onPeerMeta as any);
 
@@ -641,7 +656,7 @@ export default function ChatClient() {
       leaveRoom().catch(()=>{});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, vip, ffa, router]);
+  }, [hydrated, vip, ffa, router, gender, countries, profile?.gender]);
 
   /* ===== 9) UI ===== */
   return (
