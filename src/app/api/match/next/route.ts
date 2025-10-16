@@ -15,22 +15,7 @@ function noStore(h?: Headers) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: noStore(new Headers()) });
-}
-
-export async function GET(req: NextRequest) {
-  if (!haveRedisEnv()) {
-    return new NextResponse(JSON.stringify({ error: "redis env missing" }), {
-      status: 503,
-      headers: noStore(),
-    });
-  }
-
-  const { searchParams } = new URL(req.url);
-  const ticket = searchParams.get("ticket") || "";
-  const wait = Math.min(10_000, Math.max(0, Number(searchParams.get("wait") || "0")));
-
+async function handle(ticket: string, wait: number) {
   if (!ticket) {
     return new NextResponse(JSON.stringify({ error: "ticket required" }), {
       status: 400,
@@ -63,4 +48,47 @@ export async function GET(req: NextRequest) {
     }
     await sleep(400);
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: noStore(new Headers()) });
+}
+
+export async function GET(req: NextRequest) {
+  if (!haveRedisEnv()) {
+    return new NextResponse(JSON.stringify({ error: "redis env missing" }), {
+      status: 503,
+      headers: noStore(),
+    });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const ticket = searchParams.get("ticket") || "";
+  const wait = Math.min(10_000, Math.max(0, Number(searchParams.get("wait") || "0")));
+  return handle(ticket, wait);
+}
+
+// Accept POST as alias to GET for backward-compat
+export async function POST(req: NextRequest) {
+  if (!haveRedisEnv()) {
+    return new NextResponse(JSON.stringify({ error: "redis env missing" }), {
+      status: 503,
+      headers: noStore(),
+    });
+  }
+
+  const url = new URL(req.url);
+  const qsTicket = url.searchParams.get("ticket");
+  const qsWait = url.searchParams.get("wait");
+
+  let body: any = null;
+  try { body = await req.json(); } catch {}
+
+  const rawTicket = (qsTicket ?? body?.ticket ?? "") as string;
+  const rawWait = Number(qsWait ?? body?.wait ?? 0);
+
+  const ticket = rawTicket ? String(rawTicket) : "";
+  const wait = Math.min(10_000, Math.max(0, isFinite(rawWait) ? rawWait : 0));
+
+  return handle(ticket, wait);
 }
