@@ -99,7 +99,7 @@ export default function ChatClient() {
   const { profile } = useProfile();
   const lastNextTsRef = useRef(0);
 
-  // peer info for built-in cards (in addition to overlay from peerMetaUi.client)
+  // peer info for built-in cards
   const [peerInfo, setPeerInfo] = useState({
     name: "Partner",
     isVip: false,
@@ -111,11 +111,17 @@ export default function ChatClient() {
     age: 0,
   });
 
-  // LiveKit room & guards
+  // LiveKit room & listeners
   const roomRef = useRef<Room | null>(null);
   const roomUnsubsRef = useRef<(() => void)[]>([]);
+
+  // legacy guards kept to avoid breaking other code paths
   const joiningRef = useRef(false);
   const leavingRef = useRef(false);
+
+  // global race-prevention locks
+  const isConnectingRef = useRef(false);
+  const isLeavingRef = useRef(false);
 
   // session lock
   const sidRef = useRef(0);
@@ -150,17 +156,17 @@ export default function ChatClient() {
       const k = "ditona_did";
       const v = localStorage.getItem(k);
       if (typeof v === "string" && v.length > 0) return v;
-      const gen = crypto?.randomUUID?.() || ("did-" + Math.random().toString(36).slice(2, 10));
+      const gen = crypto?.randomUUID?.() || `did-${Math.random().toString(36).slice(2, 10)}`;
       localStorage.setItem(k, gen);
       return String(gen);
     } catch {
-      return "did-" + Math.random().toString(36).slice(2, 10);
+      return `did-${Math.random().toString(36).slice(2, 10)}`;
     }
   }
   function identity(): string {
     const base = String((profile?.displayName || "anon")).trim() || "anon";
     const did = String(stableDid());
-    const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
+    const tail = did.length >= 6 ? did.slice(0, 6) : (`000000${did}`).slice(-6);
     return `${base}#${tail}`;
   }
 
@@ -172,18 +178,17 @@ export default function ChatClient() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(b),
     });
-    if (!r.ok) throw new Error("enqueue failed " + r.status);
+    if (!r.ok) throw new Error(`enqueue failed ${r.status}`);
     const j = await r.json();
     return String(j.ticket || "");
   }
   async function nextReq(ticket: string, waitMs = 8000): Promise<string | null> {
-    const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`, {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-    });
+    const r = await fetch(
+      `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`,
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
     if (r.status === 204) return null;
-    if (!r.ok) throw new Error("next failed " + r.status);
+    if (!r.ok) throw new Error(`next failed ${r.status}`);
     const j = await r.json();
     const raw = j?.room;
     if (typeof raw === "string") return raw;
@@ -195,7 +200,7 @@ export default function ChatClient() {
       `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
       { method: "GET", credentials: "include", cache: "no-store" }
     );
-    if (!r.ok) throw new Error("token failed " + r.status);
+    if (!r.ok) throw new Error(`token failed ${r.status}`);
     const j = await r.json();
     return String(j.token || "");
   }
@@ -213,16 +218,22 @@ export default function ChatClient() {
 
   function clearRemoteMedia() {
     try {
-      if (remoteRef.current) remoteRef.current.srcObject = null;
-      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+      if (remoteRef.current) (remoteRef.current as any).srcObject = null;
+      if (remoteAudioRef.current) (remoteAudioRef.current as any).srcObject = null;
+      try { remoteRef.current?.pause?.(); } catch {}
+      try { remoteAudioRef.current?.pause?.(); } catch {}
     } catch {}
+  }
+  async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) {
+    if (!el) return;
+    try { await el.play(); } catch { /* ignore AbortError from rapid srcObject switches */ }
   }
   function restoreLocalPreview() {
     const s = getLocalStream();
     if (localRef.current && s) {
-      localRef.current.srcObject = s;
+      (localRef.current as any).srcObject = s;
       localRef.current.muted = true;
-      localRef.current.play?.().catch(() => {});
+      safePlay(localRef.current);
     }
   }
   function clearRoomListeners() {
@@ -231,14 +242,17 @@ export default function ChatClient() {
     }
   }
 
-  async function leaveRoom(): Promise<void> {
-    if (leavingRef.current) return;
+  async function leaveRoom(opts?: { keepLocal?: boolean }): Promise<void> {
+    const keepLocal = opts?.keepLocal ?? true;
+
+    if (isLeavingRef.current) return;
+    isLeavingRef.current = true;
     leavingRef.current = true;
 
     const room = roomRef.current;
     roomRef.current = null;
 
-    // DC + listeners first
+    // DC and listeners first
     dcDetach();
     clearRoomListeners();
 
@@ -250,16 +264,16 @@ export default function ChatClient() {
       try {
         // unpublish without stopping local tracks
         const lp: any = room.localParticipant;
-const pubs =
-  typeof lp.getTrackPublications === "function"
-    ? lp.getTrackPublications()
-    : Array.from(lp.trackPublications?.values?.() ?? []);
-for (const pub of pubs) {
-  try {
-    const tr: any = (pub as any).track;
-    if (tr) await lp.unpublishTrack(tr, { stop: false });
-  } catch {}
-}
+        const pubs =
+          typeof lp.getTrackPublications === "function"
+            ? lp.getTrackPublications()
+            : Array.from(lp.trackPublications?.values?.() ?? []);
+        for (const pub of pubs) {
+          try {
+            const tr: any = (pub as any).track;
+            if (tr) await lp.unpublishTrack(tr, { stop: false });
+          } catch {}
+        }
       } catch {}
 
       await new Promise<void>((resolve) => {
@@ -276,7 +290,17 @@ for (const pub of pubs) {
       });
     }
 
+    if (!keepLocal) {
+      try {
+        const s = getLocalStream();
+        for (const tr of s?.getTracks?.() ?? []) {
+          try { tr.stop(); } catch {}
+        }
+      } catch {}
+    }
+
     (globalThis as any).__lkRoom = null;
+    isLeavingRef.current = false;
     leavingRef.current = false;
     setPhase("stopped");
   }
@@ -289,17 +313,17 @@ for (const pub of pubs) {
           const vt = pub.track;
           if (vt && remoteRef.current) {
             const ms = new MediaStream([vt.mediaStreamTrack]);
-            remoteRef.current.srcObject = ms as any;
-            remoteRef.current.play?.().catch(() => {});
+            (remoteRef.current as any).srcObject = ms as any;
+            safePlay(remoteRef.current);
             emitRemoteTrack(ms);
           }
         } else if (pub.kind === Track.Kind.Audio) {
           const at = pub.track;
           if (at && remoteAudioRef.current) {
             const ms = new MediaStream([at.mediaStreamTrack]);
-            remoteAudioRef.current.srcObject = ms as any;
+            (remoteAudioRef.current as any).srcObject = ms as any;
             remoteAudioRef.current.muted = false;
-            remoteAudioRef.current.play?.().catch(() => {});
+            safePlay(remoteAudioRef.current);
           }
         }
         setPhase("connected");
@@ -311,8 +335,8 @@ for (const pub of pubs) {
     const onTrackUnsub = (_t: RemoteTrack, pub: RemoteTrackPublication) => {
       if (!isActiveSid(sid)) return;
       try {
-        if (pub.kind === Track.Kind.Video && remoteRef.current) remoteRef.current.srcObject = null;
-        if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+        if (pub.kind === Track.Kind.Video && remoteRef.current) (remoteRef.current as any).srcObject = null;
+        if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) (remoteAudioRef.current as any).srcObject = null;
       } catch {}
     };
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsub);
@@ -324,10 +348,9 @@ for (const pub of pubs) {
         setPhase("searching");
       } else if (state === "connected") {
         setPhase("connected");
-        try { remoteRef.current?.play?.(); } catch {}
-        try { remoteAudioRef.current?.play?.(); } catch {}
+        safePlay(remoteRef.current);
+        safePlay(remoteAudioRef.current);
       }
-      // no auto-join on disconnected — Next/Prev controls it
     };
     room.on(RoomEvent.ConnectionStateChanged, onConn);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ConnectionStateChanged, onConn); } catch {} });
@@ -360,7 +383,7 @@ for (const pub of pubs) {
 
     const onPart = () => {
       if (!isActiveSid(sid)) return;
-      setPhase("searching"); // inform HUD only
+      setPhase("searching");
     };
     room.on(RoomEvent.ParticipantDisconnected, onPart);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
@@ -375,9 +398,10 @@ for (const pub of pubs) {
   }
 
   async function joinViaRedisMatch(sid: number): Promise<void> {
-    if (!isActiveSid(sid) || joiningRef.current || leavingRef.current) return;
+    if (!isActiveSid(sid) || isConnectingRef.current || isLeavingRef.current) return;
     if (roomRef.current?.state === "connecting") return;
 
+    isConnectingRef.current = true;
     joiningRef.current = true;
     setPhase("searching");
 
@@ -400,25 +424,29 @@ for (const pub of pubs) {
         filterGenders: gFilter,
         filterCountries: Array.isArray(countries) ? countries : [],
       });
-      if (!isActiveSid(sid)) return;
+      if (!isActiveSid(sid) || isLeavingRef.current) return;
 
       // next (two attempts)
       let roomName: string | null = null;
       for (let i = 0; i < 2 && !roomName; i++) {
-        roomName = await nextReq(ticket, 8000);
-        if (!isActiveSid(sid)) return;
+        const n = await nextReq(ticket, 8000);
+        if (!isActiveSid(sid) || isLeavingRef.current) return;
+        roomName = n;
       }
       if (!roomName) { setPhase("stopped"); return; }
 
       // prepare room
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
-      wireRoomEvents(room, roomName, sid);
+      if (!isActiveSid(sid) || isLeavingRef.current) { try { await room.disconnect(false); } catch {} return; }
 
-      // token + connect
+      wireRoomEvents(room, roomName, sid);
+      if (!isActiveSid(sid) || isLeavingRef.current) { try { await room.disconnect(false); } catch {} return; }
+
+      // token
       const id = identity();
       const token = await tokenReq(roomName, id);
-      if (!isActiveSid(sid)) return;
+      if (!isActiveSid(sid) || isLeavingRef.current) return;
 
       clearRemoteMedia();
       setPhase("matched");
@@ -426,7 +454,7 @@ for (const pub of pubs) {
 
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       await room.connect(ws, token);
-      if (!isActiveSid(sid)) { try { await room.disconnect(false); } catch {} return; }
+      if (!isActiveSid(sid) || isLeavingRef.current) { try { await room.disconnect(false); } catch {} return; }
 
       // expose & DC attach
       (globalThis as any).__lkRoom = room;
@@ -442,13 +470,15 @@ for (const pub of pubs) {
       const src = (effectsStream ?? getLocalStream()) || null;
       if (src && room.state === "connected") {
         for (const t of src.getTracks()) {
-          if (!isActiveSid(sid)) break;
+          if (!isActiveSid(sid) || isLeavingRef.current) break;
           try { await room.localParticipant.publishTrack(t); } catch {}
         }
       }
+      setPhase("connected");
     } catch (e) {
       console.warn("joinViaRedisMatch failed", e);
     } finally {
+      isConnectingRef.current = false;
       joiningRef.current = false;
     }
   }
@@ -464,9 +494,9 @@ for (const pub of pubs) {
         await initLocalMedia();
         const s = getLocalStream();
         if (localRef.current && s) {
-          localRef.current.srcObject = s;
+          (localRef.current as any).srcObject = s;
           localRef.current.muted = true;
-          await localRef.current.play().catch(() => {});
+          await safePlay(localRef.current);
         }
         setReady(true);
         const sid = newSid();
@@ -492,24 +522,24 @@ for (const pub of pubs) {
       try {
         const newStream = await switchCamera();
         if (localRef.current && newStream) {
-          localRef.current.srcObject = newStream;
-          localRef.current.play().catch(() => {});
+          (localRef.current as any).srcObject = newStream;
+          safePlay(localRef.current);
         }
         const room = roomRef.current;
         if (room && room.state === "connected") {
           const lp: any = room.localParticipant;
-const pubs =
-  typeof lp.getTrackPublications === "function"
-    ? lp.getTrackPublications()
-    : Array.from(lp.trackPublications?.values?.() ?? []);
-for (const pub of pubs) {
-  const k = (pub as any).kind;
-  const src = (pub as any).source;
-  const tr: any = (pub as any).track;
-  if ((k === Track.Kind.Video || src === "camera") && tr) {
-    try { await lp.unpublishTrack(tr, { stop: false }); } catch {}
-  }
-}
+          const pubs =
+            typeof lp.getTrackPublications === "function"
+              ? lp.getTrackPublications()
+              : Array.from(lp.trackPublications?.values?.() ?? []);
+          for (const pub of pubs) {
+            const k = (pub as any).kind;
+            const src = (pub as any).source;
+            const tr: any = (pub as any).track;
+            if ((k === Track.Kind.Video || src === "camera") && tr) {
+              try { await lp.unpublishTrack(tr, { stop: false }); } catch {}
+            }
+          }
           const nv = newStream.getVideoTracks()[0];
           if (nv) { try { await room.localParticipant.publishTrack(nv); } catch {} }
         }
@@ -529,22 +559,30 @@ for (const pub of pubs) {
     }));
     offs.push(on("ui:report", () => { toast("Report sent. Moving on"); }));
 
+    // Next/Prev sequencing and safety
     offs.push(on("ui:next", async () => {
       const now = Date.now();
-      if (joiningRef.current || leavingRef.current || roomRef.current?.state === "connecting") return;
+      if (isConnectingRef.current || isLeavingRef.current || roomRef.current?.state === "connecting") return;
       if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
       lastNextTsRef.current = now;
       toast("⏭️ Next");
-      const sid = newSid();          // invalidate in-flight work
-      await leaveRoom();             // clean detach
+      const sid = newSid();
+      await leaveRoom({ keepLocal: true });
       await new Promise(r => setTimeout(r, 120));
       await joinViaRedisMatch(sid);
     }));
 
-    offs.push(on("ui:prev", () => {
-      if (ffa) console.log("FFA_FORCE: enabled");
-      if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); }
-      else { toast("⏮️ Attempting to go back…"); tryPrevOrRandom(); }
+    offs.push(on("ui:prev", async () => {
+      if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); return; }
+      const now = Date.now();
+      if (isConnectingRef.current || isLeavingRef.current || roomRef.current?.state === "connecting") return;
+      if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
+      lastNextTsRef.current = now;
+      toast("⏮️ Prev");
+      const sid = newSid();
+      await leaveRoom({ keepLocal: true });
+      await new Promise(r => setTimeout(r, 120));
+      await joinViaRedisMatch(sid);
     }));
 
     offs.push(on("ui:openMessaging" as any, () => setShowMessaging(true)));
@@ -598,7 +636,8 @@ for (const pub of pubs) {
       try { window.removeEventListener("ditona:peer-meta", onPeerMeta as any); } catch {}
       try { window.removeEventListener("rtc:peer-like", onPeerLike as any); } catch {}
       unsubMob();
-      leaveRoom().catch(()=>{});
+      // cleanup on unmount only
+      leaveRoom({ keepLocal: true }).catch(()=>{});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, vip, ffa, router]);
@@ -675,9 +714,9 @@ for (const pub of pubs) {
                           .then(async () => {
                             const s = getLocalStream();
                             if (localRef.current && s) {
-                              localRef.current.srcObject = s;
+                              (localRef.current as any).srcObject = s;
                               localRef.current.muted = true;
-                              localRef.current.play().catch(() => {});
+                              safePlay(localRef.current);
                               setReady(true);
                               const sid = newSid();
                               joinViaRedisMatch(sid).catch(()=>{});
