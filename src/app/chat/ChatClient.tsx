@@ -39,6 +39,7 @@ import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
+import { normalizeGender } from "@/lib/gender";
 
 /* ===== 4) LiveKit ===== */
 import {
@@ -61,6 +62,7 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
+
 /* ===== 6) Types / consts ===== */
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 1200;
@@ -85,7 +87,7 @@ export default function ChatClient() {
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // keep last remote tracks for detach()
-  const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
+  the remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
   // state
@@ -213,7 +215,7 @@ export default function ChatClient() {
 
   async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) {
     if (!el) return;
-    try { await el.play(); } catch (e: any) { /* ignore AbortError/NotAllowedError */ }
+    try { await el.play(); } catch {}
   }
 
   // Ensure local media is alive before any join
@@ -276,17 +278,16 @@ export default function ChatClient() {
     const room = roomRef.current;
     roomRef.current = null;
 
-    // Detach DC and listeners first to avoid late callbacks
+    // Detach DC and listeners first
     dcDetach();
     clearRoomListeners();
 
-    // Clear remote DOM immediately and keep local preview alive
+    // Clear remote DOM and keep local preview
     detachRemoteAll();
     restoreLocalPreview();
 
     if (room) {
       try {
-        // Unpublish locals without stopping tracks
         const lp: any = room.localParticipant;
         const pubs =
           typeof lp.getTrackPublications === "function"
@@ -386,7 +387,7 @@ export default function ChatClient() {
 
     const onPart = () => {
       if (!isActiveSid(sid)) return;
-      setPhase("searching"); // inform HUD only; no auto-rejoin
+      setPhase("searching");
     };
     room.on(RoomEvent.ParticipantDisconnected, onPart);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
@@ -414,14 +415,15 @@ export default function ChatClient() {
         const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
         if (g?.country) selfCountry = String(g.country).toUpperCase();
       } catch {}
-      const gFilter = gender === "male" || gender === "female" ? [gender] : [];
+      const selected = normalizeGender(gender);
+      const gFilter = selected ? [selected] : [];
 
       // enqueue
       const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
         vip: !!vip,
-        selfGender: profile?.gender === "male" || profile?.gender === "female" ? profile.gender : "u",
+        selfGender: normalizeGender(profile?.gender) ?? "u",
         selfCountry,
         filterGenders: gFilter,
         filterCountries: Array.isArray(countries) ? countries : [],
@@ -540,7 +542,7 @@ export default function ChatClient() {
           const nv = newStream.getVideoTracks()[0];
           if (nv) { try { await room.localParticipant.publishTrack(nv); } catch {} }
         }
-      } catch (e) { console.warn("Camera switch failed:", e); }
+      } catch {}
     }));
     offs.push(on("ui:openSettings", () => { try { window.location.href = "/settings"; } catch {} }));
 
@@ -551,7 +553,7 @@ export default function ChatClient() {
       try {
         const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
         await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-      } catch (e) { console.warn("publishData failed", e); }
+      } catch {}
       toast(`Like ${newLike ? "❤️" : "💔"}`);
     }));
     offs.push(on("ui:report", () => { toast("Report sent. Moving on"); }));
@@ -562,10 +564,9 @@ export default function ChatClient() {
       if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
       lastNextTsRef.current = now;
       toast("⏭️ Next");
-      const sid = newSid();          // invalidate in-flight work
-      await leaveRoom();             // clean detach, keep local preview
+      const sid = newSid();
+      await leaveRoom();
       await new Promise(r => setTimeout(r, 250));
-      // ensure local media is alive before next join
       const s1 = await ensureLocalAliveLocal();
       if (localRef.current && s1) {
         (localRef.current as any).srcObject = s1;
@@ -585,7 +586,6 @@ export default function ChatClient() {
       const sid = newSid();
       await leaveRoom();
       await new Promise(r => setTimeout(r, 250));
-      // ensure local media is alive before previous join
       const s2 = await ensureLocalAliveLocal();
       if (localRef.current && s2) {
         (localRef.current as any).srcObject = s2;
@@ -618,7 +618,6 @@ export default function ChatClient() {
     function onPeerMeta(e: any) {
       const meta = e?.detail;
       if (!meta) return;
-      // peer cards handled by side-effect UI; we just dispatch elsewhere if needed
     }
     window.addEventListener("ditona:peer-meta", onPeerMeta as any);
 
@@ -747,4 +746,3 @@ export default function ChatClient() {
     </>
   );
 }
-
