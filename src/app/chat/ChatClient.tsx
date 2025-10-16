@@ -8,10 +8,7 @@
  * Remote media uses LiveKit track.attach()/detach() to avoid adaptiveStream stalls.
  */
 
-/* ===== 1) DC shim must load first ===== */
 import "@/app/chat/dcShim.client";
-
-/* ===== 2) Side-effect HUD/clients (keep) ===== */
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 import "./freeForAllBridge";
@@ -19,7 +16,6 @@ import "./dcMetaResponder.client";
 import "./likeSyncClient";
 import "./msgSendClient";
 
-/* ===== 3) React + app hooks ===== */
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
@@ -38,11 +34,9 @@ import { useFFA } from "@/lib/useFFA";
 import { useRouter } from "next/navigation";
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
-import { tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
 import { normalizeGender } from "@/lib/gender";
 
-/* ===== 4) LiveKit ===== */
 import {
   Room,
   RoomEvent,
@@ -53,7 +47,6 @@ import {
   ConnectionState,
 } from "livekit-client";
 
-/* ===== 5) UI components ===== */
 import LikeSystem from "@/components/chat/LikeSystem";
 import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
@@ -64,13 +57,11 @@ import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
 
-/* ===== 6) Types / consts ===== */
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 1000;
 const isBrowser = typeof window !== "undefined";
 
-/* ===== 7) Component ===== */
 export default function ChatClient() {
   const ffa = useFFA();
   const router = useRouter();
@@ -81,13 +72,10 @@ export default function ChatClient() {
 
   // DOM refs
   const localRef = useRef<HTMLVideoElement>(null);
-
-  // remote media attach guard (kept for compatibility)
-  const remoteAttachRef = useRef<{ token: number } | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // keep last remote tracks for detach()
+  // last remote tracks
   const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
@@ -112,32 +100,28 @@ export default function ChatClient() {
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
 
+  // persist audio/cam state across Next/Prev
+  const lastMediaStateRef = useRef<{ micOn: boolean; camOn: boolean; remoteMuted: boolean }>({
+    micOn: true,
+    camOn: true,
+    remoteMuted: false,
+  });
+
   // session lock
   const sidRef = useRef(0);
-  function newSid(): number {
-    sidRef.current += 1;
-    return sidRef.current;
-  }
-  function isActiveSid(sid: number) {
-    return sid === sidRef.current;
-  }
+  function newSid(): number { sidRef.current += 1; return sidRef.current; }
+  function isActiveSid(sid: number) { return sid === sidRef.current; }
 
-  /* ===== helpers ===== */
+  /* helpers */
   function setPhase(p: Phase) {
     setRtcPhase(p);
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } })); } catch {}
   }
   function emitPair(pairId: string, role: "caller" | "callee") {
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } })); } catch {}
   }
   function emitRemoteTrackStarted() {
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } })); } catch {}
   }
 
   function stableDid(): string {
@@ -148,9 +132,7 @@ export default function ChatClient() {
       const gen = crypto?.randomUUID?.() || ("did-" + Math.random().toString(36).slice(2, 10));
       localStorage.setItem(k, gen);
       return String(gen);
-    } catch {
-      return "did-" + Math.random().toString(36).slice(2, 10);
-    }
+    } catch { return "did-" + Math.random().toString(36).slice(2, 10); }
   }
   function identity(): string {
     const base = String((profile?.displayName || "anon")).trim() || "anon";
@@ -172,10 +154,9 @@ export default function ChatClient() {
     return String(j.ticket || "");
   }
   async function nextReq(ticket: string, waitMs = 8000): Promise<string | null> {
-    const r = await fetch(
-      `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`,
-      { method: "GET", credentials: "include", cache: "no-store" }
-    );
+    const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`, {
+      method: "GET", credentials: "include", cache: "no-store",
+    });
     if (r.status === 204) return null;
     if (!r.ok) throw new Error(`next failed ${r.status}`);
     const j = await r.json();
@@ -188,10 +169,9 @@ export default function ChatClient() {
     return null;
   }
   async function tokenReq(room: string, id: string): Promise<string> {
-    const r = await fetch(
-      `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
-      { method: "GET", credentials: "include", cache: "no-store" }
-    );
+    const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
+      method: "GET", credentials: "include", cache: "no-store",
+    });
     if (!r.ok) throw new Error("token failed " + r.status);
     const j = await r.json();
     return String(j.token || "");
@@ -207,42 +187,20 @@ export default function ChatClient() {
     try { dc?.setConnected?.(false); } catch {}
     try { dc?.detach?.(); } catch {}
   }
-
   function clearRoomListeners() {
-    for (const off of roomUnsubsRef.current.splice(0)) {
-      try { off(); } catch {}
-    }
+    for (const off of roomUnsubsRef.current.splice(0)) { try { off(); } catch {} }
   }
 
   async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) {
-    if (!el) return;
-    try { await el.play(); } catch {}
+    if (!el) return; try { await el.play(); } catch {}
   }
 
-  // Ensure local media is alive before any join
-  async function ensureLocalAliveLocal(): Promise<MediaStream | null> {
-    try {
-      let s = getLocalStream() as MediaStream | null;
-      const vt = s?.getVideoTracks?.()[0] || null;
-      const at = s?.getAudioTracks?.()[0] || null;
-      const videoEnded = !vt || vt.readyState === "ended";
-      const audioEnded = at ? at.readyState === "ended" : false;
-      if (!s || videoEnded || audioEnded) {
-        try { await initLocalMedia(); } catch {}
-        s = getLocalStream() as MediaStream | null;
-      }
-      return s ?? null;
-    } catch {
-      try { await initLocalMedia(); } catch {}
-      return (getLocalStream() as MediaStream | null) ?? null;
-    }
-  }
-
-  // New helpers using LiveKit attach/detach
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
     if (!el || !track) return;
     try { (track as any).attach?.(el); } catch {}
+    // restore speaker mute state
+    try { el.muted = !!lastMediaStateRef.current.remoteMuted; } catch {}
     safePlay(el);
     if (kind === "video") remoteVideoTrackRef.current = track;
     if (kind === "audio") remoteAudioTrackRef.current = track;
@@ -262,51 +220,47 @@ export default function ChatClient() {
     try { if (remoteVideoRef.current) (remoteVideoRef.current as any).srcObject = null; } catch {}
     try { if (remoteAudioRef.current) (remoteAudioRef.current as any).srcObject = null; } catch {}
   }
-
   function restoreLocalPreview() {
     const s = getLocalStream();
     if (localRef.current && s) {
-      (localRef.current as any).srcObject = s;
+      if ((localRef.current as any).srcObject !== s) (localRef.current as any).srcObject = s;
       localRef.current.muted = true;
       safePlay(localRef.current);
     }
   }
 
-  // publish peer meta helper (twice with a short delay)
-  async function requestPeerMetaTwice(room: Room) {
-    try {
-      const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
-      await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
-      setTimeout(async () => {
-        try {
-          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
-        } catch {}
-      }, 250);
-    } catch {}
+  function snapshotMediaState() {
+    const s = getLocalStream() as MediaStream | null;
+    const micOn = !!s?.getAudioTracks?.()[0]?.enabled;
+    const camOn = !!s?.getVideoTracks?.()[0]?.enabled;
+    const remoteMuted = !!(remoteAudioRef.current?.muted ?? remoteVideoRef.current?.muted);
+    lastMediaStateRef.current = { micOn, camOn, remoteMuted };
+  }
+  function applyLocalTrackStatesBeforePublish(src: MediaStream) {
+    const { micOn, camOn } = lastMediaStateRef.current;
+    try { const at = src.getAudioTracks?.()[0]; if (at) at.enabled = !!micOn; } catch {}
+    try { const vt = src.getVideoTracks?.()[0]; if (vt) vt.enabled = !!camOn; } catch {}
   }
 
   async function leaveRoom(): Promise<void> {
     if (leavingRef.current) return;
     leavingRef.current = true;
 
+    snapshotMediaState(); // حفظ حالات الصوت/الصورة
     const room = roomRef.current;
     roomRef.current = null;
 
-    // Detach DC and listeners first
     dcDetach();
     clearRoomListeners();
-
-    // Clear remote DOM and keep local preview
     detachRemoteAll();
     restoreLocalPreview();
 
     if (room) {
       try {
         const lp: any = room.localParticipant;
-        const pubs =
-          typeof lp.getTrackPublications === "function"
-            ? lp.getTrackPublications()
-            : Array.from(lp.trackPublications?.values?.() ?? []);
+        const pubs = typeof lp.getTrackPublications === "function"
+          ? lp.getTrackPublications()
+          : Array.from(lp.trackPublications?.values?.() ?? []);
         for (const pub of pubs) {
           try {
             const tr: any = (pub as any).track;
@@ -319,8 +273,7 @@ export default function ChatClient() {
 
       await new Promise<void>((resolve) => {
         let done = false;
-        const finish = () => {
-          if (done) return; done = true;
+        const finish = () => { if (done) return; done = true;
           try { room.off(RoomEvent.Disconnected, finish); } catch {}
           resolve();
         };
@@ -414,10 +367,31 @@ export default function ChatClient() {
     room.on(RoomEvent.Disconnected, onDisc);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.Disconnected, onDisc); } catch {} });
 
-    // ensure peer meta after remote joins
-    const onPeerJoined = () => { if (isActiveSid(sid)) requestPeerMetaTwice(room); };
+    const onPeerJoined = () => { requestPeerMetaTwice(room); };
     room.on(RoomEvent.ParticipantConnected, onPeerJoined);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantConnected, onPeerJoined); } catch {} });
+  }
+
+  // send meta twice helper
+  async function requestPeerMetaTwice(room: Room) {
+    try {
+      const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
+      await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
+      setTimeout(async () => {
+        try { await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" }); } catch {}
+      }, 250);
+    } catch {}
+  }
+
+  async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
+    // poll up to 3×8s while sid مازال فعّالًا
+    for (let i = 0; i < 3; i++) {
+      if (!isActiveSid(sid)) return null;
+      const rn = await nextReq(ticket, 8000);
+      if (!isActiveSid(sid)) return null;
+      if (rn) return rn;
+    }
+    return null;
   }
 
   async function joinViaRedisMatch(sid: number): Promise<void> {
@@ -434,7 +408,6 @@ export default function ChatClient() {
         const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
         if (g?.country) selfCountry = String(g.country).toUpperCase();
       } catch {}
-      // unified genders
       const selfGender = normalizeGender(profile?.gender ?? gender ?? "u");
       const selected = normalizeGender(gender ?? "u");
       const gFilter = selected === "u" ? [] : [selected];
@@ -451,8 +424,8 @@ export default function ChatClient() {
       });
       if (!isActiveSid(sid)) return;
 
-      // next (single attempt; rely on 8s wait on server)
-      const roomName = await nextReq(ticket, 8000);
+      // wait room with polling
+      const roomName = await waitRoomLoop(ticket, sid);
       if (!roomName) { setPhase("stopped"); return; }
 
       // prepare room
@@ -474,39 +447,43 @@ export default function ChatClient() {
       await room.connect(ws, token);
       if (!isActiveSid(sid)) { try { await room.disconnect(false); } catch {} isConnectingRef.current = false; return; }
 
-      // expose & DC attach
       (globalThis as any).__lkRoom = room;
       dcAttach(room);
 
-      // request peer meta twice (meta:init)
       await requestPeerMetaTwice(room);
 
-      // publish local tracks AFTER connected
+      // publish local tracks AFTER connected, reapply user states
       const src = (effectsStream ?? getLocalStream()) || null;
       if (src && room.state === "connected") {
+        applyLocalTrackStatesBeforePublish(src);
         for (const t of src.getTracks()) {
           if (!isActiveSid(sid)) break;
           try { await room.localParticipant.publishTrack(t); } catch {}
         }
       }
+      // restore speaker mute
+      try {
+        const muted = !!lastMediaStateRef.current.remoteMuted;
+        if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
+        if (remoteVideoRef.current) remoteVideoRef.current.muted = muted;
+      } catch {}
       setPhase("connected");
     } catch (e) {
       console.warn("joinViaRedisMatch failed", e);
+      setPhase("stopped");
     } finally {
       joiningRef.current = false;
       isConnectingRef.current = false;
     }
   }
 
-  /* ===== 8) Mount / UI wiring ===== */
   useEffect(() => {
     if (!hydrated || !isBrowser) return;
 
-    // boot
     (async () => {
       setPhase("boot");
       try {
-        const s0 = await ensureLocalAliveLocal();
+        const s0 = await initLocalMedia().then(() => getLocalStream()).catch(() => getLocalStream());
         if (localRef.current && s0) {
           (localRef.current as any).srcObject = s0;
           localRef.current.muted = true;
@@ -522,12 +499,10 @@ export default function ChatClient() {
           setCameraPermissionHint("Close the other tab/app using the camera");
         else if (error?.name === "NotFoundError")
           setCameraPermissionHint("No camera or microphone found");
-        else
-          setCameraPermissionHint("Camera access error — check permissions");
+        else setCameraPermissionHint("Camera access error — check permissions");
       }
     })().catch(()=>{});
 
-    // UI events
     const offs: Array<() => void> = [];
     offs.push(on("ui:toggleMic", () => toggleMic()));
     offs.push(on("ui:toggleCam", () => toggleCam()));
@@ -541,10 +516,9 @@ export default function ChatClient() {
         const room = roomRef.current;
         if (room && room.state === "connected") {
           const lp: any = room.localParticipant;
-          const pubs =
-            typeof lp.getTrackPublications === "function"
-              ? lp.getTrackPublications()
-              : Array.from(lp.trackPublications?.values?.() ?? []);
+          const pubs = typeof lp.getTrackPublications === "function"
+            ? lp.getTrackPublications()
+            : Array.from(lp.trackPublications?.values?.() ?? []);
           for (const pub of pubs) {
             const k = (pub as any).kind;
             const src = (pub as any).source;
@@ -581,12 +555,7 @@ export default function ChatClient() {
       const sid = newSid();
       await leaveRoom();
       await new Promise(r => setTimeout(r, 250));
-      const s1 = await ensureLocalAliveLocal();
-      if (localRef.current && s1) {
-        (localRef.current as any).srcObject = s1;
-        localRef.current.muted = true;
-        await safePlay(localRef.current);
-      }
+      restoreLocalPreview();
       await joinViaRedisMatch(sid);
     }));
 
@@ -600,12 +569,7 @@ export default function ChatClient() {
       const sid = newSid();
       await leaveRoom();
       await new Promise(r => setTimeout(r, 250));
-      const s2 = await ensureLocalAliveLocal();
-      if (localRef.current && s2) {
-        (localRef.current as any).srcObject = s2;
-        localRef.current.muted = true;
-        await safePlay(localRef.current);
-      }
+      restoreLocalPreview();
       await joinViaRedisMatch(sid);
     }));
 
@@ -618,6 +582,7 @@ export default function ChatClient() {
       const target: any = a ?? v;
       if (target) {
         target.muted = !target.muted;
+        lastMediaStateRef.current.remoteMuted = target.muted;
         toast(target.muted ? "Remote muted" : "Remote unmuted");
       }
     }));
@@ -629,87 +594,47 @@ export default function ChatClient() {
     }));
     offs.push(on("ui:upsell", (d: any) => { if (ffa) return; router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`); }));
 
-    function onPeerMeta(e: any) {
-      const meta = e?.detail;
-      if (!meta) return;
-      // UI side-effects handled by peerMetaUi.client
-    }
-    window.addEventListener("ditona:peer-meta", onPeerMeta as any);
-
-    function onPeerLike(e: any) {
-      const detail = e.detail;
-      if (detail && typeof detail.liked === "boolean") {
-        setPeerLikes(detail.liked ? 1 : 0);
-        toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
-      }
-    }
-    window.addEventListener("rtc:peer-like", onPeerLike as any);
-
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe(() => {});
 
     return () => {
       for (const off of offs) try { off(); } catch {}
-      try { window.removeEventListener("ditona:peer-meta", onPeerMeta as any); } catch {}
-      try { window.removeEventListener("rtc:peer-like", onPeerLike as any); } catch {}
       unsubMob();
       leaveRoom().catch(()=>{});
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, vip, ffa, router, gender, countries, profile?.gender]);
 
-  /* ===== 9) UI ===== */
   return (
     <>
       <LikeHud />
-      <div
-        className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100"
-        data-chat-container
-      >
+      <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
-          {/* ===== remote ===== */}
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
             <FilterBar />
             <MessageHud />
             <PeerOverlay />
-            <div className="absolute bottom-4 right-4 z-30">
-              <LikeSystem />
-            </div>
+            <div className="absolute bottom-4 right-4 z-30"><LikeSystem /></div>
 
-            <video
-              ref={remoteVideoRef}
-              id="remoteVideo"
-              data-role="remote"
-              className="w-full h-full object-cover"
-              playsInline
-              autoPlay
-            />
+            <video ref={remoteVideoRef} id="remoteVideo" data-role="remote" className="w-full h-full object-cover" playsInline autoPlay />
             <audio ref={remoteAudioRef} id="remoteAudio" autoPlay playsInline hidden />
 
             {rtcPhase === "searching" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">Searching for a partner…</div>
-                <button
-                  onClick={() => toast("🛑 Search cancelled")}
-                  className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
-                >
+                <button onClick={() => toast("🛑 Search cancelled")}
+                  className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto">
                   Cancel
                 </button>
               </div>
             )}
           </section>
 
-          {/* ===== local ===== */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
               data-local-video
               className={`w-full h-full object-cover ${isMirrored ? "scale-x-[-1]" : ""}`}
-              playsInline
-              muted
-              autoPlay
-            />
-
+              playsInline muted autoPlay />
             {!ready && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 text-sm text-center px-4">
                 {cameraPermissionHint ? (
@@ -737,22 +662,17 @@ export default function ChatClient() {
                             else setCameraPermissionHint("Camera access error — check permissions");
                           });
                       }}
-                      className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200"
-                    >
+                      className="px-4 py-2 bg-blue-500/80 hover:bg-blue-600/80 rounded-lg text-white font-medium transition-colors duration-200">
                       Retry
                     </button>
                   </>
-                ) : (
-                  <div>Requesting camera/mic…</div>
-                )}
+                ) : (<div>Requesting camera/mic…</div>)}
               </div>
             )}
-
             <MyControls />
             <div id="gesture-layer" className="absolute inset-0 -z-10" />
           </section>
 
-          {/* bars */}
           <ChatToolbar />
           <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
           <ChatMessagingBar />
