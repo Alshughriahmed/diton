@@ -87,7 +87,7 @@ export default function ChatClient() {
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // keep last remote tracks for detach()
-  the remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
+  const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
   // state
