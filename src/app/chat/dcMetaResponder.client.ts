@@ -2,10 +2,15 @@
 "use client";
 
 /**
- * Reply to {t:"meta:init"} with normalized peer meta from profile + geo.
- * Source of truth for gender: profile.gender only.
- * Sends over window.__ditonaDataChannel, falls back to LiveKit publishData.
- * Resends on "rtc:phase=connected", "profile:updated", and "ditona:geo".
+ * Peer meta responder over the global DC shim.
+ * - Source of truth: profile.gender
+ * - Sends on:
+ *    • reception of {t:"meta:init"}
+ *    • rtc:phase matched/connected
+ *    • profile:updated
+ *    • ditona:geo
+ * - Sends twice (250ms apart) to cover early attach/race.
+ * - Uses dcShim first, falls back to LiveKit publishData.
  */
 
 import { useProfile } from "@/state/profile";
@@ -14,11 +19,11 @@ import { normalizeGender } from "@/lib/gender";
 type Geo = { countryCode?: string; country?: string; city?: string };
 type Payload = {
   displayName?: string;
-  avatarUrl?: string;
+  avatar?: string;
   vip?: boolean;
   country?: string;
   city?: string;
-  gender?: string; // standardized to: male|female|couple|lgbt
+  gender?: string; // "m" | "f" | "c" | "l" | "u"
   likes?: number;
 };
 
@@ -54,36 +59,21 @@ function buildPayload(): Payload {
   const g = readGeo();
 
   const displayName = String(p?.displayName || p?.name || "").trim() || undefined;
-  const avatarUrl = String(p?.avatarUrl || p?.avatar || p?.photo || "").trim() || undefined;
+  const avatar = String(p?.avatarUrl || p?.avatar || p?.photo || "").trim() || undefined;
   const vip = !!(p?.vip || p?.isVip || p?.premium || p?.pro);
-  const genderStd = normalizeGender(p?.gender);
-
+  const gender = normalizeGender(p?.gender);
   const likes =
-    typeof p?.likes === "number"
-      ? p.likes
-      : typeof p?.likeCount === "number"
-      ? p.likeCount
-      : undefined;
+    typeof p?.likes === "number" ? p.likes :
+    typeof p?.likeCount === "number" ? p.likeCount : undefined;
 
-  return {
-    displayName,
-    avatarUrl,
-    vip,
-    country: g.country,
-    city: g.city,
-    gender: genderStd,
-    likes,
-  };
+  return { displayName, avatar, vip, country: g.country, city: g.city, gender, likes };
 }
 
 function sendJSON(obj: any) {
   // try DC shim first
   try {
     const dc: any = (window as any).__ditonaDataChannel;
-    if (dc?.send) {
-      dc.send(JSON.stringify(obj));
-      return;
-    }
+    if (dc?.send) { dc.send(JSON.stringify(obj)); return; }
   } catch {}
   // fallback LiveKit
   try {
@@ -95,29 +85,32 @@ function sendJSON(obj: any) {
   } catch {}
 }
 
-function sendPeerMeta() {
-  sendJSON({ t: "peer-meta", payload: buildPayload() });
-}
+function sendPeerMetaOnce() { sendJSON({ t: "peer-meta", payload: buildPayload() }); }
+function sendPeerMetaTwice() { sendPeerMetaOnce(); setTimeout(sendPeerMetaOnce, 250); }
 
 function attachOnce() {
   if (!isBrowser) return;
   const dc: any = (window as any).__ditonaDataChannel;
   if (!dc?.addEventListener) return;
 
+  // react to incoming DC messages
   const onMsg = (ev: any) => {
     try {
       const txt = typeof ev?.data === "string" ? ev.data : new TextDecoder().decode(ev?.data);
-      if (!txt || !/^\s*\{/.test(txt)) return;
+      if (!txt || !/\\s*\\{/.test(txt)) return;
       const j = JSON.parse(txt);
-      if (j?.t === "meta:init") sendPeerMeta();
+      if (j?.t === "meta:init") sendPeerMetaTwice();
     } catch {}
   };
-
   dc.addEventListener("message", onMsg);
 
-  const onGeo = () => sendPeerMeta();
-  const onProfile = () => sendPeerMeta();
-  const onPhase = (e: any) => { if (e?.detail?.phase === "connected") sendPeerMeta(); };
+  // react to app events
+  const onGeo = () => sendPeerMetaTwice();
+  const onProfile = () => sendPeerMetaTwice();
+  const onPhase = (e: any) => {
+    const ph = e?.detail?.phase;
+    if (ph === "matched" || ph === "connected") sendPeerMetaTwice();
+  };
 
   window.addEventListener("ditona:geo", onGeo as any);
   window.addEventListener("profile:updated", onProfile as any);
