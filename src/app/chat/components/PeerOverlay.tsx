@@ -4,18 +4,40 @@ import { useEffect, useState } from "react";
 type Meta = {
   country?: string;
   city?: string;
-  gender?: string; // "male" | "female" | "couple" | "lgbt"
+  gender?: string;
   avatarUrl?: string;
   likes?: number;
 };
 
+function normGender(v: any): "male" | "female" | "couple" | "lgbt" | null {
+  const s = String(v ?? "").trim().toLowerCase();
+
+  if (!s) return null;
+  // direct words / letters
+  if (s === "m" || s.startsWith("male") || s.includes("man") || s.includes("boy")) return "male";
+  if (s === "f" || s.startsWith("female") || s.includes("woman") || s.includes("girl")) return "female";
+  if (s === "c" || s.includes("couple") || s.includes("pair")) return "couple";
+  if (s.includes("lgbt") || s.includes("rainbow") || s.includes("gay") || s.includes("pride")) return "lgbt";
+
+  // emoji/symbols inside any string
+  if (s.includes("♂")) return "male";
+  if (s.includes("♀")) return "female";
+  if (s.includes("👨") || s.includes("👩")) return "couple";
+  if (s.includes("🏳️‍🌈")) return "lgbt";
+
+  return null;
+}
+
 function genderBadge(g?: string) {
-  const x = (g || "").toLowerCase();
-  if (x.startsWith("male") || x === "m") return { label: "Male ♂️", cls: "text-blue-800" };
-  if (x.startsWith("female") || x === "f") return { label: "Female ♀️", cls: "text-red-600" };
-  if (x.includes("couple")) return { label: "Couple 👨‍❤️‍👨", cls: "text-red-500" };
-  if (x.includes("lgbt") || x.includes("rainbow") || x.includes("gay"))
-    return { label: "LGBT 🏳️‍🌈", cls: "bg-gradient-to-r from-red-500 via-yellow-400 via-green-500 via-blue-500 to-purple-500 bg-clip-text text-transparent" };
+  const t = normGender(g);
+  if (t === "male") return { label: "Male ♂️", cls: "text-blue-800" };           // أزرق غامق
+  if (t === "female") return { label: "Female ♀️", cls: "text-red-600" };        // أحمر فاقع
+  if (t === "couple") return { label: "Couple 👨‍❤️‍👨", cls: "text-red-500" };   // أحمر فاتح
+  if (t === "lgbt")
+    return {
+      label: "LGBT 🏳️‍🌈",
+      cls: "bg-gradient-to-r from-red-500 via-yellow-400 via-green-500 via-blue-500 to-purple-500 bg-clip-text text-transparent",
+    };
   return null;
 }
 
@@ -26,27 +48,33 @@ export default function PeerOverlay() {
   useEffect(() => {
     const onMeta = (ev: any) => {
       const d = ev?.detail || {};
+      const genderRaw =
+        d.gender ?? d.sex ?? d.g ?? d.s ?? d.genderEmoji ?? d.gender_symbol ?? d.genderSymbol ?? d.genderCode;
+
       setMeta({
-        country: d.country || d.ctry || d.countryCode || "",
-        city: d.city || d.town || "",
-        gender: (d.gender || d.g || "").toLowerCase(),
-        avatarUrl: d.avatar || d.photo || d.avatarUrl || "",
-        likes: typeof d.likes === "number" ? d.likes : likes,
+        country: d.country ?? d.ctry ?? d.countryName ?? d.cc ?? d.cn ?? "",
+        city: d.city ?? d.town ?? d.locality ?? d.ci ?? "",
+        gender: genderRaw,
+        avatarUrl: d.avatar ?? d.photo ?? d.avatarUrl ?? "",
       });
-      if (typeof d.likes === "number") setLikes(d.likes);
+
+      const likeIn = d.likes ?? d.likeCount ?? d.hearts ?? d.heartCount;
+      if (typeof likeIn === "number") setLikes(likeIn);
     };
+
     const onLike = (ev: any) => {
       const n = ev?.detail?.likes ?? ev?.detail?.count;
       if (typeof n === "number") setLikes(n);
       else setLikes((x) => x + 1);
     };
+
     window.addEventListener("ditona:peer-meta", onMeta as any);
     window.addEventListener("ditona:like:recv", onLike as any);
     return () => {
       window.removeEventListener("ditona:peer-meta", onMeta as any);
       window.removeEventListener("ditona:like:recv", onLike as any);
     };
-  }, [likes]);
+  }, []);
 
   const g = genderBadge(meta.gender);
 
@@ -68,7 +96,7 @@ export default function PeerOverlay() {
         </div>
       </div>
 
-      {/* Bottom-left: country–city + gender text, fully transparent background */}
+      {/* Bottom-left: Country–City + gender */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         <span className="text-white/95">
           {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
