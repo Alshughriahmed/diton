@@ -61,7 +61,7 @@ import ChatMessagingBar from "./components/ChatMessagingBar";
 import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
-
+import PeerOverlay from "./components/PeerOverlay";
 /* ===== 6) Types / consts ===== */
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 1200;
@@ -658,7 +658,7 @@ export default function ChatClient() {
           <section className="relative rounded-2xl bg-black/30 overflow-hidden">
             <FilterBar />
             <MessageHud />
-
+            <PeerOverlay />
             <div className="absolute bottom-4 right-4 z-30">
               <LikeSystem />
             </div>
