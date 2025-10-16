@@ -1,10 +1,5 @@
 // src/lib/gender.ts
 // Normalize user-facing gender inputs to a compact enum.
-// Inputs (case-insensitive) examples:
-//   "male","m","man", "female","f","woman",
-//   "couples","couple","c","pair",
-//   "lgbt","l","gay","bi","queer",
-//   "everyone","all","any","*","", undefined, null
 // Output enum: "m" | "f" | "c" | "l" | "u"
 
 export type GenderNorm = "m" | "f" | "c" | "l" | "u";
@@ -62,5 +57,8 @@ export function genderSymbol(g: GenderNorm): string {
   }
 }
 
-/** Back-compat alias used by legacy imports. */
-export const genderBadge = genderSymbol;
+/** Back-compat helper that accepts undefined and raw strings. */
+export function genderBadge(input?: unknown): string {
+  const g = normalizeGender(input);
+  return genderSymbol(g);
+}
