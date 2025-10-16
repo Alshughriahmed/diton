@@ -5,6 +5,7 @@
  * LiveKit-only + Redis match
  * Race-free join/leave using sid guard and connect/leave mutexes.
  * No /api/rtc/* usage. DC shim global. Local preview persists across Next/Prev.
+ * Remote media uses LiveKit track.attach()/detach() to avoid adaptiveStream stalls.
  */
 
 /* ===== 1) DC shim must load first ===== */
@@ -79,10 +80,14 @@ export default function ChatClient() {
   // DOM refs
   const localRef = useRef<HTMLVideoElement>(null);
 
-  // remote media attach guard
+  // remote media attach guard (kept for compatibility)
   const remoteAttachRef = useRef<{ token: number } | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // keep last remote tracks for detach()
+  const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
+  const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
   // state
   const [ready, setReady] = useState(false);
@@ -127,9 +132,9 @@ export default function ChatClient() {
       window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
     } catch {}
   }
-  function emitRemoteTrack(stream: MediaStream) {
+  function emitRemoteTrackStarted() {
     try {
-      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { stream } }));
+      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } }));
     } catch {}
   }
 
@@ -150,7 +155,7 @@ export default function ChatClient() {
     const did = String(stableDid());
     const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
     return `${base}#${tail}`;
-    }
+  }
 
   async function enqueueReq(b: any): Promise<string> {
     const r = await fetch("/api/match/enqueue", {
@@ -212,25 +217,29 @@ export default function ChatClient() {
     try { await el.play(); } catch (e: any) { /* ignore AbortError/NotAllowedError */ }
   }
 
-  async function attachRemote(kind: "video" | "audio", stream: MediaStream | null) {
-    const token = Date.now();
-    remoteAttachRef.current = { token };
+  // New helpers using LiveKit attach/detach
+  function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
-    if (!el) return;
-
-    if (!stream) { (el as any).srcObject = null; return; }
-
-    (el as any).srcObject = stream;
-    await safePlay(el);
-
-    if (remoteAttachRef.current?.token !== token) {
-      try { el.pause?.(); } catch {}
-    }
+    if (!el || !track) return;
+    try { (track as any).attach?.(el); } catch {}
+    safePlay(el);
+    if (kind === "video") remoteVideoTrackRef.current = track;
+    if (kind === "audio") remoteAudioTrackRef.current = track;
+    emitRemoteTrackStarted();
   }
   function detachRemoteAll() {
+    try {
+      if (remoteVideoTrackRef.current && remoteVideoRef.current) {
+        try { (remoteVideoTrackRef.current as any).detach?.(remoteVideoRef.current); } catch {}
+      }
+      if (remoteAudioTrackRef.current && remoteAudioRef.current) {
+        try { (remoteAudioTrackRef.current as any).detach?.(remoteAudioRef.current); } catch {}
+      }
+    } catch {}
+    remoteVideoTrackRef.current = null;
+    remoteAudioTrackRef.current = null;
     try { if (remoteVideoRef.current) (remoteVideoRef.current as any).srcObject = null; } catch {}
     try { if (remoteAudioRef.current) (remoteAudioRef.current as any).srcObject = null; } catch {}
-    remoteAttachRef.current = null;
   }
 
   function restoreLocalPreview() {
@@ -294,22 +303,13 @@ export default function ChatClient() {
   }
 
   function wireRoomEvents(room: Room, roomName: string, sid: number) {
-    const onTrack = (_t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
+    const onTrack = (t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
       if (!isActiveSid(sid)) return;
       try {
-        if (pub.kind === Track.Kind.Video) {
-          const vt = pub.track;
-          if (vt) {
-            const ms = new MediaStream([vt.mediaStreamTrack]);
-            attachRemote("video", ms);
-            emitRemoteTrack(ms);
-          }
-        } else if (pub.kind === Track.Kind.Audio) {
-          const at = pub.track;
-          if (at) {
-            const ms = new MediaStream([at.mediaStreamTrack]);
-            attachRemote("audio", ms);
-          }
+        if (pub.kind === Track.Kind.Video && remoteVideoRef.current) {
+          attachRemoteTrack("video", t);
+        } else if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
+          attachRemoteTrack("audio", t);
         }
         setPhase("connected");
       } catch {}
@@ -317,11 +317,17 @@ export default function ChatClient() {
     room.on(RoomEvent.TrackSubscribed, onTrack);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.TrackSubscribed, onTrack); } catch {} });
 
-    const onTrackUnsub = (_t: RemoteTrack, pub: RemoteTrackPublication) => {
+    const onTrackUnsub = (t: RemoteTrack, pub: RemoteTrackPublication) => {
       if (!isActiveSid(sid)) return;
       try {
-        if (pub.kind === Track.Kind.Video) attachRemote("video", null);
-        if (pub.kind === Track.Kind.Audio) attachRemote("audio", null);
+        if (pub.kind === Track.Kind.Video && remoteVideoRef.current) {
+          try { (t as any).detach?.(remoteVideoRef.current); } catch {}
+          if (remoteVideoTrackRef.current === t) remoteVideoTrackRef.current = null;
+        }
+        if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
+          try { (t as any).detach?.(remoteAudioRef.current); } catch {}
+          if (remoteAudioTrackRef.current === t) remoteAudioTrackRef.current = null;
+        }
       } catch {}
     };
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsub);
