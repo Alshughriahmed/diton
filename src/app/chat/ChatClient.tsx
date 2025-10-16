@@ -112,6 +112,13 @@ export default function ChatClient() {
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
 
+  // persist mic/cam and remote mute across Next/Prev
+  const lastMediaStateRef = useRef<{ micOn: boolean; camOn: boolean; remoteMuted: boolean }>({
+    micOn: true,
+    camOn: true,
+    remoteMuted: false,
+  });
+
   // session lock
   const sidRef = useRef(0);
   function newSid(): number {
@@ -238,11 +245,26 @@ export default function ChatClient() {
     }
   }
 
+  // media state snapshot/apply
+  function snapshotMediaState() {
+    const s = getLocalStream() as MediaStream | null;
+    const micOn = !!s?.getAudioTracks?.()[0]?.enabled;
+    const camOn = !!s?.getVideoTracks?.()[0]?.enabled;
+    const remoteMuted = !!(remoteAudioRef.current?.muted ?? remoteVideoRef.current?.muted);
+    lastMediaStateRef.current = { micOn, camOn, remoteMuted };
+  }
+  function applyLocalTrackStatesBeforePublish(src: MediaStream) {
+    const { micOn, camOn } = lastMediaStateRef.current;
+    try { const at = src.getAudioTracks?.()[0]; if (at) at.enabled = !!micOn; } catch {}
+    try { const vt = src.getVideoTracks?.()[0]; if (vt) vt.enabled = !!camOn; } catch {}
+  }
+
   // New helpers using LiveKit attach/detach
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
     if (!el || !track) return;
     try { (track as any).attach?.(el); } catch {}
+    try { el.muted = !!lastMediaStateRef.current.remoteMuted; } catch {}
     safePlay(el);
     if (kind === "video") remoteVideoTrackRef.current = track;
     if (kind === "audio") remoteAudioTrackRef.current = track;
@@ -285,9 +307,22 @@ export default function ChatClient() {
     } catch {}
   }
 
+  // polling loop so searching never stops until matched or sid changes
+  async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
+    while (isActiveSid(sid)) {
+      const rn = await nextReq(ticket, 8000);
+      if (!isActiveSid(sid)) return null;
+      if (rn) return rn;
+      // continue polling
+    }
+    return null;
+  }
+
   async function leaveRoom(): Promise<void> {
     if (leavingRef.current) return;
     leavingRef.current = true;
+
+    snapshotMediaState();
 
     const room = roomRef.current;
     roomRef.current = null;
@@ -451,8 +486,8 @@ export default function ChatClient() {
       });
       if (!isActiveSid(sid)) return;
 
-      // next (single attempt; rely on 8s wait on server)
-      const roomName = await nextReq(ticket, 8000);
+      // wait for room with continuous polling
+      const roomName = await waitRoomLoop(ticket, sid);
       if (!roomName) { setPhase("stopped"); return; }
 
       // prepare room
@@ -481,14 +516,22 @@ export default function ChatClient() {
       // request peer meta twice (meta:init)
       await requestPeerMetaTwice(room);
 
-      // publish local tracks AFTER connected
+      // publish local tracks AFTER connected and keep user mic/cam states
       const src = (effectsStream ?? getLocalStream()) || null;
       if (src && room.state === "connected") {
+        applyLocalTrackStatesBeforePublish(src);
         for (const t of src.getTracks()) {
           if (!isActiveSid(sid)) break;
           try { await room.localParticipant.publishTrack(t); } catch {}
         }
       }
+      // restore remote mute state
+      try {
+        const muted = !!lastMediaStateRef.current.remoteMuted;
+        if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
+        if (remoteVideoRef.current) remoteVideoRef.current.muted = muted;
+      } catch {}
+
       setPhase("connected");
     } catch (e) {
       console.warn("joinViaRedisMatch failed", e);
@@ -618,6 +661,7 @@ export default function ChatClient() {
       const target: any = a ?? v;
       if (target) {
         target.muted = !target.muted;
+        lastMediaStateRef.current.remoteMuted = target.muted;
         toast(target.muted ? "Remote muted" : "Remote unmuted");
       }
     }));
