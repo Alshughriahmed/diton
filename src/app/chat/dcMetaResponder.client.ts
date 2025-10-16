@@ -2,13 +2,13 @@
 "use client";
 
 /**
- * Responds to { t:"meta:init" } over the data channel with a normalized peer meta payload.
- * Sources:
- *   - profile store (displayName, avatarUrl, gender, vip)
- *   - localStorage "ditona_geo" (country, city)
- * Always sends using the DC shim (window.__ditonaDataChannel), falling back to LiveKit publishData if needed.
- * Also re-sends meta when geo/profile change.
+ * يردّ على {t:"meta:init"} ببيانات ميتا موحّدة للطرف الآخر.
+ * المصادر: profile store + localStorage("ditona_geo").
+ * الإرسال عبر الشيم window.__ditonaDataChannel، مع fallback إلى LiveKit publishData.
+ * يعيد الإرسال عند تغيّر geo أو profile أو عند الانتقال إلى حالة connected.
  */
+
+import { useProfile } from "@/state/profile";
 
 type Geo = { countryCode?: string; country?: string; city?: string };
 type Payload = {
@@ -17,26 +17,13 @@ type Payload = {
   vip?: boolean;
   country?: string;
   city?: string;
-  gender?: string; // free text; receiver normalizes
+  gender?: string; // يستقبلها الطرف الآخر ويطبّعها
   likes?: number;
 };
 
-declare global {
-  interface Window {
-    __ditonaDataChannel?: {
-      send?: (data: string | ArrayBuffer | Blob) => void;
-      addEventListener?: (type: "message", cb: (ev: any) => void) => void;
-      removeEventListener?: (type: "message", cb: (ev: any) => void) => void;
-      setConnected?: (x: boolean) => void;
-      attach?: (room: any) => void;
-      detach?: () => void;
-    };
-  }
-}
-
 const isBrowser = typeof window !== "undefined";
 
-// ===== helpers =====
+// ========= helpers =========
 function readGeo(): Geo {
   try {
     const raw = localStorage.getItem("ditona_geo");
@@ -54,10 +41,7 @@ function readGeo(): Geo {
 
 function readProfile() {
   try {
-    // Zustand-style store expected
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { useProfile } = require("@/state/profile");
-    const st = useProfile.getState?.();
+    const st = (useProfile as any)?.getState?.();
     return st?.profile ?? {};
   } catch {
     return {};
@@ -68,10 +52,8 @@ function buildPayload(): Payload {
   const p: any = readProfile();
   const g = readGeo();
 
-  const displayName =
-    String(p?.displayName || p?.name || "").trim() || undefined;
-  const avatarUrl =
-    String(p?.avatarUrl || p?.avatar || p?.photo || "").trim() || undefined;
+  const displayName = String(p?.displayName || p?.name || "").trim() || undefined;
+  const avatarUrl = String(p?.avatarUrl || p?.avatar || p?.photo || "").trim() || undefined;
   const vip = !!(p?.vip || p?.isVip || p?.premium || p?.pro);
 
   const genderRaw =
@@ -125,7 +107,7 @@ function sendPeerMeta() {
   sendJSON({ t: "peer-meta", payload });
 }
 
-// ===== wiring =====
+// ========= wiring =========
 function attachOnce() {
   if (!isBrowser) return;
   const dc: any = (window as any).__ditonaDataChannel;
@@ -133,48 +115,42 @@ function attachOnce() {
 
   const onMsg = (ev: any) => {
     try {
-      const txt = typeof ev?.data === "string" ? ev.data : new TextDecoder().decode(ev?.data);
+      const txt =
+        typeof ev?.data === "string" ? ev.data : new TextDecoder().decode(ev?.data);
       if (!txt || !/^\s*\{/.test(txt)) return;
       const j = JSON.parse(txt);
-      if (j?.t === "meta:init") {
-        sendPeerMeta();
-      }
-    } catch {
-      /* ignore */
-    }
+      if (j?.t === "meta:init") sendPeerMeta();
+    } catch {}
   };
 
   dc.addEventListener("message", onMsg);
 
-  // re-send meta on geo/profile updates
   const onGeo = () => sendPeerMeta();
   const onProfile = () => sendPeerMeta();
+  const onPhase = (e: any) => { if (e?.detail?.phase === "connected") sendPeerMeta(); };
 
   window.addEventListener("ditona:geo", onGeo as any);
   window.addEventListener("profile:updated", onProfile as any);
-  window.addEventListener("rtc:phase", (e: any) => {
-    if (e?.detail?.phase === "connected") sendPeerMeta();
-  });
+  window.addEventListener("rtc:phase", onPhase as any);
 
-  // clean-up when module hot-reloads
-  if (import.meta && (import.meta as any).hot) {
+  // cleanup for HMR
+  if ((import.meta as any)?.hot) {
     (import.meta as any).hot.dispose(() => {
       try { dc.removeEventListener?.("message", onMsg as any); } catch {}
       window.removeEventListener("ditona:geo", onGeo as any);
       window.removeEventListener("profile:updated", onProfile as any);
+      window.removeEventListener("rtc:phase", onPhase as any);
     });
   }
 }
 
-// boot: wait until shim attaches
+// boot: انتظر حتى يجهز الشيم
 (function boot() {
   if (!isBrowser) return;
   let tries = 0;
   const iv = setInterval(() => {
     tries++;
     attachOnce();
-    if ((window as any).__ditonaDataChannel?.addEventListener || tries > 40) {
-      clearInterval(iv);
-    }
+    if ((window as any).__ditonaDataChannel?.addEventListener || tries > 40) clearInterval(iv);
   }, 100);
 })();
