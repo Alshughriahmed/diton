@@ -1,34 +1,63 @@
-// src/lib/gender.ts
-export type Gender = "male" | "female" | "couple" | "lgbt";
+// lib/gender.ts
+// Normalize user-facing gender inputs to a tight enum.
+// Input examples accepted (case-insensitive): 
+//   "male","m","man", "female","f","woman", "couples","couple","c",
+//   "lgbt","l","gay","bi","queer", "everyone","all","any","*",""
+// Output enum: "m" | "f" | "c" | "l" | "u"
 
-export function normalizeGender(v: any): Gender | undefined {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (!s) return undefined;
+export type GenderNorm = "m" | "f" | "c" | "l" | "u";
 
-  // EN
-  if (s === "m" || s.startsWith("male") || s.includes("♂")) return "male";
-  if (s === "f" || s.startsWith("female") || s.includes("♀")) return "female";
-  if (s.includes("couple") || s.includes("pair") || s.includes("👨") || s.includes("👩")) return "couple";
-  if (s.includes("lgbt") || s.includes("pride") || s.includes("🏳️‍🌈") || s.includes("gay")) return "lgbt";
+/** Normalize arbitrary gender strings to the compact enum.
+ *  everyone/all/empty -> "u" (unrestricted)
+ */
+export function normalizeGender(v?: unknown): GenderNorm {
+  if (v === null || v === undefined) return "u";
+  const s0 = String(v).trim();
+  if (s0 === "") return "u";
+  const s = s0.toLowerCase();
 
-  // AR fallbacks
-  if (s.includes("ذكر")) return "male";
-  if (s.includes("أنث") || s.includes("انث")) return "female";
-  if (s.includes("زوج")) return "couple";
-  if (s.includes("مثلي")) return "lgbt";
+  // unrestricted / everyone
+  if (
+    s === "everyone" ||
+    s === "every" ||
+    s === "any" ||
+    s === "all" ||
+    s === "*" ||
+    s === "u" ||
+    s === "unrestricted"
+  ) {
+    return "u";
+  }
 
-  return undefined;
+  // male
+  if (s === "male" || s === "m" || s.startsWith("man")) return "m";
+
+  // female
+  if (s === "female" || s === "f" || s.startsWith("wom") || s === "woman" || s === "women")
+    return "f";
+
+  // couples
+  if (s === "couple" || s === "couples" || s === "c" || s.startsWith("pair")) return "c";
+
+  // lgbt
+  if (s === "lgbt" || s === "l" || s.includes("gay") || s.includes("queer") || s === "bi")
+    return "l";
+
+  return "u";
 }
 
-export function genderBadge(g?: string): { label: string; cls: string } | null {
-  const t = normalizeGender(g);
-  if (t === "male") return { label: "Male ♂️", cls: "text-blue-800" };        // أزرق غامق
-  if (t === "female") return { label: "Female ♀️", cls: "text-red-600" };     // أحمر فاقع
-  if (t === "couple") return { label: "Couple 👨‍❤️‍👨", cls: "text-red-500" };// أحمر فاتح
-  if (t === "lgbt")
-    return {
-      label: "LGBT 🏳️‍🌈",
-      cls: "bg-gradient-to-r from-red-500 via-yellow-400 via-green-500 via-blue-500 to-purple-500 bg-clip-text text-transparent",
-    };
-  return null;
+/** Optional helper to present a UI symbol for a normalized gender. */
+export function genderSymbol(g: GenderNorm): string {
+  switch (g) {
+    case "m":
+      return "♂︎";
+    case "f":
+      return "♀︎";
+    case "c":
+      return "👨‍❤️‍👨";
+    case "l":
+      return "🏳️‍🌈";
+    default:
+      return "•";
+  }
 }
