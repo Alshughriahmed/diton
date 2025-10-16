@@ -1,4 +1,3 @@
-// src/app/chat/ChatClient.tsx
 "use client";
 
 /**
@@ -8,14 +7,18 @@
  * Remote media uses LiveKit track.attach()/detach() to avoid adaptiveStream stalls.
  */
 
-import "@/app/chat/dcShim.client";              // 1) DC shim
-import "@/app/chat/metaInit.client";            // 2) side-effect HUD/clients
+/* ===== 1) DC shim must load first ===== */
+import "@/app/chat/dcShim.client";
+
+/* ===== 2) Side-effect HUD/clients (keep) ===== */
+import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
 import "./freeForAllBridge";
 import "./dcMetaResponder.client";
 import "./likeSyncClient";
 import "./msgSendClient";
 
+/* ===== 3) React + app hooks ===== */
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
 import { useNextPrev } from "@/hooks/useNextPrev";
@@ -37,6 +40,7 @@ import { toast } from "@/lib/ui/toast";
 import { tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
 
+/* ===== 4) LiveKit ===== */
 import {
   Room,
   RoomEvent,
@@ -47,6 +51,7 @@ import {
   ConnectionState,
 } from "livekit-client";
 
+/* ===== 5) UI components ===== */
 import LikeSystem from "@/components/chat/LikeSystem";
 import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
@@ -56,33 +61,11 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
-
+/* ===== 6) Types / consts ===== */
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 1000;
 const isBrowser = typeof window !== "undefined";
-
-/* ===== helpers (pure) ===== */
-function normGender(v: any): "male" | "female" | "couple" | "lgbt" | undefined {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (!s) return undefined;
-  if (s === "m" || s.startsWith("male") || s.includes("♂")) return "male";
-  if (s === "f" || s.startsWith("female") || s.includes("♀")) return "female";
-  if (s.includes("couple") || s.includes("pair") || s.includes("👨") || s.includes("👩")) return "couple";
-  if (s.includes("lgbt") || s.includes("🏳️‍🌈") || s.includes("pride") || s.includes("gay")) return "lgbt";
-  // Arabic fallbacks
-  if (s.includes("ذكر")) return "male";
-  if (s.includes("أنث") || s.includes("انث")) return "female";
-  if (s.includes("زوج")) return "couple";
-  if (s.includes("مثلي")) return "lgbt";
-  return undefined;
-}
-function readLS<T = any>(k: string): T | null {
-  try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : null; } catch { return null; }
-}
-function readLSText(k: string): string | undefined {
-  try { const v = localStorage.getItem(k); return v || undefined; } catch { return undefined; }
-}
 
 /* ===== 7) Component ===== */
 export default function ChatClient() {
@@ -96,9 +79,12 @@ export default function ChatClient() {
   // DOM refs
   const localRef = useRef<HTMLVideoElement>(null);
 
-  // remote media attach guard
+  // remote media attach guard (kept for compatibility)
+  const remoteAttachRef = useRef<{ token: number } | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // keep last remote tracks for detach()
   const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
@@ -125,16 +111,30 @@ export default function ChatClient() {
 
   // session lock
   const sidRef = useRef(0);
-  function newSid(): number { sidRef.current += 1; return sidRef.current; }
-  function isActiveSid(sid: number) { return sid === sidRef.current; }
+  function newSid(): number {
+    sidRef.current += 1;
+    return sidRef.current;
+  }
+  function isActiveSid(sid: number) {
+    return sid === sidRef.current;
+  }
 
-  /* ===== helper side-effects ===== */
+  /* ===== helpers ===== */
   function setPhase(p: Phase) {
     setRtcPhase(p);
-    try { window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } })); } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
+    } catch {}
   }
   function emitPair(pairId: string, role: "caller" | "callee") {
-    try { window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } })); } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
+    } catch {}
+  }
+  function emitRemoteTrackStarted() {
+    try {
+      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } }));
+    } catch {}
   }
 
   function stableDid(): string {
@@ -169,9 +169,10 @@ export default function ChatClient() {
     return String(j.ticket || "");
   }
   async function nextReq(ticket: string, waitMs = 8000): Promise<string | null> {
-    const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`, {
-      method: "GET", credentials: "include", cache: "no-store",
-    });
+    const r = await fetch(
+      `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`,
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
     if (r.status === 204) return null;
     if (!r.ok) throw new Error(`next failed ${r.status}`);
     const j = await r.json();
@@ -184,9 +185,10 @@ export default function ChatClient() {
     return null;
   }
   async function tokenReq(room: string, id: string): Promise<string> {
-    const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
-      method: "GET", credentials: "include", cache: "no-store",
-    });
+    const r = await fetch(
+      `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
     if (!r.ok) throw new Error("token failed " + r.status);
     const j = await r.json();
     return String(j.token || "");
@@ -204,15 +206,36 @@ export default function ChatClient() {
   }
 
   function clearRoomListeners() {
-    for (const off of roomUnsubsRef.current.splice(0)) { try { off(); } catch {} }
+    for (const off of roomUnsubsRef.current.splice(0)) {
+      try { off(); } catch {}
+    }
   }
 
   async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) {
     if (!el) return;
-    try { await el.play(); } catch {}
+    try { await el.play(); } catch (e: any) { /* ignore AbortError/NotAllowedError */ }
   }
 
-  // LiveKit attach/detach helpers
+  // Ensure local media is alive before any join
+  async function ensureLocalAliveLocal(): Promise<MediaStream | null> {
+    try {
+      let s = getLocalStream() as MediaStream | null;
+      const vt = s?.getVideoTracks?.()[0] || null;
+      const at = s?.getAudioTracks?.()[0] || null;
+      const videoEnded = !vt || vt.readyState === "ended";
+      const audioEnded = at ? at.readyState === "ended" : false;
+      if (!s || videoEnded || audioEnded) {
+        try { await initLocalMedia(); } catch {}
+        s = getLocalStream() as MediaStream | null;
+      }
+      return s ?? null;
+    } catch {
+      try { await initLocalMedia(); } catch {}
+      return (getLocalStream() as MediaStream | null) ?? null;
+    }
+  }
+
+  // New helpers using LiveKit attach/detach
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
     if (!el || !track) return;
@@ -220,7 +243,7 @@ export default function ChatClient() {
     safePlay(el);
     if (kind === "video") remoteVideoTrackRef.current = track;
     if (kind === "audio") remoteAudioTrackRef.current = track;
-    try { window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } })); } catch {}
+    emitRemoteTrackStarted();
   }
   function detachRemoteAll() {
     try {
@@ -253,14 +276,17 @@ export default function ChatClient() {
     const room = roomRef.current;
     roomRef.current = null;
 
+    // Detach DC and listeners first to avoid late callbacks
     dcDetach();
     clearRoomListeners();
 
+    // Clear remote DOM immediately and keep local preview alive
     detachRemoteAll();
     restoreLocalPreview();
 
     if (room) {
       try {
+        // Unpublish locals without stopping tracks
         const lp: any = room.localParticipant;
         const pubs =
           typeof lp.getTrackPublications === "function"
@@ -278,7 +304,11 @@ export default function ChatClient() {
 
       await new Promise<void>((resolve) => {
         let done = false;
-        const finish = () => { if (done) return; done = true; try { room.off(RoomEvent.Disconnected, finish); } catch {}; resolve(); };
+        const finish = () => {
+          if (done) return; done = true;
+          try { room.off(RoomEvent.Disconnected, finish); } catch {}
+          resolve();
+        };
         try { room.on(RoomEvent.Disconnected, finish); } catch {}
         try { room.disconnect(false); } catch { finish(); }
         setTimeout(finish, DISCONNECT_TIMEOUT_MS);
@@ -354,11 +384,18 @@ export default function ChatClient() {
     room.on(RoomEvent.DataReceived, onData);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.DataReceived, onData); } catch {} });
 
-    const onPart = () => { if (!isActiveSid(sid)) return; setPhase("searching"); };
+    const onPart = () => {
+      if (!isActiveSid(sid)) return;
+      setPhase("searching"); // inform HUD only; no auto-rejoin
+    };
     room.on(RoomEvent.ParticipantDisconnected, onPart);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
 
-    const onDisc = () => { if (!isActiveSid(sid)) return; dcDetach(); setPhase("stopped"); };
+    const onDisc = () => {
+      if (!isActiveSid(sid)) return;
+      dcDetach();
+      setPhase("stopped");
+    };
     room.on(RoomEvent.Disconnected, onDisc);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.Disconnected, onDisc); } catch {} });
   }
@@ -371,30 +408,20 @@ export default function ChatClient() {
     setPhase("searching");
 
     try {
-      // geo
-      let selfCountry: string | null = null;
-      try { const g = readLS<any>("ditona_geo"); if (g?.countryCode) selfCountry = String(g.countryCode).toUpperCase(); } catch {}
-
-      // gender sources
-      const selfGenderNorm =
-        normGender((profile as any)?.gender) ??
-        normGender(gender) ??
-        normGender(readLSText("ditona_gender")) ??
-        undefined;
-
       // filters
-      const allowed = new Set(["male", "female", "couple", "lgbt"]);
-      const gFilter = ((): string[] => {
-        const gf = normGender(gender);
-        return gf && allowed.has(gf) ? [gf] : [];
-      })();
+      let selfCountry: string | null = null;
+      try {
+        const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+        if (g?.country) selfCountry = String(g.country).toUpperCase();
+      } catch {}
+      const gFilter = gender === "male" || gender === "female" ? [gender] : [];
 
       // enqueue
       const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
         vip: !!vip,
-        selfGender: selfGenderNorm ?? "u",
+        selfGender: profile?.gender === "male" || profile?.gender === "female" ? profile.gender : "u",
         selfCountry,
         filterGenders: gFilter,
         filterCountries: Array.isArray(countries) ? countries : [],
@@ -459,13 +486,13 @@ export default function ChatClient() {
   useEffect(() => {
     if (!hydrated || !isBrowser) return;
 
+    // boot
     (async () => {
       setPhase("boot");
       try {
-        await initLocalMedia();
-        const s = getLocalStream();
-        if (localRef.current && s) {
-          (localRef.current as any).srcObject = s;
+        const s0 = await ensureLocalAliveLocal();
+        if (localRef.current && s0) {
+          (localRef.current as any).srcObject = s0;
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
@@ -482,7 +509,7 @@ export default function ChatClient() {
         else
           setCameraPermissionHint("Camera access error — check permissions");
       }
-    })().catch(() => {});
+    })().catch(()=>{});
 
     // UI events
     const offs: Array<() => void> = [];
@@ -535,9 +562,16 @@ export default function ChatClient() {
       if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
       lastNextTsRef.current = now;
       toast("⏭️ Next");
-      const sid = newSid();
-      await leaveRoom();
+      const sid = newSid();          // invalidate in-flight work
+      await leaveRoom();             // clean detach, keep local preview
       await new Promise(r => setTimeout(r, 250));
+      // ensure local media is alive before next join
+      const s1 = await ensureLocalAliveLocal();
+      if (localRef.current && s1) {
+        (localRef.current as any).srcObject = s1;
+        localRef.current.muted = true;
+        await safePlay(localRef.current);
+      }
       await joinViaRedisMatch(sid);
     }));
 
@@ -551,6 +585,13 @@ export default function ChatClient() {
       const sid = newSid();
       await leaveRoom();
       await new Promise(r => setTimeout(r, 250));
+      // ensure local media is alive before previous join
+      const s2 = await ensureLocalAliveLocal();
+      if (localRef.current && s2) {
+        (localRef.current as any).srcObject = s2;
+        localRef.current.muted = true;
+        await safePlay(localRef.current);
+      }
       await joinViaRedisMatch(sid);
     }));
 
@@ -574,16 +615,34 @@ export default function ChatClient() {
     }));
     offs.push(on("ui:upsell", (d: any) => { if (ffa) return; router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`); }));
 
+    function onPeerMeta(e: any) {
+      const meta = e?.detail;
+      if (!meta) return;
+      // peer cards handled by side-effect UI; we just dispatch elsewhere if needed
+    }
+    window.addEventListener("ditona:peer-meta", onPeerMeta as any);
+
+    function onPeerLike(e: any) {
+      const detail = e.detail;
+      if (detail && typeof detail.liked === "boolean") {
+        setPeerLikes(detail.liked ? 1 : 0);
+        toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
+      }
+    }
+    window.addEventListener("rtc:peer-like", onPeerLike as any);
+
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe(() => {});
 
     return () => {
       for (const off of offs) try { off(); } catch {}
+      try { window.removeEventListener("ditona:peer-meta", onPeerMeta as any); } catch {}
+      try { window.removeEventListener("rtc:peer-like", onPeerLike as any); } catch {}
       unsubMob();
-      leaveRoom().catch(() => {});
+      leaveRoom().catch(()=>{});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, vip, ffa, router, gender, countries, profile?.gender]);
+  }, [hydrated, vip, ffa, router]);
 
   /* ===== 9) UI ===== */
   return (
@@ -599,7 +658,6 @@ export default function ChatClient() {
             <FilterBar />
             <MessageHud />
             <PeerOverlay />
-
             <div className="absolute bottom-4 right-4 z-30">
               <LikeSystem />
             </div>
@@ -638,9 +696,6 @@ export default function ChatClient() {
               autoPlay
             />
 
-            {/* gesture layer must receive touches */}
-            <div id="gesture-layer" className="absolute inset-0 z-40 pointer-events-auto" />
-
             {!ready && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 text-sm text-center px-4">
                 {cameraPermissionHint ? (
@@ -659,7 +714,7 @@ export default function ChatClient() {
                               safePlay(localRef.current);
                               setReady(true);
                               const sid = newSid();
-                              joinViaRedisMatch(sid).catch(() => {});
+                              joinViaRedisMatch(sid).catch(()=>{});
                             }
                           })
                           .catch((error) => {
@@ -680,6 +735,7 @@ export default function ChatClient() {
             )}
 
             <MyControls />
+            <div id="gesture-layer" className="absolute inset-0 -z-10" />
           </section>
 
           {/* bars */}
@@ -691,3 +747,4 @@ export default function ChatClient() {
     </>
   );
 }
+
