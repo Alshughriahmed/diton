@@ -2,14 +2,14 @@
 "use client";
 
 /**
- * Reply to {t:"meta:init"} with normalized peer meta.
- * Gender source priority: filters.gender → profile.gender → localStorage("ditona_gender").
- * Also resends on geo/profile/filters updates and when phase becomes "connected".
- * Sends through window.__ditonaDataChannel, falls back to LiveKit publishData.
+ * Reply to {t:"meta:init"} with normalized peer meta from profile + geo.
+ * Source of truth for gender: profile.gender only.
+ * Sends over window.__ditonaDataChannel, falls back to LiveKit publishData.
+ * Resends on "rtc:phase=connected", "profile:updated", and "ditona:geo".
  */
 
 import { useProfile } from "@/state/profile";
-import { useFilters } from "@/state/filters";
+import { normalizeGender } from "@/lib/gender";
 
 type Geo = { countryCode?: string; country?: string; city?: string };
 type Payload = {
@@ -18,13 +18,13 @@ type Payload = {
   vip?: boolean;
   country?: string;
   city?: string;
-  gender?: string; // free text; receiver normalizes
+  gender?: string; // standardized to: male|female|couple|lgbt
   likes?: number;
 };
 
 const isBrowser = typeof window !== "undefined";
 
-/* ---------- helpers ---------- */
+// ---------- helpers ----------
 function readGeo(): Geo {
   try {
     const raw = localStorage.getItem("ditona_geo");
@@ -49,41 +49,6 @@ function readProfile() {
   }
 }
 
-function readFilters() {
-  try {
-    const st = (useFilters as any)?.getState?.();
-    return { gender: st?.gender, countries: st?.countries };
-  } catch {
-    return {};
-  }
-}
-
-function normGender(v: any): "male" | "female" | "couple" | "lgbt" | undefined {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (!s) return undefined;
-  if (s === "m" || s.startsWith("male") || s.includes("♂")) return "male";
-  if (s === "f" || s.startsWith("female") || s.includes("♀")) return "female";
-  if (s.includes("couple") || s.includes("pairs") || s.includes("pair") || s.includes("👨") || s.includes("👩")) return "couple";
-  if (s.includes("lgbt") || s.includes("pride") || s.includes("🏳️‍🌈") || s.includes("gay")) return "lgbt";
-  // Arabic fallbacks
-  if (s.includes("ذكر")) return "male";
-  if (s.includes("أنث") || s.includes("انث")) return "female";
-  if (s.includes("زوج")) return "couple";
-  if (s.includes("مثلي")) return "lgbt";
-  return undefined;
-}
-
-function readGender(): string | undefined {
-  const f = readFilters().gender;
-  const p: any = readProfile();
-  const ls =
-    ((): string | undefined => {
-      try { return localStorage.getItem("ditona_gender") || undefined; } catch { return undefined; }
-    })();
-
-  return normGender(f) || normGender(p?.gender) || normGender(ls) || undefined;
-}
-
 function buildPayload(): Payload {
   const p: any = readProfile();
   const g = readGeo();
@@ -91,7 +56,7 @@ function buildPayload(): Payload {
   const displayName = String(p?.displayName || p?.name || "").trim() || undefined;
   const avatarUrl = String(p?.avatarUrl || p?.avatar || p?.photo || "").trim() || undefined;
   const vip = !!(p?.vip || p?.isVip || p?.premium || p?.pro);
-  const gender = readGender();
+  const genderStd = normalizeGender(p?.gender);
 
   const likes =
     typeof p?.likes === "number"
@@ -106,7 +71,7 @@ function buildPayload(): Payload {
     vip,
     country: g.country,
     city: g.city,
-    gender,
+    gender: genderStd,
     likes,
   };
 }
@@ -115,7 +80,10 @@ function sendJSON(obj: any) {
   // try DC shim first
   try {
     const dc: any = (window as any).__ditonaDataChannel;
-    if (dc?.send) { dc.send(JSON.stringify(obj)); return; }
+    if (dc?.send) {
+      dc.send(JSON.stringify(obj));
+      return;
+    }
   } catch {}
   // fallback LiveKit
   try {
@@ -131,7 +99,6 @@ function sendPeerMeta() {
   sendJSON({ t: "peer-meta", payload: buildPayload() });
 }
 
-/* ---------- wiring ---------- */
 function attachOnce() {
   if (!isBrowser) return;
   const dc: any = (window as any).__ditonaDataChannel;
@@ -150,26 +117,24 @@ function attachOnce() {
 
   const onGeo = () => sendPeerMeta();
   const onProfile = () => sendPeerMeta();
-  const onFilters = () => sendPeerMeta();
   const onPhase = (e: any) => { if (e?.detail?.phase === "connected") sendPeerMeta(); };
 
   window.addEventListener("ditona:geo", onGeo as any);
   window.addEventListener("profile:updated", onProfile as any);
-  window.addEventListener("filters:updated", onFilters as any);
   window.addEventListener("rtc:phase", onPhase as any);
 
+  // HMR cleanup
   if ((import.meta as any)?.hot) {
     (import.meta as any).hot.dispose(() => {
       try { dc.removeEventListener?.("message", onMsg as any); } catch {}
       window.removeEventListener("ditona:geo", onGeo as any);
       window.removeEventListener("profile:updated", onProfile as any);
-      window.removeEventListener("filters:updated", onFilters as any);
       window.removeEventListener("rtc:phase", onPhase as any);
     });
   }
 }
 
-// boot
+// boot: wait until shim attaches
 (function boot() {
   if (!isBrowser) return;
   let tries = 0;
