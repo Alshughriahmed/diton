@@ -1,13 +1,82 @@
 // src/app/chat/dcMetaResponder.client.ts
 /**
- * Idempotent DC consumer for peer metadata.
- * - Listens to DataChannel "message"
- * - Dispatches "ditona:peer-meta" when remote meta arrives
- * - Responds to "meta:init" by sending our lightweight meta
+ * DataChannel peer meta bridge.
+ * يطبع الحقول ويوحّدها ثم يرسل: {displayName, avatarUrl, vip, country, city, gender, likes}
+ * يستقبل peer-meta ويمرّره إلى واجهات العرض.
  */
 
 if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) {
   (window as any).__dcMetaResponderMounted = 1;
+
+  const normGender = (v: any): "male" | "female" | "couple" | "lgbt" | undefined => {
+    const s = String(v ?? "").trim().toLowerCase();
+    if (!s) return;
+    if (s === "m" || s.startsWith("male") || s.includes("man") || s.includes("boy") || s.includes("♂")) return "male";
+    if (s === "f" || s.startsWith("female") || s.includes("woman") || s.includes("girl") || s.includes("♀")) return "female";
+    if (s === "c" || s.includes("couple") || s.includes("pair") || s.includes("👨") || s.includes("👩")) return "couple";
+    if (s.includes("lgbt") || s.includes("rainbow") || s.includes("pride") || s.includes("gay") || s.includes("🏳️‍🌈")) return "lgbt";
+    if (s.includes("ذكر")) return "male";
+    if (s.includes("أنث") || s.includes("انث")) return "female";
+    if (s.includes("زوج")) return "couple";
+    if (s.includes("مثلي")) return "lgbt";
+    return;
+  };
+
+  const coalesce = <T = any>(...vals: T[]) => {
+    for (const v of vals) if (v !== undefined && v !== null && String(v).trim() !== "") return v as any;
+    return undefined;
+  };
+
+  const readGeo = () => {
+    try {
+      const raw = localStorage.getItem("ditona_geo");
+      if (!raw) return {};
+      const g = JSON.parse(raw);
+      return {
+        country: coalesce(g.country, g.countryName, g.ctry, g.cn, g.cc),
+        city: coalesce(g.city, g.town, g.locality),
+      };
+    } catch { return {}; }
+  };
+
+  const readProfile = () => {
+    try {
+      const w: any = window as any;
+      const fromWindow = w.__ditonaProfile || {};
+      const ls =
+        JSON.parse(localStorage.getItem("ditona_profile") || "null") ||
+        JSON.parse(localStorage.getItem("profile") || "null") || {};
+      const genderRaw = coalesce(fromWindow.gender, ls.gender, localStorage.getItem("ditona_gender"));
+      return {
+        displayName: coalesce(fromWindow.displayName, ls.displayName, ls.name, ls.username),
+        avatarUrl: coalesce(fromWindow.avatarUrl, ls.avatarUrl, ls.avatar, ls.photo),
+        vip: !!coalesce(fromWindow.isVip, fromWindow.vip, ls.isVip, ls.vip, ls.premium, ls.pro),
+        gender: normGender(genderRaw),
+      };
+    } catch { return {}; }
+  };
+
+  const readLikes = () => {
+    try {
+      const n = Number(localStorage.getItem("ditona_like_count") || "0");
+      return Number.isFinite(n) ? n : 0;
+    } catch { return 0; }
+  };
+
+  const buildLocalMeta = () => {
+    const geo = readGeo();
+    const prof = readProfile();
+    const likes = readLikes();
+    return {
+      country: geo.country,
+      city: geo.city,
+      gender: prof.gender,
+      displayName: prof.displayName,
+      avatarUrl: prof.avatarUrl,
+      vip: !!prof.vip,
+      likes,
+    };
+  };
 
   const sendOverDC = async (obj: any) => {
     try {
@@ -19,28 +88,9 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
         return true;
       }
       const dc = (window as any).__ditonaDataChannel;
-      if (dc?.send) {
-        dc.send(txt);
-        return true;
-      }
+      if (dc?.send) { dc.send(txt); return true; }
     } catch {}
     return false;
-  };
-
-  const getLocalMeta = () => {
-    let country: string | undefined;
-    let city: string | undefined;
-    try {
-      const geo = JSON.parse(localStorage.getItem("ditona_geo") || "null");
-      if (geo?.country) country = String(geo.country).toUpperCase();
-      if (geo?.city) city = String(geo.city);
-    } catch {}
-    let gender: string | undefined;
-    try {
-      const g = localStorage.getItem("ditona_gender");
-      if (g && (g === "male" || g === "female" || g === "u")) gender = g;
-    } catch {}
-    return { country, city, gender };
   };
 
   const onDCMessage = (ev: MessageEvent) => {
@@ -54,24 +104,19 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
 
       const j = JSON.parse(s);
 
-      // Remote peer meta → UI bus
-      // Supported:
-      // { t: "peer-meta", payload: {...} }
-      // { type: "peer-meta", payload: {...} }
+      // تمرير ميتا الطرف الآخر إلى الواجهة
       if ((j?.t === "peer-meta" || j?.type === "peer-meta") && j?.payload) {
         window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
         return;
       }
 
-      // Meta init request → reply with our meta
+      // طلب تهيئة الميتا
       if (j?.t === "meta:init" || j?.type === "meta:init") {
-        const payload = getLocalMeta();
+        const payload = buildLocalMeta();
         sendOverDC({ t: "peer-meta", payload });
         return;
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   try {
@@ -83,7 +128,16 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
     });
   } catch {}
 
-  // Cleanup
+  // إعادة إرسال الميتا تلقائيًا بعد الاتصال أو عند بدء وصول الفيديو
+  const triggerMetaInit = () => {
+    const payload = buildLocalMeta();
+    sendOverDC({ t: "peer-meta", payload });
+  };
+  window.addEventListener("rtc:remote-track", triggerMetaInit as any);
+  window.addEventListener("rtc:phase", (e: any) => {
+    if (e?.detail?.phase === "connected") triggerMetaInit();
+  });
+
   window.addEventListener(
     "pagehide",
     () => {
