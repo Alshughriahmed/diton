@@ -39,7 +39,7 @@ export default function HomeClient(){
 
   function selectGender(next: MyGender){
     setGender(next);
-    try { profileStore.set({ gender: normalizeGender(next) }); } catch {}
+    try { profileStore.set({ gender: next as any }); } catch {}
     try { filtersStore.setGender(next as GenderOpt); } catch {}
     try { localStorage.setItem("ditona_myGender", String(next)); } catch {}
   }
