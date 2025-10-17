@@ -5,7 +5,6 @@
  *   - "rtc:phase"          -> reset on searching|matched|stopped
  *   - "rtc:pair"           -> reset on new pair
  */
-
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   (window as any).__peerMetaUiMounted = 1;
 
@@ -69,23 +68,17 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     } catch {}
   }
 
-  const onPeerMeta = (e: Event) => {
-    const detail = (e as CustomEvent).detail;
-    apply(detail);
-  };
-
+  const onPeerMeta = (e: Event) => apply((e as CustomEvent).detail);
   const onPhase = (e: Event) => {
     const ph = (e as CustomEvent)?.detail?.phase;
     if (ph === "searching" || ph === "matched" || ph === "stopped") reset();
   };
-
   const onPair = () => reset();
 
   window.addEventListener("ditona:peer-meta", onPeerMeta as any);
   window.addEventListener("rtc:phase", onPhase as any);
   window.addEventListener("rtc:pair", onPair as any);
 
-  // Cleanup
   window.addEventListener(
     "pagehide",
     () => {
@@ -98,5 +91,4 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     { once: true }
   );
 }
-
 export {};
