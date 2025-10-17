@@ -40,7 +40,7 @@ export default function GenderModal({ open, onClose, selected, onChange }: Props
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-start md:items-center justify-center bg-black/50 p-2 md:p-6" onClick={onClose}>
+    <div data-modal="gender" className="fixed inset-0 z-[100] flex items-start md:items-center justify-center bg-black/50 p-2 md:p-6" onClick={onClose}>
       <div className="w-full max-w-md rounded-2xl bg-white text-gray-900 shadow-xl pointer-events-auto" onClick={e=>e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b">
           <h3 className="text-lg font-semibold">Gender Filter</h3>
