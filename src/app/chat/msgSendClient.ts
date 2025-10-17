@@ -12,9 +12,9 @@ declare global {
   interface Window {
     __msgSendMounted2?: 1;
     __lkRoom?: any;
-    __ditonaDataChannel?: { send?: (s: string) => void };
-    __ditonaPairId?: string;
-    __pairId?: string;
+    __ditonaDataChannel?: any; // fix: keep 'any' to match other declarations
+    __ditonaPairId?: any;
+    __pairId?: any;
   }
 }
 
