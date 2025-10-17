@@ -1,4 +1,3 @@
-// src/app/chat/ChatClient.tsx
 "use client";
 
 /**
@@ -70,7 +69,7 @@ const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 1000;
 const isBrowser = typeof window !== "undefined";
 
-// treat “everyone/all/u” as unconstrained
+// unconstrained helpers
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
   return v === "everyone" || v === "all" || v === "u";
@@ -85,10 +84,14 @@ export default function ChatClient() {
   useKeyboardShortcuts();
   useGestures();
 
+  // filters/profile (read live to reflect changes)
+  const filters = useFilters();
+  const { profile } = useProfile();
+
   // DOM refs
   const localRef = useRef<HTMLVideoElement>(null);
 
-  // remote media attach guard (kept for compatibility)
+  // remote media attach guard
   const remoteAttachRef = useRef<{ token: number } | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -107,8 +110,6 @@ export default function ChatClient() {
   const [isMirrored, setIsMirrored] = useState(true);
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
-  const { isVip: vip, gender, countries } = useFilters();
-  const { profile } = useProfile();
   const lastNextTsRef = useRef(0);
 
   // LiveKit room & guards
@@ -214,6 +215,7 @@ export default function ChatClient() {
     const dc: any = (globalThis as any).__ditonaDataChannel;
     try { dc?.attach?.(room); } catch {}
     try { dc?.setConnected?.(true); } catch {}
+    try { window.dispatchEvent(new CustomEvent("dc:attached")); } catch {}
   }
   function dcDetach() {
     const dc: any = (globalThis as any).__ditonaDataChannel;
@@ -306,9 +308,7 @@ export default function ChatClient() {
       const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
       await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
       setTimeout(async () => {
-        try {
-          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
-        } catch {}
+        try { await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" }); } catch {}
       }, 250);
     } catch {}
   }
@@ -415,19 +415,20 @@ export default function ChatClient() {
         setPhase("connected");
         safePlay(remoteVideoRef.current);
         safePlay(remoteAudioRef.current);
+        try { window.dispatchEvent(new CustomEvent("lk:attached")); } catch {}
       }
     };
     room.on(RoomEvent.ConnectionStateChanged, onConn);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ConnectionStateChanged, onConn); } catch {} });
 
-    const onData = (payload: Uint8Array) => {
+    const onData = (payload: Uint8Array, _p?: RemoteParticipant, _k?: any, topic?: string) => {
       if (!isActiveSid(sid)) return;
       try {
         const txt = new TextDecoder().decode(payload);
         if (!txt || !/^\s*\{/.test(txt)) return;
         const j = JSON.parse(txt);
 
-        if (j?.t === "meta:init") {
+        if (j?.t === "meta:init" || topic === "meta") {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
         if (j?.t === "chat" && j.text) {
@@ -436,17 +437,18 @@ export default function ChatClient() {
         if (j?.t === "peer-meta" && j.payload) {
           window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
         }
-        if (j?.t === "like" || j?.type === "like:toggled") {
+        if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { pairId: roomName } }));
         }
       } catch {}
     };
-    room.on(RoomEvent.DataReceived, onData);
-    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.DataReceived, onData); } catch {} });
+    room.on(RoomEvent.DataReceived, onData as any);
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.DataReceived, onData as any); } catch {} });
 
     const onPart = () => {
       if (!isActiveSid(sid)) return;
       setPhase("searching");
+      try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {}
     };
     room.on(RoomEvent.ParticipantDisconnected, onPart);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
@@ -459,8 +461,11 @@ export default function ChatClient() {
     room.on(RoomEvent.Disconnected, onDisc);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.Disconnected, onDisc); } catch {} });
 
-    // ensure peer meta after remote joins
-    const onPeerJoined = () => { if (isActiveSid(sid)) requestPeerMetaTwice(room); };
+    const onPeerJoined = () => {
+      if (!isActiveSid(sid)) return;
+      requestPeerMetaTwice(room);
+      try { window.dispatchEvent(new CustomEvent("livekit:participant-connected")); } catch {}
+    };
     room.on(RoomEvent.ParticipantConnected, onPeerJoined);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantConnected, onPeerJoined); } catch {} });
   }
@@ -473,28 +478,35 @@ export default function ChatClient() {
     setPhase("searching");
 
     try {
-      // filters
+      // geo
       let selfCountry: string | null = null;
       try {
         const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
         if (g?.country) selfCountry = String(g.country).toUpperCase();
       } catch {}
 
-      // unified genders
-      const selfGender = normalizeGender(profile?.gender as any);   // male|female|couples|lgbt|everyone
-      const selected   = normalizeGender(gender as any);            // from filters
-      const gFilter    = isEveryoneLike(selected) ? [] : [selected as any];
-      const payloadSelfGender = isEveryoneLike(selfGender) ? undefined : (selfGender as any);
+      // genders
+      const selfGenderNorm = normalizeGender(profile?.gender as any); // m|f|c|l|u
+      const payloadSelfGender = isEveryoneLike(selfGenderNorm) ? undefined : (selfGenderNorm as any);
+
+      // filter genders from store (preferred helper), fallback to manual
+      const filterGendersNorm =
+        typeof filters.filterGendersNorm === "function"
+          ? (filters.filterGendersNorm() as ("m" | "f" | "c" | "l")[])
+          : (() => {
+              const sel = normalizeGender(filters.gender as any);
+              return isEveryoneLike(sel) ? [] : [sel as any];
+            })();
 
       // enqueue
       const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
-        vip: !!vip,
+        vip: !!filters.isVip,
         selfGender: payloadSelfGender,
         selfCountry,
-        filterGenders: gFilter,
-        filterCountries: Array.isArray(countries) ? countries : [],
+        filterGenders: filterGendersNorm,
+        filterCountries: Array.isArray(filters.countries) ? filters.countries : [],
       });
       if (!isActiveSid(sid)) return;
 
@@ -515,6 +527,10 @@ export default function ChatClient() {
       detachRemoteAll();
       setPhase("matched");
       emitPair(roomName, "caller");
+      try {
+        (window as any).__ditonaPairId = roomName;
+        (window as any).__pairId = roomName;
+      } catch {}
 
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       isConnectingRef.current = true;
@@ -647,7 +663,7 @@ export default function ChatClient() {
     }));
 
     offs.push(on("ui:prev", async () => {
-      if (!vip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); return; }
+      if (!filters.isVip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); return; }
       toast("⏮️ Previous");
       const now = Date.now();
       if (joiningRef.current || leavingRef.current || isConnectingRef.current || roomRef.current?.state === "connecting") return;
@@ -689,7 +705,7 @@ export default function ChatClient() {
     function onPeerMeta(e: any) {
       const meta = e?.detail;
       if (!meta) return;
-      // UI side-effects handled by peerMetaUi.client
+      // DOM is updated by peerMetaUi.client
     }
     window.addEventListener("ditona:peer-meta", onPeerMeta as any);
 
@@ -713,7 +729,7 @@ export default function ChatClient() {
       leaveRoom().catch(()=>{});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, vip, ffa, router, gender, countries, profile?.gender]);
+  }, [hydrated, filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
   /* ===== 9) UI ===== */
   return (
