@@ -2,19 +2,21 @@
 "use client";
 
 /**
- * Peer meta responder over the global DC shim.
- * - Source of truth: profile.gender
- * - Sends on:
- *    • reception of {t:"meta:init"}
- *    • rtc:phase matched/connected
- *    • profile:updated
- *    • ditona:geo
- * - Sends twice (250ms apart) to cover early attach/race.
- * - Uses dcShim first, falls back to LiveKit publishData.
+ * Peer meta responder over global DC.
+ * مصدر الحقيقة: profile.gender.
+ * يرسل على: استقبال {t:"meta:init"}, تغيّر المرحلة matched/connected،
+ * profile:updated، و ditona:geo. يرسل مرّتين بفاصل 250ms.
+ * يستخدم dcShim أولاً ثم LiveKit publishData كبديل.
  */
 
 import { useProfile } from "@/state/profile";
 import { normalizeGender } from "@/lib/gender";
+
+declare global {
+  interface Window {
+    __dcMetaResponderMounted?: 1;
+  }
+}
 
 type Geo = { countryCode?: string; country?: string; city?: string };
 type Payload = {
@@ -23,13 +25,12 @@ type Payload = {
   vip?: boolean;
   country?: string;
   city?: string;
-  gender?: string; // "m" | "f" | "c" | "l" | "u"
+  gender?: string; // m|f|c|l|u
   likes?: number;
 };
 
 const isBrowser = typeof window !== "undefined";
 
-// ---------- helpers ----------
 function readGeo(): Geo {
   try {
     const raw = localStorage.getItem("ditona_geo");
@@ -63,19 +64,23 @@ function buildPayload(): Payload {
   const vip = !!(p?.vip || p?.isVip || p?.premium || p?.pro);
   const gender = normalizeGender(p?.gender);
   const likes =
-    typeof p?.likes === "number" ? p.likes :
-    typeof p?.likeCount === "number" ? p.likeCount : undefined;
+    typeof p?.likes === "number"
+      ? p.likes
+      : typeof p?.likeCount === "number"
+      ? p.likeCount
+      : undefined;
 
   return { displayName, avatar, vip, country: g.country, city: g.city, gender, likes };
 }
 
 function sendJSON(obj: any) {
-  // try DC shim first
   try {
     const dc: any = (window as any).__ditonaDataChannel;
-    if (dc?.send) { dc.send(JSON.stringify(obj)); return; }
+    if (dc?.send) {
+      dc.send(JSON.stringify(obj));
+      return;
+    }
   } catch {}
-  // fallback LiveKit
   try {
     const room: any = (window as any).__lkRoom;
     if (room?.localParticipant?.publishData) {
@@ -85,55 +90,77 @@ function sendJSON(obj: any) {
   } catch {}
 }
 
-function sendPeerMetaOnce() { sendJSON({ t: "peer-meta", payload: buildPayload() }); }
-function sendPeerMetaTwice() { sendPeerMetaOnce(); setTimeout(sendPeerMetaOnce, 250); }
+const sendPeerMetaOnce = () => sendJSON({ t: "peer-meta", payload: buildPayload() });
+const sendPeerMetaTwice = () => {
+  sendPeerMetaOnce();
+  setTimeout(sendPeerMetaOnce, 250);
+};
 
-function attachOnce() {
-  if (!isBrowser) return;
-  const dc: any = (window as any).__ditonaDataChannel;
-  if (!dc?.addEventListener) return;
+(function attach() {
+  if (!isBrowser || window.__dcMetaResponderMounted) return;
+  window.__dcMetaResponderMounted = 1;
 
-  // react to incoming DC messages
-  const onMsg = (ev: any) => {
+  const onDCMessage = (ev: any) => {
     try {
       const txt = typeof ev?.data === "string" ? ev.data : new TextDecoder().decode(ev?.data);
-      if (!txt || !/\\s*\\{/.test(txt)) return;
+      // إصلاح regex: يجب أن يكون /^\s*\{/ وليس /\s*\{/
+      if (!txt || !/^\s*\{/.test(txt)) return;
       const j = JSON.parse(txt);
       if (j?.t === "meta:init") sendPeerMetaTwice();
     } catch {}
   };
-  dc.addEventListener("message", onMsg);
 
-  // react to app events
+  // ربط الـ DC الآن ثم إعادة المحاولة إن تأخر الشيم
+  const tryWire = () => {
+    try {
+      const dc: any = (window as any).__ditonaDataChannel;
+      dc?.addEventListener?.("message", onDCMessage);
+    } catch {}
+  };
+  tryWire();
+
+  // إشارات التطبيق
   const onGeo = () => sendPeerMetaTwice();
   const onProfile = () => sendPeerMetaTwice();
   const onPhase = (e: any) => {
     const ph = e?.detail?.phase;
     if (ph === "matched" || ph === "connected") sendPeerMetaTwice();
   };
+  const onMetaInitEvt = () => sendPeerMetaTwice(); // من ChatClient عند استقبال meta:init عبر LiveKit
 
   window.addEventListener("ditona:geo", onGeo as any);
   window.addEventListener("profile:updated", onProfile as any);
   window.addEventListener("rtc:phase", onPhase as any);
+  window.addEventListener("ditona:meta:init", onMetaInitEvt as any);
 
-  // HMR cleanup
-  if ((import.meta as any)?.hot) {
-    (import.meta as any).hot.dispose(() => {
-      try { dc.removeEventListener?.("message", onMsg as any); } catch {}
-      window.removeEventListener("ditona:geo", onGeo as any);
-      window.removeEventListener("profile:updated", onProfile as any);
-      window.removeEventListener("rtc:phase", onPhase as any);
-    });
-  }
-}
-
-// boot: wait until shim attaches
-(function boot() {
-  if (!isBrowser) return;
+  // إعادة المحاولة لالتقاط الشيم إن تأخر
   let tries = 0;
   const iv = setInterval(() => {
     tries++;
-    attachOnce();
-    if ((window as any).__ditonaDataChannel?.addEventListener || tries > 40) clearInterval(iv);
+    const dc: any = (window as any).__ditonaDataChannel;
+    if (dc?.addEventListener) {
+      dc.addEventListener("message", onDCMessage);
+      clearInterval(iv);
+    }
+    if (tries > 40) clearInterval(iv);
   }, 100);
+
+  // Cleanup
+  window.addEventListener(
+    "pagehide",
+    () => {
+      try {
+        const dc: any = (window as any).__ditonaDataChannel;
+        dc?.removeEventListener?.("message", onDCMessage);
+        window.removeEventListener("ditona:geo", onGeo as any);
+        window.removeEventListener("profile:updated", onProfile as any);
+        window.removeEventListener("rtc:phase", onPhase as any);
+        window.removeEventListener("ditona:meta:init", onMetaInitEvt as any);
+        window.__dcMetaResponderMounted = undefined;
+      } catch {}
+    },
+    { once: true }
+  );
 })();
+
+export {};
