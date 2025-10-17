@@ -8,15 +8,16 @@ import { normalizeGender, toFilterGenders } from "@/lib/gender";
 export type GenderOpt = "all" | "male" | "female" | "couple" | "lgbt";
 
 export type FiltersState = {
-  gender: GenderOpt;          // UI choice for target gender; "all" means everyone
-  countries: string[];        // ISO-3166 codes (empty = global)
+  gender: GenderOpt;                // توافق قديم
+  genderSelections: GenderOpt[];    // حتى جنسين
+  countries: string[];
   isVip: boolean;
 
-  // derived helpers (no persistence impact)
-  filterGendersNorm: () => ("m" | "f" | "c" | "l")[]; // ready for enqueue payload
+  filterGendersNorm: () => ("m" | "f" | "c" | "l")[];
 
   setVip: (v: boolean) => void;
   setGender: (g: GenderOpt) => void;
+  setGenderSelections: (g: GenderOpt[]) => void;
   setCountries: (codes: string[]) => void;
   reset: () => void;
 };
@@ -25,46 +26,51 @@ export const useFilters = create<FiltersState>()(
   persist(
     (set, get) => ({
       gender: "all",
+      genderSelections: [],
       countries: [],
       isVip: false,
 
       filterGendersNorm: () => {
-        const g = get().gender;
-        if (g === "all") return [];
-        // map UI words → normalized letters
-        const norm = normalizeGender(
-          g === "couple" ? "couples" : g
+        const { gender, genderSelections } = get();
+        const base: GenderOpt[] =
+          genderSelections?.length ? genderSelections
+          : (gender === "all" ? [] : [gender]);
+        const norms = base.map(g =>
+          normalizeGender(g === "couple" ? "couples" : g)
         );
-        return toFilterGenders(norm) as ("m" | "f" | "c" | "l")[];
+        // يزيل "u" ويمنع التكرار
+        return toFilterGenders(norms);
       },
 
       setVip: (v) => set({ isVip: !!v }),
 
       setGender: (g) =>
         set((s) => {
-          // FFA users can choose any gender, non-FFA non-VIP limited to "all"
-          if (!s.isVip && !isFFA() && g !== "all") return s;
-          return { gender: g };
+          // أثناء الإطلاق المفتوح لا نقيّد. عند القفل أعِد شرط VIP/FFA هنا.
+          const nextSel = g === "all" ? [] : [g];
+          return { gender: g, genderSelections: nextSel };
+        }),
+
+      setGenderSelections: (g) =>
+        set((_s) => {
+          const arr = Array.isArray(g) ? g.slice(0, 2) : [];
+          return {
+            genderSelections: arr,
+            gender: arr.length ? arr[0] : "all",
+          };
         }),
 
       setCountries: (codes) =>
         set((s) => {
-          // FFA users can choose freely; non-FFA non-VIP limited to single country
           if (!s.isVip && !isFFA()) {
-            // Allow "ALL" or single country selection for non-VIP
-            if (!codes?.length || codes.includes("ALL"))
-              return { countries: codes || [] };
-            // Allow single country selection
-            const next = codes.slice(0, 1);
-            return { countries: next };
+            if (!codes?.length || codes.includes("ALL")) return { countries: [] };
+            return { countries: codes.slice(0, 1) };
           }
-          // VIP or FFA users can select up to 15 countries
-          const next = !codes?.length ? [] : codes.slice(0, 15);
-          return { countries: next };
+          return { countries: Array.isArray(codes) ? codes.slice(0, 15) : [] };
         }),
 
-      reset: () => set({ gender: "all", countries: [] }),
+      reset: () => set({ gender: "all", genderSelections: [], countries: [] }),
     }),
-    { name: "ditona.filters.v1" }
+    { name: "ditona.filters.v2" }
   )
 );
