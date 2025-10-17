@@ -7,6 +7,7 @@
  * Remote media uses LiveKit track.attach()/detach() to avoid adaptiveStream stalls.
  */
 
+
 /* ===== 1) DC shim must load first ===== */
 import "@/app/chat/dcShim.client";
 
