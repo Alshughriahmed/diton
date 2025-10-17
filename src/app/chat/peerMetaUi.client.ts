@@ -1,131 +1,102 @@
-"use client";
-
 /**
- * Peer meta → UI bridge.
- * - Listens to "ditona:peer-meta" and updates [data-ui] targets.
- * - Mirrors to "ditona:peer-meta-ui" for legacy DOM hooks.
- * - Resets on rtc:phase(searching|matched|stopped) and rtc:pair.
- * - Caches last meta in sessionStorage to survive reloads.
+ * Idempotent DOM updater for peer metadata badges.
+ * Listens to:
+ *   - "ditona:peer-meta"   -> apply meta immediately
+ *   - "rtc:phase"          -> reset on searching|matched|stopped
+ *   - "rtc:pair"           -> reset on new pair
  */
 
-declare global {
-  interface Window { __peerMetaUiMounted?: 1 }
-}
+if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
+  (window as any).__peerMetaUiMounted = 1;
 
-type Meta = {
-  displayName?: string;
-  avatarUrl?: string;
-  vip?: boolean;
-  country?: string;
-  city?: string;
-  gender?: string; // normalized short: m|f|c|l|u  or long strings from older clients
-  likes?: number;
-};
+  const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
 
-function text(el: Element | null, v: string | number | undefined) {
-  const e = el as HTMLElement | null;
-  if (!e) return;
-  e.textContent = v === undefined || v === null ? "" : String(v);
-}
+  function reset() {
+    try {
+      const g = q('[data-ui="peer-gender"]');
+      const ctry = q('[data-ui="peer-country"]');
+      const cty = q('[data-ui="peer-city"]');
+      const name = q('[data-ui="peer-name"]');
+      const likes = q('[data-ui="peer-likes"]');
+      const vip = q('[data-ui="peer-vip"]');
+      const avatar = document.querySelector(
+        '[data-ui="peer-avatar"]'
+      ) as HTMLImageElement | HTMLElement | null;
 
-function attr(el: Element | null, name: string, v?: string) {
-  const e = el as HTMLElement | null;
-  if (!e) return;
-  if (!v) e.removeAttribute(name);
-  else e.setAttribute(name, v);
-}
+      if (g) g.textContent = "—";
+      if (ctry) ctry.textContent = "—";
+      if (cty) cty.textContent = "";
+      if (name) name.textContent = "";
+      if (likes) likes.textContent = "0";
+      if (vip) vip.classList.remove("is-vip");
+      if (avatar) {
+        if (avatar instanceof HTMLImageElement) avatar.src = "";
+        else (avatar as HTMLElement).style.backgroundImage = "";
+      }
+    } catch {}
+  }
 
-function clearDom() {
-  try {
-    text(document.querySelector('[data-ui="peer-name"]'), "");
-    text(document.querySelector('[data-ui="peer-country"]'), "");
-    text(document.querySelector('[data-ui="peer-city"]'), "");
-    text(document.querySelector('[data-ui="peer-gender"]'), "");
-    text(document.querySelector('[data-ui="peer-likes"]'), "");
-    const av = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | null;
-    if (av) av.src = "";
-    const vip = document.querySelector('[data-ui="peer-vip"]');
-    if (vip) attr(vip, "hidden", "true");
-  } catch {}
-}
+  function apply(meta: any) {
+    try {
+      const g = q('[data-ui="peer-gender"]');
+      const ctry = q('[data-ui="peer-country"]');
+      const cty = q('[data-ui="peer-city"]');
+      const name = q('[data-ui="peer-name"]');
+      const likes = q('[data-ui="peer-likes"]');
+      const vip = q('[data-ui="peer-vip"]');
+      const avatar = document.querySelector(
+        '[data-ui="peer-avatar"]'
+      ) as HTMLImageElement | HTMLElement | null;
 
-function longGender(g?: string): string {
-  const s = String(g || "").toLowerCase().trim();
-  if (!s) return "";
-  if (s === "m" || s.startsWith("male")) return "Male";
-  if (s === "f" || s.startsWith("female")) return "Female";
-  if (s === "c" || s.startsWith("couple") || s.startsWith("couples")) return "Couples";
-  if (s === "l" || s.includes("lgbt")) return "LGBT";
-  return "";
-}
+      if (g) g.textContent = meta?.gender ? String(meta.gender) : "—";
+      if (ctry) ctry.textContent = meta?.country ? String(meta.country) : "—";
+      if (cty) cty.textContent = meta?.city ? String(meta.city) : "";
+      if (name) name.textContent = meta?.displayName ? String(meta.displayName) : "";
+      if (likes) {
+        const n =
+          typeof meta?.likes === "number" ? meta.likes : parseInt(meta?.likes ?? "0", 10) || 0;
+        likes.textContent = String(n);
+      }
+      if (vip) {
+        if (meta?.vip) vip.classList.add("is-vip");
+        else vip.classList.remove("is-vip");
+      }
+      if (avatar) {
+        const url = meta?.avatar || meta?.avatarUrl || "";
+        if (avatar instanceof HTMLImageElement) avatar.src = url || "";
+        else (avatar as HTMLElement).style.backgroundImage = url ? `url("${url}")` : "";
+      }
+    } catch {}
+  }
 
-function updateDom(meta: Meta) {
-  try {
-    text(document.querySelector('[data-ui="peer-name"]'), meta.displayName || "");
-    text(document.querySelector('[data-ui="peer-country"]'), meta.country || "");
-    text(document.querySelector('[data-ui="peer-city"]'), meta.city || "");
-    text(document.querySelector('[data-ui="peer-gender"]'), longGender(meta.gender));
-    text(document.querySelector('[data-ui="peer-likes"]'), typeof meta.likes === "number" ? meta.likes : "");
-
-    const av = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | null;
-    if (av && meta.avatarUrl) av.src = meta.avatarUrl;
-
-    const vip = document.querySelector('[data-ui="peer-vip"]');
-    if (vip) {
-      if (meta.vip) vip.removeAttribute("hidden");
-      else vip.setAttribute("hidden", "true");
-    }
-  } catch {}
-}
-
-function save(meta: Meta) {
-  try { sessionStorage.setItem("ditona_peer_meta", JSON.stringify(meta || {})); } catch {}
-}
-function load(): Meta | null {
-  try {
-    const s = sessionStorage.getItem("ditona_peer_meta");
-    if (!s) return null;
-    return JSON.parse(s);
-  } catch { return null; }
-}
-
-if (typeof window !== "undefined" && !window.__peerMetaUiMounted) {
-  window.__peerMetaUiMounted = 1;
-
-  // Initial from cache
-  const cached = load();
-  if (cached) updateDom(cached);
-
-  const onMeta = (e: Event) => {
-    const meta = (e as CustomEvent).detail as Meta;
-    if (!meta) return;
-    save(meta);
-    updateDom(meta);
-    // forward for older hooks
-    try { window.dispatchEvent(new CustomEvent("ditona:peer-meta-ui", { detail: meta })); } catch {}
+  const onPeerMeta = (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    apply(detail);
   };
 
   const onPhase = (e: Event) => {
-    const phase = (e as CustomEvent).detail?.phase;
-    if (phase === "searching" || phase === "matched" || phase === "stopped") {
-      clearDom();
-      save({});
-    }
+    const ph = (e as CustomEvent)?.detail?.phase;
+    if (ph === "searching" || ph === "matched" || ph === "stopped") reset();
   };
 
-  const onPair = () => { clearDom(); };
+  const onPair = () => reset();
 
-  window.addEventListener("ditona:peer-meta", onMeta as any);
+  window.addEventListener("ditona:peer-meta", onPeerMeta as any);
   window.addEventListener("rtc:phase", onPhase as any);
   window.addEventListener("rtc:pair", onPair as any);
 
-  window.addEventListener("pagehide", () => {
-    try {
-      window.removeEventListener("ditona:peer-meta", onMeta as any);
-      window.removeEventListener("rtc:phase", onPhase as any);
-      window.removeEventListener("rtc:pair", onPair as any);
-    } catch {}
-  }, { once: true });
+  // Cleanup
+  window.addEventListener(
+    "pagehide",
+    () => {
+      try {
+        window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
+        window.removeEventListener("rtc:phase", onPhase as any);
+        window.removeEventListener("rtc:pair", onPair as any);
+      } catch {}
+    },
+    { once: true }
+  );
 }
 
 export {};
