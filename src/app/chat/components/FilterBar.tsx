@@ -1,90 +1,82 @@
-// src/app/chat/components/FilterBar.tsx
 "use client";
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useFFA } from "@/lib/useFFA";
 import { useVip } from "@/hooks/useVip";
-import { useFilters } from "@/state/filters";
-import { useProfile } from "@/state/profile";
-import { normalizeGender } from "@/lib/gender";
+import { useFilters, type GenderOpt } from "@/state/filters";
+// لا تعديل على profile.gender هنا. selfGender يُحدَّد في landing فقط.
 import type { GenderKey } from "./GenderModal";
 
 const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
 const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 
-// GenderKey من المودال لا يضم "everyone"، لذا نوسعه محليًا للواجهة
-type UGender = GenderKey | "everyone";
+/** توافق بين واجهة المرشّح (GenderOpt) ومفاتيح المودال (GenderKey) */
+const optToKey = (g: GenderOpt): GenderKey | null =>
+  g === "male" ? "male"
+  : g === "female" ? "female"
+  : g === "couple" ? "couple"
+  : g === "lgbt" ? "lgbt"
+  : null;
+
+const keyToOpt = (k: GenderKey): GenderOpt =>
+  k === "male" ? "male"
+  : k === "female" ? "female"
+  : k === "couple" ? "couple"
+  : /* k === "lgbt" */ "lgbt";
 
 export default function FilterBar() {
   const ffa = useFFA();
   const { isVip } = useVip();
-  const router = useRouter();
+  const filters = useFilters();
 
-  const filters: any = useFilters() as any;
-  const profileStore: any = useProfile() as any;
+  // حالة حالية من المخزن
+  const currentOpt: GenderOpt = filters.gender ?? "all";
+  const currentCountries: string[] = Array.isArray(filters.countries) ? filters.countries : [];
 
-  const currentGender: UGender =
-    (filters?.gender as UGender) ?? "everyone";
-  const currentCountries: string[] = Array.isArray(filters?.countries)
-    ? filters.countries
-    : [];
-
+  // عند الفتح: إن كانت "all" نمرر [] للمودال، وإلا مفتاحًا واحدًا متوافقًا
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);
-  const [selectedGenders, setSelectedGenders] = useState<UGender[]>(
-    [currentGender]
+  const [selectedGenders, setSelectedGenders] = useState<GenderKey[]>(
+    currentOpt === "all" ? [] : (optToKey(currentOpt) ? [optToKey(currentOpt)!] : [])
   );
-  const [selectedCountries, setSelectedCountries] = useState<string[]>(
-    currentCountries
-  );
+  const [selectedCountries, setSelectedCountries] = useState<string[]>(currentCountries);
 
-  const allowOpen = true;
+  function applyGender(keys: GenderKey[]) {
+    let v = Array.isArray(keys) ? keys : [];
+    // مستقبلاً قد نسمح بعدة اختيارات. الآن: VIP/FFA يمكنه اختيار أي شيء
+    if (!isVip && !ffa && v.length > 1) v = [v[0]];
 
-  function applyGender(keys: UGender[]) {
-    // Everyone = عدم تقييد
-    const picked: UGender =
-      (keys as UGender[]).includes("everyone") || keys.length === 0
-        ? "everyone"
-        : (keys[0] as UGender);
+    // لا تكتب إلى profile.gender هنا
+    if (v.length === 0) {
+      filters.setGender("all");
+      setSelectedGenders([]);
+      return;
+    }
 
-    const norm = normalizeGender(picked) || "u";
-
-    // خزّن في فلاتر الواجهة كما هي
-    filters?.setGender?.(picked as any);
-    // وحّد مصدر الحقيقة في البروفايل
-    profileStore?.setGender?.(norm);
-    profileStore?.setProfile?.((p: any) => ({ ...(p || {}), gender: norm }));
-
-    setSelectedGenders([picked]);
+    const first = v[0];
+    filters.setGender(keyToOpt(first));
+    setSelectedGenders([first]);
   }
 
   function applyCountries(codes: string[]) {
-    filters?.setCountries?.(codes);
-    setSelectedCountries(codes);
-  }
-
-  function guardOr(fn: () => void) {
-    // افتح دائمًا. إن أردت فرض VIP مستقبلاً استعمل router هنا.
-    fn();
+    filters.setCountries(Array.isArray(codes) ? codes : []);
+    setSelectedCountries(Array.isArray(codes) ? codes : []);
   }
 
   return (
     <div
-      className="absolute top-2 right-2 z-50 pointer-events-auto flex items-center gap-2"
+      className="absolute top-2 right-2 z-[999] pointer-events-auto flex items-center gap-2"
       data-ui="filter-bar"
     >
       <button
         type="button"
         data-ui="gender-button"
         aria-label="Gender"
-        onClick={() =>
-          guardOr(() => {
-            setSelectedGenders([currentGender]);
-            setOpenGender(true);
-          })
-        }
+        onClick={() => {
+          setSelectedGenders(currentOpt === "all" ? [] : (optToKey(currentOpt) ? [optToKey(currentOpt)!] : []));
+          setOpenGender(true);
+        }}
         title="Gender filters"
         className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur focus:outline-none focus:ring-2 focus:ring-white/30"
       >
@@ -97,12 +89,10 @@ export default function FilterBar() {
         type="button"
         data-ui="country-button"
         aria-label="Countries"
-        onClick={() =>
-          guardOr(() => {
-            setSelectedCountries(currentCountries);
-            setOpenCountry(true);
-          })
-        }
+        onClick={() => {
+          setSelectedCountries(currentCountries);
+          setOpenCountry(true);
+        }}
         title="Country filters"
         className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur focus:outline-none focus:ring-2 focus:ring-white/30"
       >
@@ -111,25 +101,19 @@ export default function FilterBar() {
 
       {openGender && (
         <GenderModal
-          open={true}
+          open
           onClose={() => setOpenGender(false)}
-          selected={selectedGenders as GenderKey[]}
-          onChange={(value) => {
-            let v = Array.isArray(value) ? value : [];
-            if (!isVip && v.length > 1) v = [v[0]];
-            applyGender(v as UGender[]);
-          }}
+          selected={selectedGenders}
+          onChange={(value) => applyGender(Array.isArray(value) ? value as GenderKey[] : [])}
         />
       )}
 
       {openCountry && (
         <CountryModal
-          open={true}
+          open
           onClose={() => setOpenCountry(false)}
           selected={selectedCountries}
-          onChange={(value) => {
-            applyCountries(Array.isArray(value) ? value : []);
-          }}
+          onChange={(value) => applyCountries(Array.isArray(value) ? value : [])}
         />
       )}
     </div>
