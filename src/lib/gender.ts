@@ -1,46 +1,35 @@
-// src/lib/gender.ts
-// تطبيع الجنس وعرض شارات متوافقة مع الواجهة بدون تبعيات إضافية.
+// تطبيع الجنس وإرجاع شارة عرض متوافقة مع الواجهة.
 
-/** القيمة المعيارية */
 export type GenderNorm = "m" | "f" | "c" | "l" | "u";
 
-/* ======================== قواعد التطبيع ======================== */
-const MALE = new Set(["male","m","man","men","boy","ذكر","رجل","رجال"]);
-const FEMALE = new Set(["female","f","woman","women","girl","انثى","امرأة","نساء","بنت","امراة"]);
-const COUPLES = new Set(["couple","couples","c","pair","pairs","ثنائي","زوج","زوجين"]);
-const LGBT = new Set(["lgbt","l","gay","queer","bi","bisexual","lesbian","trans","مثلي","مثليات","ترانس"]);
-const EVERYONEish = new Set(["everyone","every","any","all","*","u","unrestricted","anyone","الجميع"]);
-
-/** everyone/all/empty => "u" */
+// everyone/all/empty → "u" (غير مقيّد)
 export function normalizeGender(v?: unknown): GenderNorm {
-  if (v == null) return "u";
-  const s = String(v).trim().toLowerCase();
-  if (!s) return "u";
+  if (v === null || v === undefined) return "u";
+  const s0 = String(v).trim();
+  if (s0 === "") return "u";
+  const s = s0.toLowerCase();
 
-  if (EVERYONEish.has(s)) return "u";
-  if (MALE.has(s) || s.startsWith("man")) return "m";
-  if (FEMALE.has(s) || s.startsWith("wom")) return "f";
-  if (COUPLES.has(s) || s.startsWith("pair")) return "c";
-  if (LGBT.has(s)) return "l";
-
+  if (s === "everyone" || s === "every" || s === "any" || s === "all" || s === "*" || s === "u" || s === "unrestricted") return "u";
+  if (s === "male" || s === "m" || s.startsWith("man")) return "m";
+  if (s === "female" || s === "f" || s.startsWith("wom") || s === "woman" || s === "women") return "f";
+  if (s === "couple" || s === "couples" || s === "c" || s.startsWith("pair")) return "c";
+  if (s === "lgbt" || s === "l" || s.includes("gay") || s.includes("queer") || s === "bi") return "l";
   return "u";
 }
 
-/** selfGender يجب أن يكون ضمن m|f|c|l، وإلا "u" */
-export function normalizeSelfGender(v?: unknown): GenderNorm {
-  const g = normalizeGender(v);
-  return g === "u" ? "u" : g;
+/** تحويل قيمة واحدة أو مصفوفة إلى مصفوفة جاهزة للإرسال في الفلاتر */
+export function toFilterGenders(input?: GenderNorm | GenderNorm[] | null): Array<"m"|"f"|"c"|"l"> {
+  const arr = Array.isArray(input) ? input : (input ? [input] : []);
+  const out = new Set<"m"|"f"|"c"|"l">();
+  for (const it of arr) {
+    const n = normalizeGender(it);
+    if (n === "u") continue;
+    if (n === "m" || n === "f" || n === "c" || n === "l") out.add(n);
+  }
+  return Array.from(out);
 }
 
-/** تحويل اختيار الفلتر إلى مصفوفة إرسال: everyone ⇒ []، غير ذلك ⇒ [g] */
-export function toFilterGenders(input?: unknown): GenderNorm[] {
-  const g = normalizeGender(input);
-  return g === "u" ? [] : [g];
-}
-
-/* ======================== العرض ======================== */
-
-/** رمز واجهة مبسّط */
+// رمز واجهة بسيط عند الحاجة
 export function genderSymbol(g: GenderNorm): string {
   switch (g) {
     case "m": return "♂︎";
@@ -52,25 +41,14 @@ export function genderSymbol(g: GenderNorm): string {
 }
 
 export type GenderBadge = { label: string; cls: string };
-
-/** شارة متوافقة مع PeerOverlay */
 export function genderBadge(input?: unknown): GenderBadge {
   const g = normalizeGender(input);
   switch (g) {
-    case "m": return { label: "♂︎",        cls: "text-blue-800" }; // أزرق غامق
-    case "f": return { label: "♀︎",        cls: "text-red-500"  }; // أحمر فاقع
-    case "c": return { label: "👨‍❤️‍👨",   cls: "text-rose-400" }; // أحمر فاتح
-    case "l": return {
-      label: "🏳️‍🌈",
-      cls: "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-600 bg-clip-text text-transparent"
-    };
-    default:  return { label: "•",         cls: "text-neutral-400" };
+    case "m": return { label: "♂︎", cls: "text-blue-800" };
+    case "f": return { label: "♀︎", cls: "text-red-500" };
+    case "c": return { label: "👨‍❤️‍👨", cls: "text-rose-400" };
+    case "l": return { label: "🏳️‍🌈", cls: "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-600 bg-clip-text text-transparent" };
+    default:  return { label: "•", cls: "text-neutral-400" };
   }
 }
-
-/* ======================== أدوات مساعدة ======================== */
-
-export const isEveryone = (v?: unknown) => normalizeGender(v) === "u";
-
-/** إبقاء alias قديم إن وُجد استيراد مباشر للرمز فقط */
 export const genderBadgeSymbol = genderSymbol;
