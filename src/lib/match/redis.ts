@@ -1,5 +1,3 @@
-// src/lib/match/redis.ts
-
 // ===== Types =====
 export type EnqueueInput = {
   identity: string;
@@ -236,7 +234,8 @@ async function readAttr(ticket: string): Promise<Attr | null> {
 }
 
 function matchOK(me: Attr, other: Attr, widen: boolean) {
-  if (widen) return true;
+  // never self-match
+  if (me.deviceId && other.deviceId && me.deviceId === other.deviceId) return false;
 
   const meG = me.filterGenders?.length ? me.filterGenders : null;
   const meC = me.filterCountries?.length ? me.filterCountries : null;
@@ -248,8 +247,12 @@ function matchOK(me: Attr, other: Attr, widen: boolean) {
   const myG = me.selfGender || "";
   const myC = me.selfCountry || "";
 
+  // gender must always satisfy both sides
   const gOK = (!meG || meG.includes(otG)) && (!otherG || otherG.includes(myG));
-  const cOK = (!meC || meC.includes(otC)) && (!otherC || otherC.includes(myC));
 
+  // countries may be relaxed when widen=true
+  if (widen) return gOK;
+
+  const cOK = (!meC || meC.includes(otC)) && (!otherC || otherC.includes(myC));
   return gOK && cOK;
 }
