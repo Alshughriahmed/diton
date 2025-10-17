@@ -420,6 +420,9 @@ export default function ChatClient() {
         const txt = new TextDecoder().decode(payload);
         if (!txt || !/^\s*\{/.test(txt)) return;
         const j = JSON.parse(txt);
+         if (j?.t === "meta:init") {
+        window.dispatchEvent(new CustomEvent("ditona:meta:init"));
+        }
         if (j?.t === "chat" && j.text) {
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } }));
         }
