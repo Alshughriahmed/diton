@@ -1,3 +1,4 @@
+// src/app/chat/components/FilterBar.tsx
 "use client";
 
 import dynamic from "next/dynamic";
@@ -28,16 +29,13 @@ export default function FilterBar() {
   const { isVip } = useVip();
   const filters = useFilters();
 
-  const currentSelections: GenderOpt[] = filters.genderSelections?.length
-    ? filters.genderSelections
-    : (filters.gender === "all" ? [] : [filters.gender]);
-
+  const currentOpt: GenderOpt = filters.gender ?? "all";
   const currentCountries: string[] = Array.isArray(filters.countries) ? filters.countries : [];
 
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);
   const [selectedGenders, setSelectedGenders] = useState<GenderKey[]>(
-    currentSelections.map(g => optToKey(g)).filter(Boolean) as GenderKey[]
+    currentOpt === "all" ? [] : (optToKey(currentOpt) ? [optToKey(currentOpt)!] : [])
   );
   const [selectedCountries, setSelectedCountries] = useState<string[]>(currentCountries);
 
@@ -46,15 +44,14 @@ export default function FilterBar() {
     if (!isVip && !ffa && v.length > 1) v = [v[0]];
 
     if (v.length === 0) {
-      filters.setGenderSelections([]);
       filters.setGender("all");
       setSelectedGenders([]);
       return;
     }
 
-    const opts = v.map(keyToOpt);
-    filters.setGenderSelections(opts);
-    setSelectedGenders(v);
+    const first = v[0];
+    filters.setGender(keyToOpt(first));
+    setSelectedGenders([first]);
   }
 
   function applyCountries(codes: string[]) {
@@ -64,17 +61,17 @@ export default function FilterBar() {
   }
 
   return (
-    <div className="absolute top-2 right-2 z-[999] pointer-events-auto flex items-center gap-2" data-ui="filter-bar">
+    <div
+      className="absolute top-2 right-2 z-[999] pointer-events-auto flex items-center gap-2"
+      data-ui="filter-bar"
+    >
       <button
         type="button"
         data-ui="gender-button"
         aria-label="Gender"
         onClick={() => {
-          const initial = (filters.genderSelections?.length
-            ? filters.genderSelections
-            : (filters.gender === "all" ? [] : [filters.gender])
-          ).map(g => optToKey(g)).filter(Boolean) as GenderKey[];
-          setSelectedGenders(initial);
+          const init = currentOpt === "all" ? [] : (optToKey(currentOpt) ? [optToKey(currentOpt)!] : []);
+          setSelectedGenders(init);
           setOpenGender(true);
         }}
         title="Gender filters"
