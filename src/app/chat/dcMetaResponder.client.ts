@@ -9,6 +9,7 @@
  *  - window "rtc:phase" => matched|connected
  *  - window "profile:updated"
  *  - window "ditona:geo"
+ *  - optional: "dc:attached", "lk:attached", "livekit:participant-connected"
  * Sends twice (250ms apart). Falls back to LiveKit publishData(topic:"meta").
  */
 
@@ -114,13 +115,17 @@ function sendPeerMetaTwice() {
 
 function attachOnce() {
   if (!isBrowser) return;
+  if ((window as any).__dcMetaResponderBound) return;
+
   const dc: any = (window as any).__ditonaDataChannel;
   if (!dc?.addEventListener) return;
+
+  (window as any).__dcMetaResponderBound = 1;
 
   // DC inbound messages
   const onMsg = (ev: MessageEvent) => {
     try {
-      const d = ev?.data;
+      const d = (ev as any)?.data;
       let txt: string | null = null;
       if (typeof d === "string") txt = d;
       else if (d instanceof ArrayBuffer)
@@ -131,15 +136,12 @@ function attachOnce() {
 
       const j = JSON.parse(txt);
       if (j?.t === "meta:init") {
-        // surface app-level event, then respond
-        try {
-          window.dispatchEvent(new CustomEvent("ditona:meta:init"));
-        } catch {}
+        try { window.dispatchEvent(new CustomEvent("ditona:meta:init")); } catch {}
         sendPeerMetaTwice();
       }
     } catch {}
   };
-  dc.addEventListener("message", onMsg);
+  dc.addEventListener("message", onMsg as any);
 
   // App-level triggers
   const onGeo = () => sendPeerMetaTwice();
@@ -150,21 +152,31 @@ function attachOnce() {
   };
   const onInitEvt = () => sendPeerMetaTwice();
 
+  // optional hooks announced by ChatClient
+  const onDCAttached = () => sendPeerMetaTwice();
+  const onLkAttached = () => sendPeerMetaTwice();
+  const onLkParticipantConnected = () => sendPeerMetaTwice();
+
   window.addEventListener("ditona:geo", onGeo as any);
   window.addEventListener("profile:updated", onProfile as any);
   window.addEventListener("rtc:phase", onPhase as any);
   window.addEventListener("ditona:meta:init", onInitEvt as any);
+  window.addEventListener("dc:attached", onDCAttached as any);
+  window.addEventListener("lk:attached", onLkAttached as any);
+  window.addEventListener("livekit:participant-connected", onLkParticipantConnected as any);
 
   // HMR cleanup
   if ((import.meta as any)?.hot) {
     (import.meta as any).hot.dispose(() => {
-      try {
-        dc.removeEventListener?.("message", onMsg as any);
-      } catch {}
+      try { dc.removeEventListener?.("message", onMsg as any); } catch {}
       window.removeEventListener("ditona:geo", onGeo as any);
       window.removeEventListener("profile:updated", onProfile as any);
       window.removeEventListener("rtc:phase", onPhase as any);
       window.removeEventListener("ditona:meta:init", onInitEvt as any);
+      window.removeEventListener("dc:attached", onDCAttached as any);
+      window.removeEventListener("lk:attached", onLkAttached as any);
+      window.removeEventListener("livekit:participant-connected", onLkParticipantConnected as any);
+      (window as any).__dcMetaResponderBound = 0;
     });
   }
 }
@@ -179,7 +191,7 @@ function attachOnce() {
   const iv = setInterval(() => {
     tries++;
     attachOnce();
-    if ((window as any).__ditonaDataChannel?.addEventListener || tries > 40)
-      clearInterval(iv);
+    const ready = !!(window as any).__ditonaDataChannel?.addEventListener;
+    if (ready || tries > 50) clearInterval(iv);
   }, 100);
 })();
