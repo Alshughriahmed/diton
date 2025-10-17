@@ -1,4 +1,6 @@
+// src/app/chat/components/CountryModal.tsx
 "use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { getAllRegions, type Region } from "@/lib/regions";
 
@@ -27,16 +29,20 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
   const [sel, setSel] = useState<string[]>(selected ?? []);
   const [userCode, setUserCode] = useState<string | null>(null);
 
-  useEffect(() => { setRegions(getAllRegions()); }, []);
+  useEffect(() => { if (open) setRegions(getAllRegions()); }, [open]);
   useEffect(() => { setSel(selected ?? []); }, [selected]);
-  useEffect(() => { setUserCode(readUserCountryCode()); }, [open]);
+  useEffect(() => { if (open) setUserCode(readUserCountryCode()); }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let arr = regions.filter(r =>
-      !q || r.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q)
-    );
-    // Put user's country first
+    let arr = regions.filter(r => !q || r.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q));
     if (userCode) {
       arr = [...arr].sort((a, b) =>
         a.code === userCode ? -1 : b.code === userCode ? 1 : a.name.localeCompare(b.name)
@@ -67,6 +73,8 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
       data-modal="country"
       className="fixed inset-0 z-[100] flex items-start md:items-center justify-center bg-black/50 p-2 md:p-6"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
     >
       <div
         className="w-full max-w-lg rounded-2xl bg-white text-gray-900 shadow-xl pointer-events-auto"
@@ -74,7 +82,7 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
       >
         <div className="flex items-center justify-between p-4 border-b">
           <h3 className="text-lg font-semibold">Country Filter</h3>
-          <button onClick={onClose} className="px-2 text-gray-500 hover:text-gray-900">✕</button>
+          <button onClick={onClose} className="px-2 text-gray-500 hover:text-gray-900" aria-label="Close">✕</button>
         </div>
 
         <div className="p-4">
@@ -82,18 +90,17 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
             autoFocus
             placeholder="Search country"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e)=>setQuery(e.target.value)}
             className="w-full rounded-xl border px-3 py-2 outline-none focus:ring"
           />
 
           <div className="mt-3 max-h-[60vh] overflow-y-auto divide-y">
-            {/* All control */}
             <div className="flex items-center justify-between py-2">
               <div className="text-sm text-gray-600">
                 Default: <strong>All Countries</strong>
               </div>
               <button
-                onClick={() => { setSel([]); onChange([]); }}
+                onClick={()=>{ setSel([]); onChange([]); }}
                 className="text-xs px-2 py-1 rounded border bg-gray-50 hover:bg-gray-100"
                 title="Reset to All Countries"
               >
@@ -101,13 +108,13 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
               </button>
             </div>
 
-            {list.map((r) => (
+            {list.map(r=>(
               <label key={r.code} className="flex items-center gap-3 py-2 cursor-pointer">
                 <input
                   type="checkbox"
                   className="size-4"
                   checked={sel.includes(r.code)}
-                  onChange={() => toggle(r.code)}
+                  onChange={()=>toggle(r.code)}
                 />
                 <span className="text-xl">{r.flag}</span>
                 <span className="flex-1">{r.name}</span>
@@ -117,19 +124,14 @@ export default function CountryModal({ open, onClose, selected, onChange }: Prop
               </label>
             ))}
 
-            {list.length === 0 && (
+            {list.length===0 && (
               <div className="py-6 text-sm text-gray-500">No results</div>
             )}
           </div>
         </div>
 
         <div className="flex justify-end gap-2 p-4 border-t">
-          <button
-            onClick={() => { setSel([]); onChange([]); }}
-            className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200"
-          >
-            All
-          </button>
+          <button onClick={()=>{ setSel([]); onChange([]); }} className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200">All</button>
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-black text-white">Done</button>
         </div>
       </div>
