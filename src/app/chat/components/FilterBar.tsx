@@ -5,7 +5,6 @@ import { useState } from "react";
 import { useFFA } from "@/lib/useFFA";
 import { useVip } from "@/hooks/useVip";
 import { useFilters, type GenderOpt } from "@/state/filters";
-// لا تعديل على profile.gender هنا. selfGender يُحدَّد في landing فقط.
 import type { GenderKey } from "./GenderModal";
 
 const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
@@ -15,14 +14,14 @@ const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 const optToKey = (g: GenderOpt): GenderKey | null =>
   g === "male" ? "male"
   : g === "female" ? "female"
-  : g === "couple" ? "couple"
+  : g === "couple" ? "couples"          // fix: couple → couples
   : g === "lgbt" ? "lgbt"
   : null;
 
 const keyToOpt = (k: GenderKey): GenderOpt =>
   k === "male" ? "male"
   : k === "female" ? "female"
-  : k === "couple" ? "couple"
+  : k === "couples" ? "couple"          // fix: couples → couple
   : /* k === "lgbt" */ "lgbt";
 
 export default function FilterBar() {
@@ -30,11 +29,9 @@ export default function FilterBar() {
   const { isVip } = useVip();
   const filters = useFilters();
 
-  // حالة حالية من المخزن
   const currentOpt: GenderOpt = filters.gender ?? "all";
   const currentCountries: string[] = Array.isArray(filters.countries) ? filters.countries : [];
 
-  // عند الفتح: إن كانت "all" نمرر [] للمودال، وإلا مفتاحًا واحدًا متوافقًا
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);
   const [selectedGenders, setSelectedGenders] = useState<GenderKey[]>(
@@ -44,10 +41,8 @@ export default function FilterBar() {
 
   function applyGender(keys: GenderKey[]) {
     let v = Array.isArray(keys) ? keys : [];
-    // مستقبلاً قد نسمح بعدة اختيارات. الآن: VIP/FFA يمكنه اختيار أي شيء
     if (!isVip && !ffa && v.length > 1) v = [v[0]];
 
-    // لا تكتب إلى profile.gender هنا
     if (v.length === 0) {
       filters.setGender("all");
       setSelectedGenders([]);
@@ -60,8 +55,9 @@ export default function FilterBar() {
   }
 
   function applyCountries(codes: string[]) {
-    filters.setCountries(Array.isArray(codes) ? codes : []);
-    setSelectedCountries(Array.isArray(codes) ? codes : []);
+    const next = Array.isArray(codes) ? codes : [];
+    filters.setCountries(next);
+    setSelectedCountries(next);
   }
 
   return (
@@ -104,7 +100,7 @@ export default function FilterBar() {
           open
           onClose={() => setOpenGender(false)}
           selected={selectedGenders}
-          onChange={(value) => applyGender(Array.isArray(value) ? value as GenderKey[] : [])}
+          onChange={(value) => applyGender(Array.isArray(value) ? (value as GenderKey[]) : [])}
         />
       )}
 
