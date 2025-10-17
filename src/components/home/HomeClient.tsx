@@ -2,9 +2,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import HeaderLite from "@/components/HeaderLite";
-import safeFetch from '@/app/chat/safeFetch';
+import safeFetch from "@/app/chat/safeFetch";
+import { useProfile } from "@/state/profile";
+import { useFilters, type GenderOpt } from "@/state/filters";
+import { normalizeGender } from "@/lib/gender";
 
 type MyGender = "male" | "female" | "couple" | "lgbt";
+
 const genderOptions = [
   { key: "male",   label: "Male",   symbol: "♂" },
   { key: "female", label: "Female", symbol: "♀" },
@@ -21,29 +25,50 @@ function classesFor(g: MyGender){
   }
 }
 
-const rainbowText = "bg-gradient-to-r from-red-500 via-orange-400 via-yellow-400 via-green-500 via-blue-500 to-purple-600 bg-clip-text text-transparent";
+const rainbowText =
+  "bg-gradient-to-r from-red-500 via-orange-400 via-yellow-400 via-green-500 via-blue-500 to-purple-600 bg-clip-text text-transparent";
 
 export default function HomeClient(){
   const router = useRouter();
+  const profileStore = useProfile();
+  const filtersStore = useFilters();
+
   const [gender, setGender] = useState<MyGender | null>(null);
   const [ageOk, setAgeOk] = useState(false);
   const [geo, setGeo] = useState<any>(null);
 
+  function selectGender(next: MyGender){
+    setGender(next);
+    try { profileStore.set({ gender: normalizeGender(next) }); } catch {}
+    try { filtersStore.setGender(next as GenderOpt); } catch {}
+    try { localStorage.setItem("ditona_myGender", String(next)); } catch {}
+  }
+
   useEffect(() => {
     let timedOut = false;
-    const done = (d:any)=>{ try{localStorage.setItem("ditona_geo", JSON.stringify(d));}catch{}; setGeo(d); };
+    const done = (d:any)=>{
+      try{ localStorage.setItem("ditona_geo", JSON.stringify(d)); }catch{}
+      setGeo(d);
+    };
     try{
-      const g = navigator?.geolocation;
+      const g = (navigator as any)?.geolocation;
       if (g){
         const t = setTimeout(()=>{ timedOut = true; }, 3000);
         g.getCurrentPosition(
-          (pos)=>{ if(!timedOut){ clearTimeout(t); done({ lat:pos.coords.latitude, lon:pos.coords.longitude, src:"geolocation" }); } },
+          (pos:any)=>{
+            if(!timedOut){
+              clearTimeout(t);
+              done({ lat:pos.coords.latitude, lon:pos.coords.longitude, src:"geolocation" });
+            }
+          },
           ()=>{},
           { enableHighAccuracy:false, maximumAge:60_000, timeout:2500 }
         );
       }
     }catch{}
-    safeFetch("/api/geo").then(r=>r.json()).then(d=>{ if(!geo) done(d); }).catch(()=>{});
+    safeFetch("/api/geo")
+      .then(r=>r.json()).then(d=>{ if(!geo) done(d); })
+      .catch(()=>{});
   }, []);
 
   const canStart = useMemo(()=> Boolean(gender) && ageOk, [gender, ageOk]);
@@ -51,8 +76,6 @@ export default function HomeClient(){
   async function onStart(){
     if(!canStart) return;
     try{
-      try{ localStorage.setItem("ditona_myGender", String(gender)); }catch{}
-      if (geo){ try{ localStorage.setItem("ditona_geo_hint", JSON.stringify(geo)); }catch{} }
       await safeFetch("/api/age/allow", { method:"POST" }).catch(()=>{});
     } finally {
       router.push("/chat");
@@ -84,9 +107,13 @@ export default function HomeClient(){
               const cls = classesFor(opt.key as MyGender);
               const active = gender===opt.key ? "ring-2 ring-white" : "";
               return (
-                <button key={opt.key} type="button" onClick={()=>setGender(opt.key as MyGender)}
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={()=>selectGender(opt.key as MyGender)}
                   className={`px-3 py-3 rounded-lg border bg-black/40 hover:bg-black/30 transition-colors ${active} ${cls.border}`}
-                  aria-label={opt.label}>
+                  aria-label={opt.label}
+                >
                   {opt.key!=="lgbt" ? (
                     <span className={`flex items-center gap-2 ${cls.text}`}>
                       <span className="text-2xl leading-none">{opt.symbol}</span>
@@ -109,8 +136,11 @@ export default function HomeClient(){
             <label htmlFor="ageok" className="text-sm text-gray-200">I confirm I am 18+</label>
           </div>
 
-          <button onClick={onStart} disabled={!canStart}
-            className="mt-6 w-full py-3 rounded-xl text-white text-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-r from-fuchsia-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
+          <button
+            onClick={onStart}
+            disabled={!canStart}
+            className="mt-6 w-full py-3 rounded-xl text-white text-lg font-semibold bg-gradient-to-r from-fuchsia-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 disabled:opacity-50"
+          >
             Start Video Chat
           </button>
 
