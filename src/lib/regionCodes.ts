@@ -1,17 +1,36 @@
+// Robust region code provider without external deps.
+// Produces full ISO-3166-1 alpha-2 set supported by the runtime.
+
 export function getRegionCodes(): string[] {
+  // 1) Prefer native list if available
   try {
-    const sv = (Intl as any)?.supportedValuesOf;
-    const arr = typeof sv === 'function' ? sv('region') : [];
-    if (Array.isArray(arr) && arr.length) return arr;
-  } catch {
-    // Intl.supportedValuesOf('region') can throw RangeError in some environments
-  }
-  
-  // Fallback: use the existing hardcoded list from regions.ts
-  // This ensures consistent behavior without crashing
+    const anyIntl: any = Intl as any;
+    if (typeof anyIntl.supportedValuesOf === "function") {
+      const arr = anyIntl.supportedValuesOf("region") as string[];
+      return Array.from(
+        new Set(arr.filter((c) => /^[A-Z]{2}$/.test(c)))
+      ).sort();
+    }
+  } catch {}
+
+  // 2) Portable fallback: probe all AA..ZZ using DisplayNames
+  try {
+    const disp = new Intl.DisplayNames(["en"], { type: "region" });
+    const out: string[] = [];
+    for (let i = 65; i <= 90; i++) {
+      for (let j = 65; j <= 90; j++) {
+        const code = String.fromCharCode(i) + String.fromCharCode(j);
+        // If valid, DisplayNames returns a localized name different from the code itself
+        const name = disp.of(code as any);
+        if (name && name !== code) out.push(code);
+      }
+    }
+    return Array.from(new Set(out)).sort();
+  } catch {}
+
+  // 3) Minimal safe fallback
   return [
-    "US","GB","DE","FR","IT","ES","CA","BR","AU","RU","CN","JP","KR","IN","SA","AE","TR","NL","SE","NO","DK","FI","PL","GR","EG","MA","TN","ZA","AR","CL","MX",
-    // Add more comprehensive list for better coverage
-    "AF","AL","DZ","AD","AO","AG","AM","AT","AZ","BS","BH","BD","BB","BY","BE","BZ","BJ","BT","BO","BA","BW","BG","BF","BI","CV","KH","CM","CF","TD","CL","CO","KM","CG","CD","CR","CI","HR","CU","CY","CZ","DJ","DM","DO","EC","SV","GQ","ER","EE","SZ","ET","FJ","GA","GM","GE","GH","GN","GW","GY","HT","HN","HU","IS","ID","IR","IQ","IE","IL","JM","JO","KZ","KE","KI","KP","KW","KG","LA","LV","LB","LS","LR","LY","LI","LT","LU","MG","MW","MY","MV","ML","MT","MH","MR","MU","MX","FM","MD","MC","MN","ME","MA","MZ","MM","NA","NR","NP","NZ","NI","NE","NG","MK","OM","PK","PW","PS","PA","PG","PY","PE","PH","PT","QA","RO","RW","KN","LC","VC","WS","SM","ST","SN","RS","SC","SL","SG","SK","SI","SB","SO","KR","SS","LK","SD","SR","SE","CH","SY","TJ","TZ","TH","TL","TG","TO","TT","TN","TM","TV","UG","UA","UY","UZ","VU","VE","VN","YE","ZM","ZW"
+    "US","GB","CA","AU","DE","FR","IT","ES","BR","MX","TR","SA","AE","IN","PK","BD",
+    "RU","UA","CN","JP","KR","ID","PH","NG","EG","MA","TN"
   ];
 }
