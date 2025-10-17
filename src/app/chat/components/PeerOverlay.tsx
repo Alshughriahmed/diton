@@ -1,4 +1,3 @@
-// src/app/chat/components/PeerOverlay.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -20,7 +19,9 @@ function loadCached(): Meta {
     if (w.__ditonaLastPeerMeta && typeof w.__ditonaLastPeerMeta === "object") return w.__ditonaLastPeerMeta;
     const raw = sessionStorage.getItem("ditona:last_peer_meta");
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 export default function PeerOverlay() {
@@ -53,12 +54,36 @@ export default function PeerOverlay() {
 
     const onLike = (ev: any) => {
       const n = ev?.detail?.likes ?? ev?.detail?.count;
-      if (typeof n === "number") setLikes(n); else setLikes((x) => x + 1);
+      if (typeof n === "number") setLikes(n);
+      else setLikes((x) => x + 1);
+    };
+
+    const onPhase = (ev: any) => {
+      const ph = ev?.detail?.phase;
+      if (ph === "searching" || ph === "matched" || ph === "stopped") {
+        setMeta({});
+        setLikes(0);
+        try {
+          sessionStorage.removeItem("ditona:last_peer_meta");
+          (globalThis as any).__ditonaLastPeerMeta = {};
+        } catch {}
+      }
+    };
+
+    const onPair = () => {
+      setMeta({});
+      setLikes(0);
+      try {
+        sessionStorage.removeItem("ditona:last_peer_meta");
+        (globalThis as any).__ditonaLastPeerMeta = {};
+      } catch {}
     };
 
     window.addEventListener("ditona:peer-meta", onMeta as any);
     window.addEventListener("rtc:peer-meta", onMeta as any);
     window.addEventListener("ditona:like:recv", onLike as any);
+    window.addEventListener("rtc:phase", onPhase as any);
+    window.addEventListener("rtc:pair", onPair as any);
 
     // ask once if nothing arrived
     const t = setTimeout(() => {
@@ -76,15 +101,17 @@ export default function PeerOverlay() {
       window.removeEventListener("ditona:peer-meta", onMeta as any);
       window.removeEventListener("rtc:peer-meta", onMeta as any);
       window.removeEventListener("ditona:like:recv", onLike as any);
+      window.removeEventListener("rtc:phase", onPhase as any);
+      window.removeEventListener("rtc:pair", onPair as any);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const g = genderBadge(meta.gender);
+  const g = genderBadge(meta.gender as any);
 
   return (
     <>
-      {/* Top-left: avatar + name + VIP + likes (شفاف) */}
+      {/* Top-left: avatar + name + VIP + likes (transparent) */}
       <div className="absolute top-2 left-2 z-30 flex items-center gap-2 select-none pointer-events-none">
         <div className="h-7 w-7 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
           {meta.avatarUrl ? (
@@ -102,7 +129,7 @@ export default function PeerOverlay() {
         </div>
       </div>
 
-      {/* Bottom-left: Country–City + gender label (بدون صندوق) */}
+      {/* Bottom-left: Country–City + gender badge (no box) */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         <span className="text-white/95">
           {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
