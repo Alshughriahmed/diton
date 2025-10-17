@@ -6,13 +6,14 @@ export type NextPrevApi = {
   tryPrevOrRandom: () => void;
 };
 
-function emit(name: string) {
-  try { window.dispatchEvent(new CustomEvent(name)); } catch {}
+function emitBoth(a: string, b: string) {
+  try { window.dispatchEvent(new CustomEvent(a)); } catch {}
+  try { window.dispatchEvent(new CustomEvent(b)); } catch {}
 }
 
 export function useNextPrev(): NextPrevApi {
-  const next = () => emit("ditona:next");
-  const prev = () => emit("ditona:prev");
+  const next = () => emitBoth("ui:next", "ditona:next");
+  const prev = () => emitBoth("ui:prev", "ditona:prev");
   const tryPrevOrRandom = () => { prev(); };
   return { next, prev, tryPrevOrRandom };
 }
