@@ -473,16 +473,16 @@ export default function ChatClient() {
         if (g?.country) selfCountry = String(g.country).toUpperCase();
       } catch {}
       // unified genders
-      const selfGender = normalizeGender(profile?.gender ?? gender ?? "u");
-      const selected = normalizeGender(gender ?? "u");
-      const gFilter = selected === "u" ? [] : [selected];
-
+    const selfGender = normalizeGender(profile?.gender);         // male|female|couples|lgbt|everyone
+    const selected   = normalizeGender(gender);
+    const gFilter    = !selected || selected === "everyone" ? [] : [selected];
+    const payloadSelfGender = selfGender && selfGender !== "everyone" ? selfGender : undefined;
       // enqueue
       const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
         vip: !!vip,
-        selfGender,
+        selfGender: payloadSelfGender,
         selfCountry,
         filterGenders: gFilter,
         filterCountries: Array.isArray(countries) ? countries : [],
