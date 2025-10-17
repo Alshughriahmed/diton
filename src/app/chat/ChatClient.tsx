@@ -70,6 +70,12 @@ const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 1000;
 const isBrowser = typeof window !== "undefined";
 
+// treat “everyone/all/u” as unconstrained
+const isEveryoneLike = (g: unknown) => {
+  const v = String(g ?? "").toLowerCase();
+  return v === "everyone" || v === "all" || v === "u";
+};
+
 /* ===== 7) Component ===== */
 export default function ChatClient() {
   const ffa = useFFA();
@@ -160,7 +166,7 @@ export default function ChatClient() {
     }
   }
   function identity(): string {
-    const base = String((profile?.displayName || "anon")).trim() || "anon";
+    const base = String(profile?.displayName || "anon").trim() || "anon";
     const did = String(stableDid());
     const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
     return `${base}#${tail}`;
@@ -420,8 +426,9 @@ export default function ChatClient() {
         const txt = new TextDecoder().decode(payload);
         if (!txt || !/^\s*\{/.test(txt)) return;
         const j = JSON.parse(txt);
-         if (j?.t === "meta:init") {
-        window.dispatchEvent(new CustomEvent("ditona:meta:init"));
+
+        if (j?.t === "meta:init") {
+          window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
         if (j?.t === "chat" && j.text) {
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } }));
@@ -472,11 +479,13 @@ export default function ChatClient() {
         const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
         if (g?.country) selfCountry = String(g.country).toUpperCase();
       } catch {}
+
       // unified genders
-    const selfGender = normalizeGender(profile?.gender);         // male|female|couples|lgbt|everyone
-    const selected   = normalizeGender(gender);
-    const gFilter    = !selected || selected === "everyone" ? [] : [selected];
-    const payloadSelfGender = selfGender && selfGender !== "everyone" ? selfGender : undefined;
+      const selfGender = normalizeGender(profile?.gender as any);   // male|female|couples|lgbt|everyone
+      const selected   = normalizeGender(gender as any);            // from filters
+      const gFilter    = isEveryoneLike(selected) ? [] : [selected as any];
+      const payloadSelfGender = isEveryoneLike(selfGender) ? undefined : (selfGender as any);
+
       // enqueue
       const ticket = await enqueueReq({
         identity: identity(),
@@ -528,6 +537,7 @@ export default function ChatClient() {
           try { await room.localParticipant.publishTrack(t); } catch {}
         }
       }
+
       // restore remote mute state
       try {
         const muted = !!lastMediaStateRef.current.remoteMuted;
