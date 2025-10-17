@@ -37,7 +37,6 @@ import { useFFA } from "@/lib/useFFA";
 import { useRouter } from "next/navigation";
 import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
-import { tryPrevOrRandom } from "@/lib/match/controls";
 import { useProfile } from "@/state/profile";
 import { normalizeGender } from "@/lib/gender";
 
