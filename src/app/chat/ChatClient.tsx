@@ -58,7 +58,7 @@ import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
 import ChatToolbar from "./components/ChatToolbar";
 import ChatMessagingBar from "./components/ChatMessagingBar";
-import { MessageHud } from "./components/MessageHud";
+import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
