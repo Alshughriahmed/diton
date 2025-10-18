@@ -1,166 +1,98 @@
-// src/app/chat/components/MessageHud.tsx
 "use client";
-
 import { useEffect, useRef, useState } from "react";
 
-type Line = { text: string; ts: number; dir: "out" | "in" };
+type Line = { text: string; ts: number; dir: "out" | "in"; pairId: string };
 
-const MIN_VISIBLE = 3;
+export function MessageHud() {
+  const [history, setHistory] = useState<Line[]>([]);
+  const [visibleCount, setVisibleCount] = useState(3);
+  const curPairRef = useRef<string>("");
 
-export default function MessageHud() {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // pair context
-  const [currentPairId, setCurrentPairId] = useState<string | null>(null);
-
-  // per-pair full history kept off-UI
-  const historyRef = useRef<Map<string, Line[]>>(new Map());
-
-  // visible window
-  const [visible, setVisible] = useState<Line[]>([]);
-  const [showCount, setShowCount] = useState<number>(MIN_VISIBLE);
-
-  // autoscroll to bottom of visible
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [visible]);
-
-  /* helpers */
-  const setFromHistory = (pid: string | null, count = showCount) => {
-    if (!pid) { setVisible([]); return; }
-    const hist = historyRef.current.get(pid) || [];
-    const n = Math.max(MIN_VISIBLE, Math.min(count, hist.length || MIN_VISIBLE));
-    setVisible(hist.slice(-n));
-  };
-
-  const pushToHistory = (pid: string, l: Line) => {
-    const hist = historyRef.current.get(pid) || [];
-    hist.push(l);
-    historyRef.current.set(pid, hist);
-    setFromHistory(pid);
-  };
-
-  const clearHistory = (pid?: string | null) => {
-    if (pid) historyRef.current.delete(pid);
-    setShowCount(MIN_VISIBLE);
-    setVisible([]);
-  };
-
-  /* pair switch / resets */
+  // reset عند بدء زوج جديد
   useEffect(() => {
     const onPair = (e: any) => {
-      const pid = e?.detail?.pairId || e?.pairId || null;
-      setCurrentPairId(pid);
-      setShowCount(MIN_VISIBLE);
-      if (pid) historyRef.current.set(pid, []);
-      setFromHistory(pid, MIN_VISIBLE);
-    };
-    const onReset = (e: any) => {
-      const pid = e?.detail?.pairId ?? currentPairId ?? null;
-      clearHistory(pid);
-      if (pid) historyRef.current.set(pid, []);
+      const pid = e?.detail?.pairId || e?.pairId || "";
+      curPairRef.current = String(pid || "");
+      setHistory([]);
+      setVisibleCount(3);
     };
     window.addEventListener("rtc:pair", onPair as any);
-    window.addEventListener("ui:msg:reset", onReset as any);
-    return () => {
-      window.removeEventListener("rtc:pair", onPair as any);
-      window.removeEventListener("ui:msg:reset", onReset as any);
-    };
-  }, [currentPairId]);
+    return () => window.removeEventListener("rtc:pair", onPair as any);
+  }, []);
 
-  /* in/out messages with ghost guard */
+  // استقبال
   useEffect(() => {
-    const add = (dir: "out" | "in") => (e: any) => {
-      const msg = e?.detail ?? {};
-      if (typeof msg.text !== "string") return;
-      const pid: string | null =
-        typeof msg.pairId === "string" && msg.pairId ? msg.pairId : currentPairId;
-      if (!pid || (currentPairId && pid !== currentPairId)) return;
-      pushToHistory(pid, { text: msg.text, ts: Date.now(), dir });
+    const onRecv = (e: any) => {
+      const d = e?.detail as { text: string; pairId?: string; ts?: number };
+      const cur = curPairRef.current || (window as any).__ditonaPairId || (window as any).__pairId || "";
+      if (d?.pairId && d.pairId !== cur) return; // drop ghosts
+      if (typeof d?.text !== "string" || !d.text.trim()) return;
+      setHistory((h) => [...h, { text: d.text, ts: d.ts || Date.now(), dir: "in", pairId: cur }]);
     };
-    const sent = add("out");
-    const recv = add("in");
-    window.addEventListener("ditona:chat:sent", sent as any);
-    window.addEventListener("ditona:chat:recv", recv as any);
-    return () => {
-      window.removeEventListener("ditona:chat:sent", sent as any);
-      window.removeEventListener("ditona:chat:recv", recv as any);
-    };
-  }, [currentPairId]);
+    window.addEventListener("ditona:chat:recv", onRecv as any);
+    return () => window.removeEventListener("ditona:chat:recv", onRecv as any);
+  }, []);
 
-  /* vertical swipe to reveal older messages */
+  // بعد الإرسال المحلي نضيف نسخة “out”
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    const onSent = (e: any) => {
+      const d = e?.detail as { text: string; pairId?: string; ts?: number };
+      const cur = curPairRef.current || (window as any).__ditonaPairId || (window as any).__pairId || "";
+      if (d?.pairId && d.pairId !== cur) return;
+      if (typeof d?.text !== "string" || !d.text.trim()) return;
+      setHistory((h) => [...h, { text: d.text, ts: d.ts || Date.now(), dir: "out", pairId: cur }]);
+    };
+    window.addEventListener("ditona:chat:sent", onSent as any);
+    return () => window.removeEventListener("ditona:chat:sent", onSent as any);
+  }, []);
 
+  // سحب/تمرير لزيادة عدد الظاهر
+  useEffect(() => {
     let startY = 0;
-    let baseCount = MIN_VISIBLE;
-    let dragging = false;
-
-    const maxForPair = () => {
-      if (!currentPairId) return MIN_VISIBLE;
-      return (historyRef.current.get(currentPairId) || []).length || MIN_VISIBLE;
+    let moved = false;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) setVisibleCount((n) => Math.min(history.length, n + 1));
     };
-
-    const onDown = (ev: PointerEvent | TouchEvent) => {
-      const y =
-        (ev as PointerEvent).clientY ??
-        (ev as TouchEvent).touches?.[0]?.clientY ??
-        0;
-      startY = y;
-      baseCount = showCount;
-      dragging = true;
+    const onTouchStart = (e: TouchEvent) => { startY = e.touches[0]?.clientY ?? 0; moved = false; };
+    const onTouchMove = (e: TouchEvent) => {
+      const dy = (e.touches[0]?.clientY ?? 0) - startY;
+      if (dy > 30 && !moved) { moved = true; setVisibleCount((n) => Math.min(history.length, n + 1)); }
     };
-    const onMove = (ev: PointerEvent | TouchEvent) => {
-      if (!dragging) return;
-      const y =
-        (ev as PointerEvent).clientY ??
-        (ev as TouchEvent).touches?.[0]?.clientY ??
-        0;
-      const dy = startY - y; // swipe up => positive
-      const delta = Math.trunc(dy / 24);
-      const wanted = Math.max(MIN_VISIBLE, Math.min(maxForPair(), baseCount + delta));
-      if (wanted !== showCount) {
-        setShowCount(wanted);
-        setFromHistory(currentPairId, wanted);
-      }
-    };
-    const onUp = () => { dragging = false; };
-
-    el.addEventListener("pointerdown", onDown);
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
-    el.addEventListener("touchstart", onDown, { passive: true });
-    el.addEventListener("touchmove", onMove as any, { passive: true });
-    el.addEventListener("touchend", onUp, { passive: true });
-    el.addEventListener("touchcancel", onUp, { passive: true });
-
+    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
     return () => {
-      el.removeEventListener("pointerdown", onDown);
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.removeEventListener("touchstart", onDown as any);
-      el.removeEventListener("touchmove", onMove as any);
-      el.removeEventListener("touchend", onUp as any);
-      el.removeEventListener("touchcancel", onUp as any);
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
     };
-  }, [currentPairId, showCount]);
+  }, [history.length]);
 
-  if (visible.length === 0) return null;
+  // آخر N فقط
+  const lines = history.slice(-visibleCount);
+  if (lines.length === 0) return null;
+
+  // نسخ بالضغط المطوّل + إعادة إرسال للمرسل فقط
+  const onHold = (l: Line) => {
+    let t: any;
+    const start = () => {
+      t = setTimeout(() => {
+        try { navigator.clipboard?.writeText(l.text); } catch {}
+        if (l.dir === "out") {
+          try { window.dispatchEvent(new CustomEvent("ditona:chat:send", { detail: { text: l.text } })); } catch {}
+        }
+      }, 350);
+    };
+    const cancel = () => clearTimeout(t);
+    return { onPointerDown: start, onPointerUp: cancel, onPointerLeave: cancel };
+  };
 
   return (
-    <div
-      ref={containerRef}
-      className="pointer-events-none absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55] space-y-1 select-none"
-    >
-      {visible.map((l, i) => (
+    <div className="pointer-events-none absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55] space-y-1">
+      {lines.map((l, i) => (
         <div
           key={i}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            try { navigator.clipboard?.writeText(l.text); } catch {}
-          }}
+          {...onHold(l)}
           className="pointer-events-auto cursor-copy select-text text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm"
         >
           <span className={l.dir === "in" ? "text-white/80" : "text-emerald-300"}>
@@ -169,7 +101,8 @@ export default function MessageHud() {
           {l.text}
         </div>
       ))}
-      <div ref={endRef} />
     </div>
   );
 }
+
+export default MessageHud;
