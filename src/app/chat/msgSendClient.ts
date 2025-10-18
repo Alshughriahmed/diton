@@ -4,7 +4,7 @@
  * Chat sender over LiveKit Data (outbound only).
  * - Listens to 'ditona:chat:send' {text}
  * - Sends via room.localParticipant.publishData(topic:'chat') or DC shim fallback.
- * - Emits 'ditona:chat:sent' on success.
+ * - Emits 'ditona:chat:sent' with { t:"chat", text, pairId } on success.
  * Receiving path stays in ChatClient(RoomEvent.DataReceived) to avoid duplicates.
  */
 
@@ -12,7 +12,6 @@ declare global {
   interface Window {
     __msgSendMounted2?: 1;
     __lkRoom?: any;
-    __ditonaDataChannel?: any; // fix: keep 'any' to match other declarations
     __ditonaPairId?: any;
     __pairId?: any;
   }
@@ -38,9 +37,9 @@ function readPairId(): string | undefined {
   return undefined;
 }
 
-async function sendChat(text: string): Promise<boolean> {
+async function sendChat(text: string): Promise<{ ok: boolean; payload?: any }> {
   const trimmed = clamp2000(text);
-  if (!trimmed) return false;
+  if (!trimmed) return { ok: false };
 
   const payloadObj = { t: "chat", text: trimmed, pairId: readPairId() };
   const payloadTxt = JSON.stringify(payloadObj);
@@ -51,7 +50,7 @@ async function sendChat(text: string): Promise<boolean> {
     const room = (window as any).__lkRoom;
     if (room && room.state === "connected" && room.localParticipant?.publishData) {
       await room.localParticipant.publishData(payloadBin, { reliable: true, topic: TOPIC });
-      return true;
+      return { ok: true, payload: payloadObj };
     }
   } catch {}
 
@@ -60,11 +59,11 @@ async function sendChat(text: string): Promise<boolean> {
     const dc = (window as any).__ditonaDataChannel;
     if (dc?.send) {
       dc.send(payloadTxt);
-      return true;
+      return { ok: true, payload: payloadObj };
     }
   } catch {}
 
-  return false;
+  return { ok: false };
 }
 
 if (typeof window !== "undefined" && !window.__msgSendMounted2) {
@@ -72,10 +71,10 @@ if (typeof window !== "undefined" && !window.__msgSendMounted2) {
 
   const onSend = async (e: Event) => {
     const detail = (e as CustomEvent).detail as SendDetail;
-    const ok = await sendChat(detail?.text || "");
-    if (ok) {
+    const res = await sendChat(detail?.text || "");
+    if (res.ok && res.payload) {
       try {
-        window.dispatchEvent(new CustomEvent("ditona:chat:sent", { detail }));
+        window.dispatchEvent(new CustomEvent("ditona:chat:sent", { detail: res.payload }));
       } catch {}
     }
   };
