@@ -26,14 +26,22 @@ export interface MatchResult {
 const BASE = process.env.UPSTASH_REDIS_REST_URL as string;
 const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN as string;
 
+export function haveRedisEnv(): boolean {
+  return !!(BASE && TOKEN);
+}
+
 if (!BASE || !TOKEN) {
-  throw new Error("UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN are required");
+  // Allow build to succeed even without env in local dev, but callers should guard with haveRedisEnv().
+  // Throwing here would break static analysis paths.
+  // eslint-disable-next-line no-console
+  console.warn("[match/redis] Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN");
 }
 
 // ---- minimal Upstash REST helpers ----
 type Cmd = (string | number)[];
 
 async function redisCmd(cmd: Cmd): Promise<any> {
+  if (!BASE || !TOKEN) throw new Error("Upstash env missing");
   const res = await fetch(BASE, {
     method: "POST",
     headers: {
@@ -49,6 +57,7 @@ async function redisCmd(cmd: Cmd): Promise<any> {
 }
 
 async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
+  if (!BASE || !TOKEN) throw new Error("Upstash env missing");
   const res = await fetch(BASE + "/pipeline", {
     method: "POST",
     headers: {
@@ -60,7 +69,6 @@ async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
   });
   const j = await res.json();
   if (!res.ok || j.error) throw new Error(j.error || res.statusText);
-  // Upstash returns array like [{result:...}, {result:...}]
   return (Array.isArray(j) ? j : j.result).map((x: any) => (x?.result ?? x));
 }
 
@@ -69,9 +77,12 @@ async function zcard(key: string): Promise<number> {
 }
 
 async function zrangebyscore(key: string, min: number, max: number, offset: number, count: number): Promise<string[]> {
-  // LIMIT offset count
   const r = await redisCmd(["ZRANGEBYSCORE", key, min, max, "LIMIT", offset, count]);
   return Array.isArray(r) ? r.map(String) : [];
+}
+
+async function zremrangebyscore(key: string, min: number | string, max: number | string): Promise<number> {
+  return Number(await redisCmd(["ZREMRANGEBYSCORE", key, min, max]));
 }
 
 async function hgetallObj(key: string): Promise<Record<string, string> | null> {
@@ -96,9 +107,8 @@ async function setNXPX(key: string, value: string, ttlMs: number): Promise<boole
   return r === "OK";
 }
 
-async function setNX(key: string, value: string, ttlMs: number): Promise<boolean> {
-  // same as setNXPX for lock with PX
-  return setNXPX(key, value, ttlMs);
+async function pexpire(key: string, ttlMs: number): Promise<number> {
+  return Number(await redisCmd(["PEXPIRE", key, ttlMs]));
 }
 
 async function del(key: string): Promise<number> {
@@ -107,6 +117,18 @@ async function del(key: string): Promise<number> {
 
 async function zrem(key: string, ...members: string[]): Promise<number> {
   return Number(await redisCmd(["ZREM", key, ...members]));
+}
+
+async function zaddNX(key: string, score: number, member: string): Promise<number> {
+  return Number(await redisCmd(["ZADD", key, "NX", score, member]));
+}
+
+async function hsetObj(key: string, obj: Record<string, string | number | boolean | null>): Promise<number> {
+  const flat: (string | number)[] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    flat.push(k, v === null ? "" : String(v));
+  }
+  return Number(await redisCmd(["HSET", key, ...flat]));
 }
 
 // ---- matching logic ----
@@ -132,6 +154,10 @@ export function normalizeGender(g: any): GenderNorm {
 function csvToArray(s: string | null | undefined): string[] {
   if (!s) return [];
   return String(s).split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+function toCSV(arr: string[]): string {
+  return arr.join(",");
 }
 
 export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null> {
@@ -248,7 +274,7 @@ function roomNameFor(a: string, b: string): string {
 }
 
 async function claimBoth(me: string, other: string, ttlMs: number, room: string): Promise<boolean> {
-  const locked = await setNX(LOCK_KEY(other), me, 4000);
+  const locked = await setNXPX(LOCK_KEY(other), me, 4000);
   if (!locked) return false;
   try {
     const a = await setNXPX(ROOM_KEY(me), room, ttlMs);
@@ -356,3 +382,71 @@ export async function tryMatch(ticket: string, now = Date.now()): Promise<MatchR
   if (!ok) return null;
   return { room, matchedWith: best.ticket };
 }
+
+// ---- enqueue -----
+
+export interface EnqueueInput {
+  identity: string;
+  deviceId: string;
+  selfGender?: any;
+  selfCountry?: string | null;
+  filterGenders?: any[];
+  filterCountries?: string[];
+  vip?: boolean;
+  ts?: number;
+  ticketHint?: string | null;
+}
+
+function genTicket(deviceId: string): string {
+  const rand = Math.random().toString(36).slice(2, 7);
+  const tail = deviceId ? deviceId.replace(/[^a-zA-Z0-9]/g, "").slice(-4) : "xxxx";
+  return `t${Date.now().toString(36)}-${tail}-${rand}`;
+}
+
+export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: number }> {
+  const now = Date.now();
+  const ts = inp.ts && Number.isFinite(inp.ts) ? Number(inp.ts) : now;
+
+  // reuse ticket per device within TTL
+  let ticket = String(inp.ticketHint || "");
+  if (!ticket && inp.deviceId) {
+    const reuse = await redisCmd(["GET", DEV_KEY(inp.deviceId)]);
+    if (reuse) ticket = String(reuse);
+  }
+  if (!ticket) ticket = genTicket(inp.deviceId || "");
+
+  const selfGender = normalizeGender(inp.selfGender || "u");
+  const filterGenders = (inp.filterGenders || []).map(normalizeGender).filter((g) => g !== "u").slice(0, 2) as GenderNorm[];
+  const filterCountries = (inp.filterCountries || []).map((x) => String(x).toUpperCase()).slice(0, 15);
+
+  const obj: Record<string, string | number | boolean | null> = {
+    identity: String(inp.identity || ""),
+    deviceId: String(inp.deviceId || ""),
+    selfGender,
+    selfCountry: inp.selfCountry ? String(inp.selfCountry).toUpperCase() : null,
+    filterGendersCSV: toCSV(filterGenders),
+    filterCountriesCSV: toCSV(filterCountries),
+    vip: !!inp.vip,
+    ts,
+  };
+
+  // write attributes and set TTL
+  await hsetObj(ATTR_KEY(ticket), obj);
+  await pexpire(ATTR_KEY(ticket), TTL_MS);
+  // write dev mapping
+  if (inp.deviceId) {
+    await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", TTL_MS]);
+  }
+  // queue push with recency score
+  await zaddNX(Q_KEY, ts, ticket);
+  // clean old entries
+  await zremrangebyscore(Q_KEY, 0, now - TTL_MS);
+
+  return { ticket, ts };
+}
+'''
+import hashlib
+sha = hashlib.sha256(code.encode('utf-8')).hexdigest()
+size = len(code.encode('utf-8'))
+(sha, size)
+::contentReference[oaicite:0]{index=0}
