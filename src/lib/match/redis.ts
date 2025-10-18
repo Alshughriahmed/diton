@@ -1,8 +1,8 @@
 // src/lib/match/redis.ts
-// Runtime: nodejs. Upstash Redis REST via @upstash/redis.
-// Implements score-based matching per matching.md and ss.md.
+// Score-based matching per matching.md and ss.md without extra deps.
+// Uses Upstash REST directly via fetch. No new dependencies.
+//
 // ENV required: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN.
-import { Redis } from "@upstash/redis";
 
 export type GenderNorm = "m" | "f" | "c" | "l" | "u";
 
@@ -23,12 +23,98 @@ export interface MatchResult {
   matchedWith?: string; // other ticket
 }
 
-const redis = Redis.fromEnv();
+const BASE = process.env.UPSTASH_REDIS_REST_URL as string;
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN as string;
+
+if (!BASE || !TOKEN) {
+  throw new Error("UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN are required");
+}
+
+// ---- minimal Upstash REST helpers ----
+type Cmd = (string | number)[];
+
+async function redisCmd(cmd: Cmd): Promise<any> {
+  const res = await fetch(BASE, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ command: cmd }),
+    cache: "no-store",
+  });
+  const j = await res.json();
+  if (!res.ok || j.error) throw new Error(j.error || res.statusText);
+  return j.result;
+}
+
+async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
+  const res = await fetch(BASE + "/pipeline", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ commands: cmds }),
+    cache: "no-store",
+  });
+  const j = await res.json();
+  if (!res.ok || j.error) throw new Error(j.error || res.statusText);
+  // Upstash returns array like [{result:...}, {result:...}]
+  return (Array.isArray(j) ? j : j.result).map((x: any) => (x?.result ?? x));
+}
+
+async function zcard(key: string): Promise<number> {
+  return Number(await redisCmd(["ZCARD", key]));
+}
+
+async function zrangebyscore(key: string, min: number, max: number, offset: number, count: number): Promise<string[]> {
+  // LIMIT offset count
+  const r = await redisCmd(["ZRANGEBYSCORE", key, min, max, "LIMIT", offset, count]);
+  return Array.isArray(r) ? r.map(String) : [];
+}
+
+async function hgetallObj(key: string): Promise<Record<string, string> | null> {
+  const r = await redisCmd(["HGETALL", key]);
+  if (!r) return null;
+  if (Array.isArray(r)) {
+    const obj: Record<string, string> = {};
+    for (let i = 0; i < r.length; i += 2) obj[String(r[i])] = String(r[i + 1] ?? "");
+    return obj;
+  }
+  if (typeof r === "object") return r as Record<string, string>;
+  return null;
+}
+
+async function exists(key: string): Promise<boolean> {
+  const n = await redisCmd(["EXISTS", key]);
+  return Number(n) > 0;
+}
+
+async function setNXPX(key: string, value: string, ttlMs: number): Promise<boolean> {
+  const r = await redisCmd(["SET", key, value, "NX", "PX", ttlMs]);
+  return r === "OK";
+}
+
+async function setNX(key: string, value: string, ttlMs: number): Promise<boolean> {
+  // same as setNXPX for lock with PX
+  return setNXPX(key, value, ttlMs);
+}
+
+async function del(key: string): Promise<number> {
+  return Number(await redisCmd(["DEL", key]));
+}
+
+async function zrem(key: string, ...members: string[]): Promise<number> {
+  return Number(await redisCmd(["ZREM", key, ...members]));
+}
+
+// ---- matching logic ----
 
 const Q_KEY = "mq:q";
 const ATTR_KEY = (ticket: string) => `mq:attr:${ticket}`;
 const ROOM_KEY = (ticket: string) => `mq:room:${ticket}`;
-const DEV_KEY = (dev: string) => `mq:dev:${dev}`; // reserved for device reuse
+const DEV_KEY = (dev: string) => `mq:dev:${dev}`; // reserved
 const LOCK_KEY = (ticket: string) => `mq:lock:${ticket}`;
 
 const TTL_MS = 45_000;
@@ -49,7 +135,7 @@ function csvToArray(s: string | null | undefined): string[] {
 }
 
 export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null> {
-  const h = await redis.hgetall<Record<string, string>>(ATTR_KEY(ticket));
+  const h = await hgetallObj(ATTR_KEY(ticket));
   if (!h) return null;
   const selfCountry = h.selfCountry ? String(h.selfCountry).toUpperCase() : null;
   const genders = csvToArray(h.filterGendersCSV).map(normalizeGender).filter(Boolean) as GenderNorm[];
@@ -110,7 +196,6 @@ function hardOK(me: TicketAttrs, other: TicketAttrs): boolean {
 }
 
 function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): boolean {
-  // 0–3s strict hardOK only. 3–8s same. 8–12s relax country. 12–20s allow soft if one constraint missing without explicit refusal.
   const meG = me.filterGenders;
   const otherG = other.filterGenders;
   const meC = me.filterCountries;
@@ -131,10 +216,9 @@ function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): 
     if (genderMutual && countryMutual) return true;
     if (genderMutual) return true;
     const meBlocksG = meG.length > 0 && !meG.includes(other.selfGender);
-       const otherBlocksG = otherG.length > 0 && !otherG.includes(me.selfGender);
+    const otherBlocksG = otherG.length > 0 && !otherG.includes(me.selfGender);
     return !(meBlocksG || otherBlocksG);
   }
-  // level 4: stop widening (handled by caller returning 204)
   return false;
 }
 
@@ -147,9 +231,7 @@ function computeScore(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): Sc
   const genderRank = genderOrder.length === 0 ? Number.POSITIVE_INFINITY : indexOfOrInf(genderOrder, other.selfGender);
   let countryRank: number;
   if (countryOrder.length === 0) {
-    // prefer selfCountry first when empty
     countryRank = other.selfCountry && me.selfCountry && other.selfCountry === me.selfCountry ? 0 : 1;
-    // add small jitter to diversify
     countryRank = countryRank + jitter(`${me.ticket}|${other.ticket}`);
   } else {
     countryRank = indexOfOrInf(countryOrder, other.selfCountry as any);
@@ -166,21 +248,20 @@ function roomNameFor(a: string, b: string): string {
 }
 
 async function claimBoth(me: string, other: string, ttlMs: number, room: string): Promise<boolean> {
-  const lock = await redis.set(LOCK_KEY(other), me, { nx: true, px: 4000 });
-  if (lock !== "OK") return false;
+  const locked = await setNX(LOCK_KEY(other), me, 4000);
+  if (!locked) return false;
   try {
-    const a = await redis.set(ROOM_KEY(me), room, { nx: true, px: ttlMs });
-    if (a !== "OK") return false;
-    const b = await redis.set(ROOM_KEY(other), room, { nx: true, px: ttlMs });
-    if (b !== "OK") {
-      // rollback
-      await redis.del(ROOM_KEY(me));
+    const a = await setNXPX(ROOM_KEY(me), room, ttlMs);
+    if (!a) return false;
+    const b = await setNXPX(ROOM_KEY(other), room, ttlMs);
+    if (!b) {
+      await del(ROOM_KEY(me));
       return false;
     }
-    await redis.zrem(Q_KEY, me, other);
+    await zrem(Q_KEY, me, other);
     return true;
   } finally {
-    await redis.del(LOCK_KEY(other));
+    await del(LOCK_KEY(other));
   }
 }
 
@@ -198,12 +279,11 @@ export async function tryMatch(ticket: string, now = Date.now()): Promise<MatchR
   const elapsed = now - me.ts;
   const level = elapsedLevel(elapsed);
   if (level === 4) {
-    // stop widening. No match here.
     return null;
   }
 
   // dynamic sampling by queue size
-  const zcount = await redis.zcard(Q_KEY);
+  const zcount = await zcard(Q_KEY);
   const PAGE = 64;
   let target = PAGE;
   if (zcount > 2000) target = 256;
@@ -215,7 +295,7 @@ export async function tryMatch(ticket: string, now = Date.now()): Promise<MatchR
   let collected: string[] = [];
   let offset = 0;
   while (collected.length < target && offset < 1024) {
-    const batch: string[] = await redis.zrangebyscore(Q_KEY, minScore, maxScore, { limit: { offset, count: PAGE } }) as any;
+    const batch = await zrangebyscore(Q_KEY, minScore, maxScore, offset, PAGE);
     if (!batch || batch.length === 0) break;
     for (const t of batch) {
       if (t && t !== ticket) collected.push(t);
@@ -226,42 +306,46 @@ export async function tryMatch(ticket: string, now = Date.now()): Promise<MatchR
 
   if (collected.length === 0) return null;
 
-  // fetch attributes for candidates in small batches
-  const chunks: string[][] = [];
-  for (let i = 0; i < collected.length; i += 32) chunks.push(collected.slice(i, i + 32));
+  // fetch attributes for candidates in pipeline (HGETALL, EXISTS) repeated
+  const cmds: Cmd[] = [];
+  for (const t of collected) {
+    cmds.push(["HGETALL", ATTR_KEY(t)]);
+    cmds.push(["EXISTS", ROOM_KEY(t)]);
+  }
+  const res = await redisPipeline(cmds);
 
-  let best: {ticket: string, score: ScoreTuple} | null = null;
+  let best: { ticket: string; score: ScoreTuple } | null = null;
 
-  for (const ch of chunks) {
-    const pipe = redis.pipeline();
-    ch.forEach((t) => {
-      pipe.hgetall<Record<string, string>>(ATTR_KEY(t));
-      pipe.exists(ROOM_KEY(t));
-    });
-    const res = await pipe.exec();
-    for (let i = 0; i < ch.length; i++) {
-      const h = res[i*2] as any;
-      const ex = res[i*2+1] as any;
-      const exists = Array.isArray(ex) ? ex[1] : ex;
-      if (!h || (Array.isArray(h) && !h[1])) continue;
-      if (exists) continue; // already matched
-      const data = Array.isArray(h) ? h[1] as Record<string,string> : h as Record<string,string>;
-      const other: TicketAttrs = {
-        ticket: ch[i],
-        identity: String(data.identity || ""),
-        deviceId: String(data.deviceId || ""),
-        selfGender: normalizeGender(data.selfGender || "u"),
-        selfCountry: data.selfCountry ? String(data.selfCountry).toUpperCase() : null,
-        filterGenders: csvToArray(data.filterGendersCSV).map(normalizeGender) as GenderNorm[],
-        filterCountries: csvToArray(data.filterCountriesCSV).map((x)=>x.toUpperCase()),
-        vip: !!(+String(data.vip || "0")),
-        ts: Number(data.ts || now),
-      };
-      const sc = computeScore(level, me, other);
-      if (!sc) continue;
-      if (!best || lexLess(sc, best.score)) {
-        best = { ticket: ch[i], score: sc };
-      }
+  for (let i = 0; i < collected.length; i++) {
+    const h = res[i * 2];
+    const ex = res[i * 2 + 1];
+    if (!h) continue;
+    const already = Number(ex) > 0;
+    if (already) continue;
+    const data: Record<string, string> =
+      Array.isArray(h)
+        ? (() => {
+            const obj: Record<string, string> = {};
+            for (let j = 0; j < h.length; j += 2) obj[String(h[j])] = String(h[j + 1] ?? "");
+            return obj;
+          })()
+        : (h as Record<string, string>);
+
+    const other: TicketAttrs = {
+      ticket: collected[i],
+      identity: String(data.identity || ""),
+      deviceId: String(data.deviceId || ""),
+      selfGender: normalizeGender(data.selfGender || "u"),
+      selfCountry: data.selfCountry ? String(data.selfCountry).toUpperCase() : null,
+      filterGenders: csvToArray(data.filterGendersCSV).map(normalizeGender) as GenderNorm[],
+      filterCountries: csvToArray(data.filterCountriesCSV).map((x) => x.toUpperCase()),
+      vip: !!(+String(data.vip || "0")),
+      ts: Number(data.ts || now),
+    };
+    const sc = computeScore(level, me, other);
+    if (!sc) continue;
+    if (!best || lexLess(sc, best.score)) {
+      best = { ticket: collected[i], score: sc };
     }
   }
 
