@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from "react";
 
 type Line = { text: string; ts: number; dir: "out" | "in"; pairId: string };
 
-export function MessageHud() {
+export default function MessageHud() {
   const [history, setHistory] = useState<Line[]>([]);
   const [visibleCount, setVisibleCount] = useState(3);
   const curPairRef = useRef<string>("");
+  const hudRef = useRef<HTMLDivElement>(null);
 
   // reset عند بدء زوج جديد
   useEffect(() => {
@@ -25,7 +26,7 @@ export function MessageHud() {
     const onRecv = (e: any) => {
       const d = e?.detail as { text: string; pairId?: string; ts?: number };
       const cur = curPairRef.current || (window as any).__ditonaPairId || (window as any).__pairId || "";
-      if (d?.pairId && d.pairId !== cur) return; // drop ghosts
+      if (d?.pairId && d.pairId !== cur) return;
       if (typeof d?.text !== "string" || !d.text.trim()) return;
       setHistory((h) => [...h, { text: d.text, ts: d.ts || Date.now(), dir: "in", pairId: cur }]);
     };
@@ -46,25 +47,37 @@ export function MessageHud() {
     return () => window.removeEventListener("ditona:chat:sent", onSent as any);
   }, []);
 
-  // سحب/تمرير لزيادة عدد الظاهر
+  // سحب/تمرير داخل HUD فقط
   useEffect(() => {
+    const el = hudRef.current;
+    if (!el) return;
+
     let startY = 0;
     let moved = false;
+
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY < 0) setVisibleCount((n) => Math.min(history.length, n + 1));
     };
-    const onTouchStart = (e: TouchEvent) => { startY = e.touches[0]?.clientY ?? 0; moved = false; };
-    const onTouchMove = (e: TouchEvent) => {
-      const dy = (e.touches[0]?.clientY ?? 0) - startY;
-      if (dy > 30 && !moved) { moved = true; setVisibleCount((n) => Math.min(history.length, n + 1)); }
+    const onTouchStart = (e: TouchEvent) => {
+      const t = e.touches[0]; if (!t) return;
+      startY = t.clientY; moved = false;
     };
-    window.addEventListener("wheel", onWheel, { passive: true });
-    window.addEventListener("touchstart", onTouchStart, { passive: true });
-    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    const onTouchMove = (e: TouchEvent) => {
+      const t = e.touches[0]; if (!t) return;
+      const dy = t.clientY - startY;
+      if (dy > 30 && !moved) {
+        moved = true;
+        setVisibleCount((n) => Math.min(history.length, n + 1));
+      }
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
     return () => {
-      window.removeEventListener("wheel", onWheel);
-      window.removeEventListener("touchstart", onTouchStart);
-      window.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
     };
   }, [history.length]);
 
@@ -88,21 +101,25 @@ export function MessageHud() {
   };
 
   return (
-    <div className="pointer-events-none absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55] space-y-1">
-      {lines.map((l, i) => (
-        <div
-          key={i}
-          {...onHold(l)}
-          className="pointer-events-auto cursor-copy select-text text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm"
-        >
-          <span className={l.dir === "in" ? "text-white/80" : "text-emerald-300"}>
-            {l.dir === "in" ? "• " : "▲ "}
-          </span>
-          {l.text}
-        </div>
-      ))}
+    <div className="absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55]">
+      <div
+        ref={hudRef}
+        data-ui="messages-hud"
+        className="pointer-events-auto space-y-1"
+      >
+        {lines.map((l, i) => (
+          <div
+            key={i}
+            {...onHold(l)}
+            className="pointer-events-auto cursor-copy select-text text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm"
+          >
+            <span className={l.dir === "in" ? "text-white/80" : "text-emerald-300"}>
+              {l.dir === "in" ? "• " : "▲ "}
+            </span>
+            {l.text}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
-
-export default MessageHud;
