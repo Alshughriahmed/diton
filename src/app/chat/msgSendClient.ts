@@ -11,6 +11,7 @@ function readPairId(): string | null {
     return null;
   }
 }
+
 function clamp2000(s: string) {
   return s.length > 2000 ? s.slice(0, 2000) : s;
 }
@@ -36,7 +37,7 @@ export async function sendChatText(text: string) {
   }
 }
 
-// UI bridge: شريط الرسائل وأي مكون آخر يطلق هذا الحدث للإرسال
+// UI bridge: أي مكوّن يطلق هذا الحدث للإرسال
 try {
   window.addEventListener("ditona:chat:send", (ev: any) => {
     const txt = ev?.detail?.text ?? "";
