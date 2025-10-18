@@ -1,4 +1,4 @@
-// src/lib/match/redis.ts 
+// src/lib/match/redis.ts
 // Score-based matching per matching.md + ss.md.
 // Upstash REST only. Store ticket attrs as JSON via SET/GET (no HSET).
 
@@ -56,7 +56,6 @@ async function redisCmd(cmd: Cmd): Promise<any> {
     const msg = j?.error || j?.err || res.statusText || "unknown";
     throw new Error(`UPSTASH ${arr[0]}: ${msg}`);
   }
-  // Single command returns {result: ...}
   return (j && typeof j === "object" && "result" in j) ? j.result : j;
 }
 
@@ -75,7 +74,6 @@ async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
     const msg = j?.error || j?.err || res.statusText || "unknown";
     throw new Error(`UPSTASH PIPELINE: ${msg}`);
   }
-  // Pipeline returns array of {result: ...}
   const out: any[] = Array.isArray(j) ? j : Array.isArray((j as any).result) ? (j as any).result : [];
   return out.map((x: any) => (x && typeof x === "object" && "result" in x ? x.result : x));
 }
@@ -126,8 +124,9 @@ async function zrem(key: string, ...members: string[]): Promise<number> {
   return Number(await redisCmd(["ZREM", key, ...members]));
 }
 
-async function zaddNX(key: string, score: number, member: string): Promise<number> {
-  return Number(await redisCmd(["ZADD", key, "NX", String(score), member]));
+// Update score always (no NX) to keep recency fresh for re-enqueues
+async function zaddRecency(key: string, score: number, member: string): Promise<number> {
+  return Number(await redisCmd(["ZADD", key, String(score), member]));
 }
 
 /* ================= Keys / consts ================= */
@@ -484,9 +483,9 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
     }
   }
 
-  // queue push with recency score
+  // queue push with recency score (no NX → refreshes timestamp)
   try {
-    await zaddNX(Q_KEY, ts, ticket); // [Q:ZADD]
+    await zaddRecency(Q_KEY, ts, ticket); // [Q:ZADD]
   } catch (e: any) {
     throw new Error(`[Q:ZADD] ${e?.message || e}`);
   }
