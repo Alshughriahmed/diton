@@ -1,6 +1,6 @@
 // src/lib/match/redis.ts
 // Score-based matching per matching.md + ss.md.
-// No new deps. Talks to Upstash REST directly, all args as strings.
+// Upstash REST فقط. كل الوسائط تُرسل كسلاسل لتفادي "ERR failed to parse command".
 
 export type GenderNorm = "m" | "f" | "c" | "l" | "u";
 
@@ -8,20 +8,18 @@ export interface TicketAttrs {
   ticket: string;
   identity: string;
   deviceId: string;
-  selfGender: GenderNorm;                  // normalized letter
-  selfCountry: string | null;              // ISO2 or null
+  selfGender: GenderNorm;
+  selfCountry: string | null; // ISO2 or null
   filterGenders: Exclude<GenderNorm, "u">[]; // 0..2
-  filterCountries: string[];               // 0..15 ISO2
+  filterCountries: string[]; // 0..15 ISO2
   vip: boolean;
-  ts: number;                              // enqueue time (ms)
+  ts: number; // enqueue time (ms)
 }
 
 export interface MatchResult {
   room?: string;
-  matchedWith?: string; // other ticket
+  matchedWith?: string;
 }
-
-/* ================= ENV ================= */
 
 const BASE = process.env.UPSTASH_REDIS_REST_URL || "";
 const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
@@ -53,11 +51,11 @@ async function redisCmd(cmd: Cmd): Promise<any> {
     cache: "no-store",
   });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok || (j && typeof j === "object" && "error" in j && j.error)) {
-    const msg = (j && j.error) || res.statusText || "unknown";
+  if (!res.ok || (j && (j as any).error)) {
+    const msg = (j as any)?.error || res.statusText || "unknown";
     throw new Error(`UPSTASH ${arr[0]}: ${msg}`);
   }
-  return j.result;
+  return (j as any).result;
 }
 
 async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
@@ -70,11 +68,11 @@ async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
     cache: "no-store",
   });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok || (j && typeof j === "object" && "error" in j && j.error)) {
-    const msg = (j && j.error) || res.statusText || "unknown";
+  if (!res.ok || (j && (j as any).error)) {
+    const msg = (j as any)?.error || res.statusText || "unknown";
     throw new Error(`UPSTASH PIPELINE: ${msg}`);
   }
-  const out: any[] = Array.isArray(j) ? j : (Array.isArray((j as any).result) ? (j as any).result : []);
+  const out: any[] = Array.isArray(j) ? (j as any[]) : Array.isArray((j as any).result) ? (j as any).result : [];
   return out.map((x: any) => (x && typeof x === "object" && "result" in x ? x.result : x));
 }
 
@@ -89,15 +87,7 @@ async function zrangebyscore(
   offset: number,
   count: number
 ): Promise<string[]> {
-  const r = await redisCmd([
-    "ZRANGEBYSCORE",
-    key,
-    String(min),
-    String(max),
-    "LIMIT",
-    String(offset),
-    String(count),
-  ]);
+  const r = await redisCmd(["ZRANGEBYSCORE", key, String(min), String(max), "LIMIT", String(offset), String(count)]);
   return Array.isArray(r) ? r.map(String) : [];
 }
 
@@ -152,7 +142,7 @@ async function hsetObj(
 const Q_KEY = "mq:q";
 const ATTR_KEY = (t: string) => `mq:attr:${t}`;
 const ROOM_KEY = (t: string) => `mq:room:${t}`;
-const DEV_KEY = (d: string) => `mq:dev:${d}`;      // reuse ticket per device
+const DEV_KEY = (d: string) => `mq:dev:${d}`; // reuse ticket per device
 const LOCK_KEY = (t: string) => `mq:lock:${t}`;
 const TTL_MS = 45_000;
 
@@ -173,6 +163,10 @@ function csvToArray(s: string | null | undefined): string[] {
   return String(s).split(",").map((x) => x.trim()).filter(Boolean);
 }
 
+function toCSV(arr: string[]): string {
+  return arr.join(",");
+}
+
 /* ================= Read helpers ================= */
 
 export async function getRoom(ticket: string): Promise<string | null> {
@@ -183,16 +177,12 @@ export async function getRoom(ticket: string): Promise<string | null> {
 export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null> {
   const h = await hgetallObj(ATTR_KEY(ticket));
   if (!h) return null;
-
   const selfCountry = h.selfCountry ? String(h.selfCountry).toUpperCase() : null;
-  const genders = csvToArray(h.filterGendersCSV)
-    .map(normalizeGender)
-    .filter((g) => g !== "u") as Exclude<GenderNorm, "u">[];
+  const genders = csvToArray(h.filterGendersCSV).map(normalizeGender).filter((g) => g !== "u") as Exclude<
+    GenderNorm,
+    "u"
+  >[];
   const countries = csvToArray(h.filterCountriesCSV).map((x) => x.toUpperCase());
-
-  const vipRaw = String(h.vip ?? "0").toLowerCase();
-  const vip = vipRaw === "1" || vipRaw === "true";
-
   return {
     ticket,
     identity: String(h.identity || ""),
@@ -201,7 +191,7 @@ export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null
     selfCountry,
     filterGenders: genders.slice(0, 2),
     filterCountries: countries.slice(0, 15),
-    vip,
+    vip: !!(+String(h.vip || "0")),
     ts: Number(h.ts || Date.now()),
   };
 }
@@ -209,11 +199,11 @@ export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null
 /* ================= Matching core ================= */
 
 function elapsedLevel(elapsedMs: number): 0 | 1 | 2 | 3 | 4 {
-  if (elapsedMs < 3000) return 0;     // 0–3s: hard only
-  if (elapsedMs < 8000) return 1;     // 3–8s: hard only
-  if (elapsedMs < 12000) return 2;    // 8–12s: relax country
-  if (elapsedMs < 20000) return 3;    // 12–20s: soft if no explicit gender blocks
-  return 4;                            // stop trying here; client keeps polling
+  if (elapsedMs < 3000) return 0; // 0–3s: hard only
+  if (elapsedMs < 8000) return 1; // 3–8s: hard only
+  if (elapsedMs < 12000) return 2; // 8–12s: relax country
+  if (elapsedMs < 20000) return 3; // 12–20s: soft if no explicit gender blocks
+  return 4; // stop trying here; client keeps polling
 }
 
 type ScoreTuple = [number, number, number, number]; // (hardFlag, genderRank, countryRank, recencyRank)
@@ -241,16 +231,16 @@ function hardOK(me: TicketAttrs, other: TicketAttrs): boolean {
   const meC = me.filterCountries;
   const otherC = other.filterCountries;
 
-  const meAcceptsGender     = meG.length === 0 || meG.includes(other.selfGender as any);
-  const otherAcceptsGender  = otherG.length === 0 || otherG.includes(me.selfGender as any);
+  const meAcceptsGender = meG.length === 0 || meG.includes(other.selfGender as any);
+  const otherAcceptsGender = otherG.length === 0 || otherG.includes(me.selfGender as any);
 
-  const meAcceptsCountry    = meC.length === 0 || (!!other.selfCountry && meC.includes(other.selfCountry));
+  const meAcceptsCountry = meC.length === 0 || (!!other.selfCountry && meC.includes(other.selfCountry));
   const otherAcceptsCountry = otherC.length === 0 || (!!me.selfCountry && otherC.includes(me.selfCountry));
 
   return meAcceptsGender && otherAcceptsGender && meAcceptsCountry && otherAcceptsCountry;
 }
 
-function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): boolean {
+function allowedByWiden(level: 0 | 1 | 2 | 3 | 4, me: TicketAttrs, other: TicketAttrs): boolean {
   const meG = me.filterGenders;
   const otherG = other.filterGenders;
   const meC = me.filterCountries;
@@ -265,7 +255,7 @@ function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): 
     (otherC.length === 0 || (!!me.selfCountry && otherC.includes(me.selfCountry)));
 
   if (level === 0 || level === 1) return genderMutual && countryMutual; // hard only
-  if (level === 2) return genderMutual;                                  // relax country
+  if (level === 2) return genderMutual; // relax country
   if (level === 3) {
     if (genderMutual && countryMutual) return true;
     if (genderMutual) return true;
@@ -277,22 +267,19 @@ function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): 
   return false;
 }
 
-function computeScore(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): ScoreTuple | null {
+function computeScore(level: 0 | 1 | 2 | 3 | 4, me: TicketAttrs, other: TicketAttrs): ScoreTuple | null {
   if (!allowedByWiden(level, me, other)) return null;
 
   const genderOrder = me.filterGenders;
   const countryOrder = me.filterCountries;
 
   const genderRank =
-    genderOrder.length === 0
-      ? Number.POSITIVE_INFINITY
-      : indexOfOrInf(genderOrder, other.selfGender as any);
+    genderOrder.length === 0 ? Number.POSITIVE_INFINITY : indexOfOrInf(genderOrder, other.selfGender as any);
 
   let countryRank: number;
   if (countryOrder.length === 0) {
     // treat selfCountry as internal preference, not a hard constraint
-    countryRank =
-      other.selfCountry && me.selfCountry && other.selfCountry === me.selfCountry ? 0 : 1;
+    countryRank = other.selfCountry && me.selfCountry && other.selfCountry === me.selfCountry ? 0 : 1;
     countryRank += jitter(`${me.ticket}|${other.ticket}`);
   } else {
     countryRank = indexOfOrInf(countryOrder, other.selfCountry as any);
@@ -325,7 +312,10 @@ async function claimBoth(me: string, other: string, ttlMs: number, room: string)
     const a = await setNXPX(ROOM_KEY(me), room, ttlMs);
     if (!a) return false;
     const b = await setNXPX(ROOM_KEY(other), room, ttlMs);
-    if (!b) { await del(ROOM_KEY(me)); return false; }
+    if (!b) {
+      await del(ROOM_KEY(me));
+      return false;
+    }
     await zrem(Q_KEY, me, other);
     return true;
   } finally {
@@ -335,9 +325,7 @@ async function claimBoth(me: string, other: string, ttlMs: number, room: string)
 
 /**
  * tryMatch:
- * second param kept flexible (boolean | number) for backward-compat with older route.ts.
- * - if number: treated as "now" timestamp
- * - if boolean: ignored, we compute elapsed from stored ts
+ * البارام الثاني احتياطي للتوافق. إن كان رقمًا يُعامَل كـ now.
  */
 export async function tryMatch(ticket: string, widenOrNow?: boolean | number): Promise<MatchResult | null> {
   // already assigned?
@@ -392,14 +380,13 @@ export async function tryMatch(ticket: string, widenOrNow?: boolean | number): P
     const ex = res[i * 2 + 1];
     if (!h || Number(ex) > 0) continue;
 
-    const data: Record<string, string> =
-      Array.isArray(h)
-        ? (() => {
-            const obj: Record<string, string> = {};
-            for (let j = 0; j < h.length; j += 2) obj[String(h[j])] = String(h[j + 1] ?? "");
-            return obj;
-          })()
-        : (h as Record<string, string>);
+    const data: Record<string, string> = Array.isArray(h)
+      ? (() => {
+          const obj: Record<string, string> = {};
+          for (let j = 0; j < h.length; j += 2) obj[String(h[j])] = String(h[j + 1] ?? "");
+          return obj;
+        })()
+      : (h as Record<string, string>);
 
     const other: TicketAttrs = {
       ticket: collected[i],
@@ -407,13 +394,12 @@ export async function tryMatch(ticket: string, widenOrNow?: boolean | number): P
       deviceId: String(data.deviceId || ""),
       selfGender: normalizeGender(data.selfGender || "u"),
       selfCountry: data.selfCountry ? String(data.selfCountry).toUpperCase() : null,
-      filterGenders: csvToArray(data.filterGendersCSV).map(normalizeGender)
-        .filter((g) => g !== "u") as Exclude<GenderNorm,"u">[],
+      filterGenders: csvToArray(data.filterGendersCSV).map(normalizeGender).filter((g) => g !== "u") as Exclude<
+        GenderNorm,
+        "u"
+      >[],
       filterCountries: csvToArray(data.filterCountriesCSV).map((x) => x.toUpperCase()),
-      vip: (() => {
-        const v = String(data.vip ?? "0").toLowerCase();
-        return v === "1" || v === "true";
-      })(),
+      vip: !!(+String(data.vip || "0")),
       ts: Number(data.ts || now),
     };
 
@@ -471,45 +457,51 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
     .filter((g) => g !== "u")
     .slice(0, 2) as Exclude<GenderNorm, "u">[];
 
-  const filterCountries = (inp.filterCountries || [])
-    .map((x) => String(x).toUpperCase())
-    .slice(0, 15);
-
-  // تخزين VIP كـ "1"/"0" لتجنّب مشاكل التحويل
-  const vipStr = inp.vip ? 1 : 0;
+  const filterCountries = (inp.filterCountries || []).map((x) => String(x).toUpperCase()).slice(0, 15);
 
   const obj: Record<string, string | number | boolean | null> = {
     identity: String(inp.identity || ""),
     deviceId: String(inp.deviceId || ""),
     selfGender,
     selfCountry: inp.selfCountry ? String(inp.selfCountry).toUpperCase() : null,
-    filterGendersCSV: (filterGenders as unknown as string[]).join(","),
-    filterCountriesCSV: filterCountries.join(","),
-    vip: vipStr,
+    filterGendersCSV: toCSV(filterGenders as unknown as string[]),
+    filterCountriesCSV: toCSV(filterCountries),
+    vip: !!inp.vip,
     ts,
   };
 
-  // [ATTR:HSET]
-  try { await hsetObj(ATTR_KEY(ticket), obj); }
-  catch (e: any) { throw new Error(`[ATTR:HSET] ${e?.message || e}`); }
-
-  // [ATTR:PEXPIRE]
-  try { await pexpire(ATTR_KEY(ticket), TTL_MS); }
-  catch (e: any) { throw new Error(`[ATTR:PEXPIRE] ${e?.message || e}`); }
-
-  // device mapping [DEV:SET]
-  if (inp.deviceId) {
-    try { await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", String(TTL_MS)]); }
-    catch (e: any) { throw new Error(`[DEV:SET] ${e?.message || e}`); }
+  // labeled steps for precise error messages
+  try {
+    await hsetObj(ATTR_KEY(ticket), obj); // [ATTR:HSET]
+  } catch (e: any) {
+    throw new Error(`[ATTR:HSET] ${e?.message || e}`);
   }
 
-  // queue push with recency score [Q:ZADD]
-  try { await zaddNX(Q_KEY, ts, ticket); }
-  catch (e: any) { throw new Error(`[Q:ZADD] ${e?.message || e}`); }
+  try {
+    await pexpire(ATTR_KEY(ticket), TTL_MS); // [ATTR:PEXPIRE]
+  } catch (e: any) {
+    throw new Error(`[ATTR:PEXPIRE] ${e?.message || e}`);
+  }
 
-  // sweep old entries [Q:SWEEP]
-  try { await zremrangebyscore(Q_KEY, 0, now - TTL_MS); }
-  catch (e: any) { throw new Error(`[Q:SWEEP] ${e?.message || e}`); }
+  if (inp.deviceId) {
+    try {
+      await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", String(TTL_MS)]); // [DEV:SET]
+    } catch (e: any) {
+      throw new Error(`[DEV:SET] ${e?.message || e}`);
+    }
+  }
+
+  try {
+    await zaddNX(Q_KEY, ts, ticket); // [Q:ZADD]
+  } catch (e: any) {
+    throw new Error(`[Q:ZADD] ${e?.message || e}`);
+  }
+
+  try {
+    await zremrangebyscore(Q_KEY, 0, now - TTL_MS); // [Q:SWEEP]
+  } catch (e: any) {
+    throw new Error(`[Q:SWEEP] ${e?.message || e}`);
+  }
 
   return { ticket, ts };
 }
