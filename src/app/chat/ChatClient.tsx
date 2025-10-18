@@ -100,13 +100,6 @@ export default function ChatClient() {
   const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
-  // polling abort controller
-  const pollAbortRef = useRef<AbortController | null>(null);
-
-  // searching UX
-  const searchStartRef = useRef(0);
-  const [searchMsg, setSearchMsg] = useState("Searching for a match…");
-
   // state
   const [ready, setReady] = useState(false);
   const [like, setLike] = useState(false);
@@ -133,37 +126,24 @@ export default function ChatClient() {
 
   // session lock
   const sidRef = useRef(0);
-  function newSid(): number {
-    sidRef.current += 1;
-    // abort any in-flight /next long-poll
-    try { pollAbortRef.current?.abort(); } catch {}
-    pollAbortRef.current = null;
-    return sidRef.current;
-  }
-  function isActiveSid(sid: number) {
-    return sid === sidRef.current;
-  }
+  function newSid(): number { sidRef.current += 1; return sidRef.current; }
+  function isActiveSid(sid: number) { return sid === sidRef.current; }
+
+  // searching UX
+  const searchStartRef = useRef(0);
+  const [searchMsg, setSearchMsg] = useState("Searching for a match…");
 
   /* ===== helpers ===== */
   function setPhase(p: Phase) {
     setRtcPhase(p);
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
-    } catch {}
-    if (p === "searching") {
-      searchStartRef.current = Date.now();
-      setSearchMsg("Searching for a match…");
-    }
+    try { window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } })); } catch {}
+    if (p === "searching") { searchStartRef.current = Date.now(); setSearchMsg("Searching for a match…"); }
   }
   function emitPair(pairId: string, role: "caller" | "callee") {
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } })); } catch {}
   }
   function emitRemoteTrackStarted() {
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } })); } catch {}
   }
 
   function stableDid(): string {
@@ -197,30 +177,22 @@ export default function ChatClient() {
     const j = await r.json();
     return String(j.ticket || "");
   }
-
-  async function nextReq(ticket: string, waitMs = 8000, elapsedMs = 0, signal?: AbortSignal): Promise<string | null> {
-    try {
-      const r = await fetch(
-        `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}&elapsed=${elapsedMs}`,
-        { method: "GET", credentials: "include", cache: "no-store", signal }
-      );
-      if (r.status === 204) return null;
-      if (!r.ok) throw new Error(`next failed ${r.status}`);
-      const j = await r.json();
-      const raw: unknown = (j as any)?.room;
-      if (typeof raw === "string") return raw;
-      if (raw && typeof raw === "object") {
-        const obj = raw as Record<string, unknown>;
-        return String(obj.name || obj.id || obj.room || JSON.stringify(obj));
-      }
-      return null;
-    } catch (e: any) {
-      // Abort is expected on cancel/sid change
-      if (e?.name === "AbortError") return null;
-      throw e;
+  async function nextReq(ticket: string, waitMs = 8000): Promise<string | null> {
+    const r = await fetch(
+      `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`,
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    if (r.status === 204) return null;
+    if (!r.ok) throw new Error(`next failed ${r.status}`);
+    const j = await r.json();
+    const raw: unknown = (j as any)?.room;
+    if (typeof raw === "string") return raw;
+    if (raw && typeof raw === "object") {
+      const obj = raw as Record<string, unknown>;
+      return String(obj.name || obj.id || obj.room || JSON.stringify(obj));
     }
+    return null;
   }
-
   async function tokenReq(room: string, id: string): Promise<string> {
     const r = await fetch(
       `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
@@ -244,9 +216,7 @@ export default function ChatClient() {
   }
 
   function clearRoomListeners() {
-    for (const off of roomUnsubsRef.current.splice(0)) {
-      try { off(); } catch {}
-    }
+    for (const off of roomUnsubsRef.current.splice(0)) { try { off(); } catch {} }
   }
 
   async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) {
@@ -333,35 +303,23 @@ export default function ChatClient() {
     } catch {}
   }
 
-  // polling loop: fixed 8s long-poll with immediate restart; abort on sid change
+  // polling loop with backoff and sid-cancel
   async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
-    const WAIT_MS = 8000;
-    const active = () => isActiveSid(sid);
-
-    // fresh controller for this loop
-    pollAbortRef.current?.abort();
-    const controller = new AbortController();
-    pollAbortRef.current = controller;
-
-    while (active()) {
-      const elapsed = Date.now() - (searchStartRef.current || Date.now());
-      const rn = await nextReq(ticket, WAIT_MS, elapsed, controller.signal);
-      if (!active()) { controller.abort(); return null; }
+    let wait = 8000; // 8s
+    const isActive = () => isActiveSid(sid);
+    while (isActive()) {
+      const rn = await nextReq(ticket, wait); // GET /api/match/next?wait=wait
+      if (!isActive()) return null;
       if (rn) return rn;
-      // small gap to avoid tight loop if server returns early
-      await new Promise((r) => setTimeout(r, 50));
+      // backoff: 8s → 10s → 12.5s … ≤ 20s
+      wait = Math.min(20000, Math.round(wait * 1.25));
     }
-    controller.abort();
     return null;
   }
 
   async function leaveRoom(): Promise<void> {
     if (leavingRef.current) return;
     leavingRef.current = true;
-
-    // stop polling immediately
-    try { pollAbortRef.current?.abort(); } catch {}
-    pollAbortRef.current = null;
 
     snapshotMediaState();
 
@@ -395,8 +353,7 @@ export default function ChatClient() {
 
       await new Promise<void>((resolve) => {
         let done = false;
-        const finish = () => {
-          if (done) return; done = true;
+        const finish = () => { if (done) return; done = true;
           try { room.off(RoomEvent.Disconnected, finish); } catch {}
           resolve();
         };
@@ -466,7 +423,7 @@ export default function ChatClient() {
         if (j?.t === "meta:init" || topic === "meta") {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
-        // chat: only accept normalized shape; pass pairId when present
+        // chat: only accept {t:"chat", text, pairId?}
         if (j?.t === "chat" && typeof j.text === "string") {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
@@ -526,7 +483,7 @@ export default function ChatClient() {
       const selfGenderNorm = normalizeGender(profile?.gender as any); // m|f|c|l|u
       const payloadSelfGender = isEveryoneLike(selfGenderNorm) ? undefined : (selfGenderNorm as any);
 
-      // filter genders from store or fallback
+      // filter genders from store
       const filterGendersNorm =
         typeof filters.filterGendersNorm === "function"
           ? (filters.filterGendersNorm() as ("m" | "f" | "c" | "l")[])
@@ -547,7 +504,7 @@ export default function ChatClient() {
       });
       if (!isActiveSid(sid)) return;
 
-      // wait for room with continuous fixed 8s long-poll
+      // wait for room with backoff and sid cancel
       const roomName = await waitRoomLoop(ticket, sid);
       if (!roomName) { setPhase("stopped"); return; }
 
@@ -569,10 +526,10 @@ export default function ChatClient() {
         (window as any).__pairId = roomName;
       } catch {}
 
-      // ws URL with fallback
+      // wsURL fallback chain
       const ws =
         process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ??
-        (process.env as any).LIVEKIT_URL ?? "";
+        (process as any).env?.LIVEKIT_URL ?? "";
 
       isConnectingRef.current = true;
       await room.connect(ws, token);
@@ -611,19 +568,18 @@ export default function ChatClient() {
     }
   }
 
-  /* ===== 8) Search message ticker ===== */
+  /* ===== searching message updater ===== */
   useEffect(() => {
     if (rtcPhase !== "searching") return;
     const iv = setInterval(() => {
-      const e = Date.now() - (searchStartRef.current || Date.now());
+      const e = Date.now() - searchStartRef.current;
       if (e > 20000) setSearchMsg("Tip: try tweaking gender or countries for faster matches.");
       else if (e > 8000) setSearchMsg("Widening the search. Hang tight…");
-      else setSearchMsg("Searching for a match…");
     }, 500);
     return () => clearInterval(iv);
   }, [rtcPhase]);
 
-  /* ===== 9) Mount / UI wiring ===== */
+  /* ===== 8) Mount / UI wiring ===== */
   useEffect(() => {
     if (!hydrated || !isBrowser) return;
 
@@ -758,7 +714,7 @@ export default function ChatClient() {
     function onPeerMeta(e: any) {
       const meta = e?.detail;
       if (!meta) return;
-      // DOM is updated by peerMetaUi.client
+      // DOM updated by peerMetaUi.client
     }
     window.addEventListener("ditona:peer-meta", onPeerMeta as any);
 
@@ -784,7 +740,7 @@ export default function ChatClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
-  /* ===== 10) UI ===== */
+  /* ===== 9) UI ===== */
   return (
     <>
       <LikeHud />
@@ -816,12 +772,7 @@ export default function ChatClient() {
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">{searchMsg}</div>
                 <button
-                  onClick={async () => {
-                    // Cancel search: invalidate sid, abort polling, leave room, stop state
-                    newSid();
-                    await leaveRoom();
-                    toast("🛑 Search cancelled");
-                  }}
+                  onClick={() => toast("🛑 Search cancelled")}
                   className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
                 >
                   Cancel
