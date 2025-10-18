@@ -134,13 +134,18 @@ export default function ChatClient() {
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
 
   /* ===== helpers ===== */
+  function resetMsgs(pid?: string) {
+    try { window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId: pid } })); } catch {}
+  }
   function setPhase(p: Phase) {
     setRtcPhase(p);
     try { window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } })); } catch {}
     if (p === "searching") { searchStartRef.current = Date.now(); setSearchMsg("Searching for a match…"); }
+    if (p === "searching" || p === "stopped") resetMsgs();
   }
   function emitPair(pairId: string, role: "caller" | "callee") {
     try { window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } })); } catch {}
+    resetMsgs(pairId);
   }
   function emitRemoteTrackStarted() {
     try { window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } })); } catch {}
@@ -329,6 +334,8 @@ export default function ChatClient() {
     // Detach DC and listeners first
     dcDetach();
     clearRoomListeners();
+    resetMsgs();
+    try { (window as any).__ditonaPairId = undefined; (window as any).__pairId = undefined; } catch {}
 
     // Clear remote DOM and keep local preview
     detachRemoteAll();
@@ -423,8 +430,8 @@ export default function ChatClient() {
         if (j?.t === "meta:init" || topic === "meta") {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
-        // chat: only accept {t:"chat", text, pairId?}
-        if (j?.t === "chat" && typeof j.text === "string") {
+        // chat: accept by t=chat or topic=chat
+        if ((j?.t === "chat" || topic === "chat") && typeof j.text === "string") {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
@@ -836,7 +843,7 @@ export default function ChatClient() {
 
           {/* bars */}
           <ChatToolbar />
-          <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
+          <UpsellModal />
           <ChatMessagingBar />
         </div>
       </div>
