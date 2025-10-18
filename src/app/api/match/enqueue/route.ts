@@ -36,6 +36,7 @@ export async function POST(req: NextRequest) {
       filterGenders = null,
       filterCountries = null,
       vip = null,
+      ticket: ticketHint, // ← optional reuse
     } = body || {};
 
     if (!identity || !deviceId) {
@@ -48,11 +49,12 @@ export async function POST(req: NextRequest) {
     const { ticket } = await enqueue({
       identity: String(identity),
       deviceId: String(deviceId),
-      selfGender: selfGender ? String(selfGender) : null,
+      selfGender: selfGender != null ? String(selfGender) : undefined,
       selfCountry: selfCountry ? String(selfCountry) : null,
-      filterGenders: Array.isArray(filterGenders) ? filterGenders.map(String) : null,
-      filterCountries: Array.isArray(filterCountries) ? filterCountries.map(String) : null,
+      filterGenders: Array.isArray(filterGenders) ? filterGenders.map(String) : undefined,
+      filterCountries: Array.isArray(filterCountries) ? filterCountries.map(String) : undefined,
       vip: !!vip,
+      ticketHint: typeof ticketHint === "string" ? ticketHint : undefined,
     });
 
     return new NextResponse(JSON.stringify({ ok: true, ticket }), {
