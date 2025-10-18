@@ -3,22 +3,34 @@ import { useEffect, useRef, useState } from "react";
 
 type Line = { text: string; ts: number; dir: "out" | "in"; pairId: string };
 
-export default function MessageHud() {
+export function MessageHud() {
   const [history, setHistory] = useState<Line[]>([]);
   const [visibleCount, setVisibleCount] = useState(3);
   const curPairRef = useRef<string>("");
-  const hudRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
-  // reset عند بدء زوج جديد
+  // reset عند بدء زوج جديد + عند طلب مسح صريح + عند التحول للبحث/التوقف
   useEffect(() => {
-    const onPair = (e: any) => {
-      const pid = e?.detail?.pairId || e?.pairId || "";
-      curPairRef.current = String(pid || "");
+    const reset = (pid?: string) => {
+      curPairRef.current = String(pid || curPairRef.current || "");
       setHistory([]);
       setVisibleCount(3);
     };
+    const onPair = (e: any) => reset(e?.detail?.pairId || e?.pairId || "");
+    const onReset = () => reset();
+    const onPhase = (e: any) => {
+      const p = e?.detail?.phase;
+      if (p === "searching" || p === "stopped") reset();
+    };
+
     window.addEventListener("rtc:pair", onPair as any);
-    return () => window.removeEventListener("rtc:pair", onPair as any);
+    window.addEventListener("ui:msg:reset", onReset as any);
+    window.addEventListener("rtc:phase", onPhase as any);
+    return () => {
+      window.removeEventListener("rtc:pair", onPair as any);
+      window.removeEventListener("ui:msg:reset", onReset as any);
+      window.removeEventListener("rtc:phase", onPhase as any);
+    };
   }, []);
 
   // استقبال
@@ -47,45 +59,62 @@ export default function MessageHud() {
     return () => window.removeEventListener("ditona:chat:sent", onSent as any);
   }, []);
 
-  // سحب/تمرير داخل HUD فقط
+  // السحب/التمرير: اربط على window لكن فعّل فقط لو الهدف داخل HUD (لهاتف يعمل دائمًا)
   useEffect(() => {
-    const el = hudRef.current;
+    const el = wrapRef.current;
     if (!el) return;
 
     let startY = 0;
-    let moved = false;
+    let movedOnce = false;
+
+    const isInside = (t: EventTarget | null) =>
+      t instanceof Node && el.contains(t);
+
+    const revealOlder = () => setVisibleCount((n) => Math.min(history.length, n + 1));
+    const hideNewer = () => setVisibleCount((n) => Math.max(1, n - 1));
 
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) setVisibleCount((n) => Math.min(history.length, n + 1));
-    };
-    const onTouchStart = (e: TouchEvent) => {
-      const t = e.touches[0]; if (!t) return;
-      startY = t.clientY; moved = false;
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      const t = e.touches[0]; if (!t) return;
-      const dy = t.clientY - startY;
-      if (dy > 30 && !moved) {
-        moved = true;
-        setVisibleCount((n) => Math.min(history.length, n + 1));
-      }
+      if (!isInside(e.target)) return;
+      if (e.deltaY < 0) revealOlder();
+      else if (e.deltaY > 0) hideNewer();
+      e.stopPropagation();
+      e.preventDefault();
     };
 
-    el.addEventListener("wheel", onWheel, { passive: true });
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    const onTouchStart = (e: TouchEvent) => {
+      if (!isInside(e.target)) return;
+      const t = e.touches[0]; if (!t) return;
+      startY = t.clientY;
+      movedOnce = false;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!isInside(e.target)) return;
+      const t = e.touches[0]; if (!t) return;
+      const dy = t.clientY - startY;
+      if (Math.abs(dy) > 30 && !movedOnce) {
+        movedOnce = true;
+        if (dy > 0) revealOlder(); else hideNewer();
+      }
+      e.stopPropagation();
+      e.preventDefault();
+    };
+
+    window.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+
     return () => {
-      el.removeEventListener("wheel", onWheel);
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("wheel", onWheel as any);
+      window.removeEventListener("touchstart", onTouchStart as any);
+      window.removeEventListener("touchmove", onTouchMove as any);
     };
   }, [history.length]);
 
-  // آخر N فقط
   const lines = history.slice(-visibleCount);
   if (lines.length === 0) return null;
 
-  // نسخ بالضغط المطوّل + إعادة إرسال للمرسل فقط
+  // نسخ بالضغط المطوّل + إعادة إرسال لرسائل المرسل فقط
   const onHold = (l: Line) => {
     let t: any;
     const start = () => {
@@ -101,25 +130,26 @@ export default function MessageHud() {
   };
 
   return (
-    <div className="absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55]">
-      <div
-        ref={hudRef}
-        data-ui="messages-hud"
-        className="pointer-events-auto space-y-1"
-      >
-        {lines.map((l, i) => (
-          <div
-            key={i}
-            {...onHold(l)}
-            className="pointer-events-auto cursor-copy select-text text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm"
-          >
-            <span className={l.dir === "in" ? "text-white/80" : "text-emerald-300"}>
-              {l.dir === "in" ? "• " : "▲ "}
-            </span>
-            {l.text}
-          </div>
-        ))}
-      </div>
+    <div
+      ref={wrapRef}
+      data-ui="messages-overlay"
+      className="pointer-events-auto absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55] space-y-1 select-none"
+      style={{ WebkitTapHighlightColor: "transparent", touchAction: "none", overscrollBehavior: "contain" as any }}
+    >
+      {lines.map((l, i) => (
+        <div
+          key={i}
+          {...onHold(l)}
+          className="cursor-copy select-text text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm bg-transparent"
+        >
+          <span className={l.dir === "in" ? "text-white/80" : "text-emerald-300"}>
+            {l.dir === "in" ? "• " : "▲ "}
+          </span>
+          {l.text}
+        </div>
+      ))}
     </div>
   );
 }
+
+export default MessageHud;
