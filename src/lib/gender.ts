@@ -1,54 +1,83 @@
-// تطبيع الجنس وإرجاع شارة عرض متوافقة مع الواجهة.
+// src/lib/gender.ts
+export type GenderNorm = "m" | "f" | "c" | "l" | "u"; // male, female, couples, lgbt, unknown/everyone
 
-export type GenderNorm = "m" | "f" | "c" | "l" | "u";
+const SYNS: Record<GenderNorm, string[]> = {
+  m: ["m", "male", "man", "boy", "masculine"],
+  f: ["f", "female", "woman", "girl", "feminine"],
+  c: ["c", "couple", "couples", "coupled", "pair"],
+  l: ["l", "lgbt", "lgbtq", "gay", "lesbian", "bi", "trans", "queer"],
+  u: ["u", "everyone", "all", "any", "unknown", "unspecified", "every", ""],
+};
 
-// everyone/all/empty → "u" (غير مقيّد)
+const VALID_FILTERS: GenderNorm[] = ["m", "f", "c", "l"]; // "u" never sent as a filter constraint
+
+function normToken(x: unknown): string {
+  if (x == null) return "";
+  return String(x).trim().toLowerCase();
+}
+
+/** Normalize any user/UI value into one of: "m"|"f"|"c"|"l"|"u". */
 export function normalizeGender(v?: unknown): GenderNorm {
-  if (v === null || v === undefined) return "u";
-  const s0 = String(v).trim();
-  if (s0 === "") return "u";
-  const s = s0.toLowerCase();
-
-  if (s === "everyone" || s === "every" || s === "any" || s === "all" || s === "*" || s === "u" || s === "unrestricted") return "u";
-  if (s === "male" || s === "m" || s.startsWith("man")) return "m";
-  if (s === "female" || s === "f" || s.startsWith("wom") || s === "woman" || s === "women") return "f";
-  if (s === "couple" || s === "couples" || s === "c" || s.startsWith("pair")) return "c";
-  if (s === "lgbt" || s === "l" || s.includes("gay") || s.includes("queer") || s === "bi") return "l";
+  const t = normToken(v);
+  for (const k of Object.keys(SYNS) as GenderNorm[]) {
+    if (SYNS[k].includes(t)) return k;
+  }
+  // also accept common abbreviations
+  if (t.startsWith("mal")) return "m";
+  if (t.startsWith("fem") || t == "w") return "f";
+  if (t.startsWith("coupl")) return "c";
+  if (t.startsWith("lg") || t.startsWith("queer") || t.startsWith("gay") || t.startsWith("lesb")) return "l";
   return "u";
 }
 
-/** تحويل قيمة واحدة أو مصفوفة إلى مصفوفة جاهزة للإرسال في الفلاتر */
-export function toFilterGenders(input?: GenderNorm | GenderNorm[] | null): Array<"m"|"f"|"c"|"l"> {
-  const arr = Array.isArray(input) ? input : (input ? [input] : []);
-  const out = new Set<"m"|"f"|"c"|"l">();
-  for (const it of arr) {
-    const n = normalizeGender(it);
-    if (n === "u") continue;
-    if (n === "m" || n === "f" || n === "c" || n === "l") out.add(n);
-  }
-  return Array.from(out);
+/** Everyone-like flag. Treats "u"/"everyone"/"all"/empty as no constraint. */
+export function isEveryone(val?: unknown): boolean {
+  const t = normalizeGender(val);
+  return t == "u";
 }
 
-// رمز واجهة بسيط عند الحاجة
-export function genderSymbol(g: GenderNorm): string {
-  switch (g) {
-    case "m": return "♂︎";
-    case "f": return "♀︎";
-    case "c": return "👨‍❤️‍👨";
+/**
+ * Convert a UI field into a normalized filter array.
+ * - Accepts: undefined | "everyone" | "m" | "male,female" | string[]
+ * - Returns only items in ["m","f","c","l"] and de-duplicates.
+ * - Returns [] for Everyone/All or when input has no valid tokens.
+ * - Enforces optional `limit` (default 2) for FFA/VIP parity.
+ */
+export function asFilterGenders(input?: unknown, limit = 2): GenderNorm[] {
+  const push: GenderNorm[] = [];
+  const add = (g: unknown) => {
+    const n = normalizeGender(g);
+    if (n !== "u" && VALID_FILTERS.includes(n) && !push.includes(n)) push.push(n);
+  };
+  if (Array.isArray(input)) {
+    for (const it of input) add(it);
+  } else if (typeof input === "string") {
+    if (isEveryone(input)) return [];
+    for (const tok of input.split(/[,\s]+/)) add(tok);
+  } else if (input != null) {
+    add(input);
+  }
+  if (push.length === 0) return [];
+  if (Number.isFinite(limit) && limit > 0) return push.slice(0, limit as number);
+  return push;
+}
+
+/** UI helpers kept minimal. */
+export function genderLabel(g: unknown): string {
+  switch (normalizeGender(g)) {
+    case "m": return "Male";
+    case "f": return "Female";
+    case "c": return "Couples";
+    case "l": return "LGBTQ+";
+    default: return "Everyone";
+  }
+}
+export function genderSymbol(g: unknown): string {
+  switch (normalizeGender(g)) {
+    case "m": return "♂";
+    case "f": return "♀";
+    case "c": return "❤";
     case "l": return "🏳️‍🌈";
-    default:  return "•";
+    default: return "•";
   }
 }
-
-export type GenderBadge = { label: string; cls: string };
-export function genderBadge(input?: unknown): GenderBadge {
-  const g = normalizeGender(input);
-  switch (g) {
-    case "m": return { label: "♂︎", cls: "text-blue-800" };
-    case "f": return { label: "♀︎", cls: "text-red-500" };
-    case "c": return { label: "👨‍❤️‍👨", cls: "text-rose-400" };
-    case "l": return { label: "🏳️‍🌈", cls: "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-600 bg-clip-text text-transparent" };
-    default:  return { label: "•", cls: "text-neutral-400" };
-  }
-}
-export const genderBadgeSymbol = genderSymbol;
