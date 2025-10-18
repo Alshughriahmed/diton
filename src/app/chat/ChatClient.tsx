@@ -112,6 +112,10 @@ export default function ChatClient() {
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const lastNextTsRef = useRef(0);
 
+  // waiting UI state
+  const searchStartRef = useRef(0);
+  const [searchMsg, setSearchMsg] = useState("Searching for a match…");
+
   // LiveKit room & guards
   const roomRef = useRef<Room | null>(null);
   const roomUnsubsRef = useRef<(() => void)[]>([]);
@@ -128,8 +132,6 @@ export default function ChatClient() {
 
   // session lock
   const sidRef = useRef(0);
-  const searchStartRef = useRef<number>(0);
-
   function newSid(): number {
     sidRef.current += 1;
     return sidRef.current;
@@ -140,11 +142,14 @@ export default function ChatClient() {
 
   /* ===== helpers ===== */
   function setPhase(p: Phase) {
-    if (p === "searching") searchStartRef.current = Date.now();
     setRtcPhase(p);
     try {
       window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
     } catch {}
+    if (p === "searching") {
+      searchStartRef.current = Date.now();
+      setSearchMsg("Searching for a match…");
+    }
   }
   function emitPair(pairId: string, role: "caller" | "callee") {
     try {
@@ -270,7 +275,7 @@ export default function ChatClient() {
     try { const vt = src.getVideoTracks?.()[0]; if (vt) vt.enabled = !!camOn; } catch {}
   }
 
-  // LiveKit attach/detach
+  // New helpers using LiveKit attach/detach
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
     if (!el || !track) return;
@@ -305,7 +310,7 @@ export default function ChatClient() {
     }
   }
 
-  // publish peer meta helper (twice)
+  // publish peer meta helper (twice with a short delay)
   async function requestPeerMetaTwice(room: Room) {
     try {
       const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
@@ -316,15 +321,15 @@ export default function ChatClient() {
     } catch {}
   }
 
-  // polling loop with backoff and sid cancellation
+  // polling loop with backoff and sid-cancel
   async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
-    let wait = 8000; // 8s start
+    let wait = 8000;
     const active = () => isActiveSid(sid);
     while (active()) {
       const rn = await nextReq(ticket, wait);
       if (!active()) return null;
       if (rn) return rn;
-      wait = Math.min(20000, Math.round(wait * 1.25)); // backoff up to 20s
+      wait = Math.min(20000, Math.round(wait * 1.25)); // 8s→10s→12.5s…≤20s
     }
     return null;
   }
@@ -436,8 +441,10 @@ export default function ChatClient() {
         if (j?.t === "meta:init" || topic === "meta") {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
-        if (j?.t === "chat" && j.text) {
-          window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: roomName } }));
+        // Restrict chat payload to {t:"chat", text, pairId?}
+        if (j?.t === "chat" && typeof j.text === "string") {
+          const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
+          window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
         if (j?.t === "peer-meta" && j.payload) {
           window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
@@ -515,7 +522,7 @@ export default function ChatClient() {
       });
       if (!isActiveSid(sid)) return;
 
-      // wait for room with continuous polling + backoff
+      // wait for room with backoff, cancel if sid changes
       const roomName = await waitRoomLoop(ticket, sid);
       if (!roomName) { setPhase("stopped"); return; }
 
@@ -537,11 +544,10 @@ export default function ChatClient() {
         (window as any).__pairId = roomName;
       } catch {}
 
-      // ws URL fallback
+      // wsURL fallback chain per plan
       const ws =
         process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ??
-        process.env.LIVEKIT_URL ??
-        "";
+        (process.env as any).LIVEKIT_URL ?? "";
 
       isConnectingRef.current = true;
       await room.connect(ws, token);
@@ -579,6 +585,18 @@ export default function ChatClient() {
       isConnectingRef.current = false;
     }
   }
+
+  /* ===== waiting message updater ===== */
+  useEffect(() => {
+    if (rtcPhase !== "searching") return;
+    const iv = setInterval(() => {
+      const e = Date.now() - searchStartRef.current;
+      if (e > 20000) setSearchMsg("Tip: try tweaking gender or countries for faster matches.");
+      else if (e > 8000) setSearchMsg("Widening the search. Hang tight…");
+      else setSearchMsg("Searching for a match…");
+    }, 500);
+    return () => clearInterval(iv);
+  }, [rtcPhase]);
 
   /* ===== 8) Mount / UI wiring ===== */
   useEffect(() => {
@@ -742,11 +760,6 @@ export default function ChatClient() {
   }, [hydrated, filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
   /* ===== 9) UI ===== */
-  const elapsed = Date.now() - (searchStartRef.current || Date.now());
-  let waitMsg = "Searching for a match…";
-  if (elapsed > 8000 && elapsed <= 20000) waitMsg = "Widening the search. Hang tight…";
-  else if (elapsed > 20000) waitMsg = "Tip: try tweaking gender or countries for faster matches.";
-
   return (
     <>
       <LikeHud />
@@ -776,7 +789,7 @@ export default function ChatClient() {
 
             {rtcPhase === "searching" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
-                <div className="mb-4">{waitMsg}</div>
+                <div className="mb-4">{searchMsg}</div>
                 <button
                   onClick={() => toast("🛑 Search cancelled")}
                   className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
