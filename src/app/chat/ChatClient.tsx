@@ -165,7 +165,7 @@ export default function ChatClient() {
   }
   function identity(): string {
     const base = String(profile?.displayName || "anon").trim() || "anon";
-    aconst did = String(stableDid());
+   const did = String(stableDid()); 
     const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
     return `${base}#${tail}`;
   }
