@@ -4,6 +4,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { isFFA } from "@/utils/ffa";
+import { asFilterGenders } from "@/lib/gender";
 
 export type GenderOpt = "all" | "male" | "female" | "couple" | "lgbt";
 
@@ -21,14 +22,6 @@ export type FiltersState = {
   reset: () => void;
 };
 
-function normLetter(g: GenderOpt): "m" | "f" | "c" | "l" | null {
-  if (g === "male") return "m";
-  if (g === "female") return "f";
-  if (g === "couple") return "c";
-  if (g === "lgbt") return "l";
-  return null; // "all"
-}
-
 export const useFilters = create<FiltersState>()(
   persist(
     (set, get) => ({
@@ -36,10 +29,12 @@ export const useFilters = create<FiltersState>()(
       countries: [],
       isVip: false,
 
+      // Everyone → []; otherwise normalize via lib/gender with limit=2 (FFA).
       filterGendersNorm: () => {
         const g = get().gender;
-        const n = normLetter(g);
-        return n ? [n] : [];
+        if (g === "all") return [];
+        // asFilterGenders يقبل نصوصًا مفردة أو قائمة مفصولة بفواصل
+        return asFilterGenders(g, 2) as ("m" | "f" | "c" | "l")[];
       },
 
       setVip: (v) => set({ isVip: !!v }),
@@ -56,9 +51,10 @@ export const useFilters = create<FiltersState>()(
           // During launch FFA: allow up to 15; later: non-VIP single country or global.
           if (!s.isVip && !isFFA()) {
             if (!codes?.length) return { countries: [] };
-            return { countries: codes.slice(0, 1) };
+            return { countries: [String(codes[0] || "").toUpperCase()] };
           }
-          return { countries: Array.isArray(codes) ? codes.slice(0, 15) : [] };
+          const list = Array.isArray(codes) ? codes.slice(0, 15).map((c) => String(c).toUpperCase()) : [];
+          return { countries: list };
         }),
 
       reset: () => set({ gender: "all", countries: [] }),
