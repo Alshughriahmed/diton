@@ -1,258 +1,274 @@
-// ===== Types =====
-export type EnqueueInput = {
+// src/lib/match/redis.ts
+// Runtime: nodejs. Upstash Redis REST via @upstash/redis.
+// Implements score-based matching per matching.md and ss.md.
+// ENV required: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN.
+import { Redis } from "@upstash/redis";
+
+export type GenderNorm = "m" | "f" | "c" | "l" | "u";
+
+export interface TicketAttrs {
+  ticket: string;
   identity: string;
   deviceId: string;
-  selfGender?: string | null;
-  selfCountry?: string | null;
-  filterGenders?: string[] | null;
-  filterCountries?: string[] | null;
-  vip?: boolean | null;
-};
+  selfGender: GenderNorm;       // normalized
+  selfCountry: string | null;   // ISO2 or null
+  filterGenders: GenderNorm[];  // 0..2
+  filterCountries: string[];    // 0..15 ISO2
+  vip: boolean;
+  ts: number;                   // enqueue time (ms)
+}
 
-type Attr = {
-  identity: string;
-  deviceId: string;
-  selfGender?: string | null;
-  selfCountry?: string | null;
-  filterGenders?: string[] | null;
-  filterCountries?: string[] | null;
-  vip?: boolean | null;
-  ts: number;
-};
+export interface MatchResult {
+  room?: string;
+  matchedWith?: string; // other ticket
+}
 
-// ===== Consts =====
-const TTL_MS = 45_000;
+const redis = Redis.fromEnv();
+
 const Q_KEY = "mq:q";
-const DEV = (d: string) => `mq:dev:${d}`;
-const ATTR = (t: string) => `mq:attr:${t}`;
-const ROOM = (t: string) => `mq:room:${t}`;
+const ATTR_KEY = (ticket: string) => `mq:attr:${ticket}`;
+const ROOM_KEY = (ticket: string) => `mq:room:${ticket}`;
+const DEV_KEY = (dev: string) => `mq:dev:${dev}`; // reserved for device reuse
+const LOCK_KEY = (ticket: string) => `mq:lock:${ticket}`;
 
-// ===== ENV helpers =====
-export function haveRedisEnv(): boolean {
-  return !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
-}
-function getRedis() {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) throw new Error("Upstash ENV missing");
-  return { url, token };
-}
+const TTL_MS = 45_000;
 
-// ===== Low-level REST helpers (Upstash REST v2) =====
-async function rpost<T = any>(path: string, body: any) {
-  const { url, token } = getRedis();
-  const res = await fetch(`${url}${path}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`redis ${path} failed: ${res.status} ${text}`);
-  }
-  return res.json() as Promise<T>;
-}
-async function cmd<T = any>(...args: (string | number)[]) {
-  const a = args.map((x) => (typeof x === "number" ? String(x) : x));
-  return rpost<T>("/", a);
-}
-async function pipeline(cmds: (string | number)[][]) {
-  const arr = cmds.map((c) => c.map((x) => (typeof x === "number" ? String(x) : x)));
-  return rpost<any[]>("/pipeline", arr);
+export function normalizeGender(g: any): GenderNorm {
+  const s = String(g || "").toLowerCase();
+  if (s === "m" || s.startsWith("male")) return "m";
+  if (s === "f" || s.startsWith("female") || s === "w") return "f";
+  if (s === "c" || s.startsWith("couple") || s.startsWith("couples")) return "c";
+  if (s === "l" || s.startsWith("lgbt") || s.startsWith("gay") || s.startsWith("bi")) return "l";
+  if (s === "u" || s === "unknown" || s === "everyone" || s === "all" || s === "*") return "u";
+  return "u";
 }
 
-// ===== Utils =====
-const now = () => Date.now();
-const toCSV = (a?: string[] | null) => (Array.isArray(a) ? a.join(",") : "");
-const fromCSV = (s?: string | null) => (s || "").split(",").filter(Boolean);
-function ticketId(): string {
-  const t = now().toString(36);
-  const r = Math.random().toString(36).slice(2, 8);
-  return `t-${t}-${r}`;
-}
-function roomId(a: string, b: string) {
-  const t = now().toString(36).slice(-4);
-  const A = a.slice(0, 4);
-  const B = b.slice(0, 4);
-  return `pair-${t}-${A}${B}`;
+function csvToArray(s: string | null | undefined): string[] {
+  if (!s) return [];
+  return String(s).split(",").map((x) => x.trim()).filter(Boolean);
 }
 
-// ===== Public API =====
-export async function enqueue(input: EnqueueInput) {
-  const ts = now();
-  const devKey = DEV(input.deviceId);
-
-  // Reuse device ticket if warm
-  const devGet = await cmd<{ result: string | null }>("GET", devKey);
-  let ticket = devGet?.result || "";
-  if (!ticket) ticket = ticketId();
-
-  const attr: Attr = {
-    identity: input.identity,
-    deviceId: input.deviceId,
-    selfGender: input.selfGender || null,
-    selfCountry: input.selfCountry || null,
-    filterGenders: input.filterGenders || null,
-    filterCountries: input.filterCountries || null,
-    vip: !!input.vip,
-    ts,
-  };
-  const attrKey = ATTR(ticket);
-
-  const p: (string | number)[][] = [
-    [
-      "HSET",
-      attrKey,
-      "identity",
-      attr.identity,
-      "deviceId",
-      attr.deviceId,
-      "selfGender",
-      attr.selfGender || "",
-      "selfCountry",
-      attr.selfCountry || "",
-      "filterGenders",
-      toCSV(attr.filterGenders),
-      "filterCountries",
-      toCSV(attr.filterCountries),
-      "vip",
-      attr.vip ? "1" : "0",
-      "ts",
-      String(attr.ts),
-    ],
-    ["PEXPIRE", attrKey, TTL_MS],
-    ["ZADD", Q_KEY, "NX", ts, ticket],
-    ["SET", devKey, ticket, "PX", TTL_MS],
-  ];
-  const rsp = await pipeline(p);
-  const zaddOk = rsp[2] && !rsp[2].error;
-  if (!zaddOk) throw new Error(`enqueue ZADD error: ${rsp[2]?.error || "unknown"}`);
-  return { ticket };
-}
-
-export async function getRoom(ticket: string) {
-  const r = await cmd<{ result: string | null }>("GET", ROOM(ticket));
-  return r?.result || null;
-}
-
-export async function tryMatch(ticket: string, widen: boolean) {
-  // Already assigned?
-  const existing = await getRoom(ticket);
-  if (existing) return existing;
-
-  const me = await readAttr(ticket);
-  if (!me) return null;
-
-  const tNow = now();
-  const min = tNow - TTL_MS;
-
-  // FIFO-ish: recent window
-  const zr = await cmd<{ result: string[] | null }>("ZRANGEBYSCORE", Q_KEY, min, tNow);
-  const candidates = (zr?.result || []).filter((t) => t !== ticket);
-  if (!candidates.length) return null;
-
-  // Bulk-read candidate attrs
-  const cmds = candidates.slice(0, 64).map((t) => [
-    "HMGET",
-    ATTR(t),
-    "identity",
-    "deviceId",
-    "selfGender",
-    "selfCountry",
-    "filterGenders",
-    "filterCountries",
-    "vip",
-    "ts",
-  ]);
-  const res = cmds.length ? await pipeline(cmds) : [];
-  for (let i = 0; i < res.length; i++) {
-    if (res[i]?.error) continue;
-    const v = res[i]?.result as (string | null)[];
-    if (!v) continue;
-
-    const other: Attr = {
-      identity: v[0] || "",
-      deviceId: v[1] || "",
-      selfGender: v[2] || "",
-      selfCountry: v[3] || "",
-      filterGenders: fromCSV(v[4]),
-      filterCountries: fromCSV(v[5]),
-      vip: v[6] === "1",
-      ts: Number(v[7] || "0"),
-    };
-    const otherTicket = candidates[i];
-    if (!other.identity) continue;
-
-    // Skip if the other already has a room
-    const otherRoom = await cmd<{ result: string | null }>("GET", ROOM(otherTicket));
-    if (otherRoom?.result) continue;
-
-    if (!matchOK(me, other, widen)) continue;
-
-    // Commit match
-    const room = roomId(ticket, otherTicket);
-    const commit: (string | number)[][] = [
-      ["SET", ROOM(ticket), room, "PX", TTL_MS],
-      ["SET", ROOM(otherTicket), room, "PX", TTL_MS],
-      ["ZREM", Q_KEY, ticket],
-      ["ZREM", Q_KEY, otherTicket],
-    ];
-    const rc = await pipeline(commit);
-    const ok = !rc[0]?.error && !rc[1]?.error && (rc[2]?.result ?? 0) >= 0 && (rc[3]?.result ?? 0) >= 0;
-    if (ok) return room;
-  }
-  return null;
-}
-
-// ===== Internals =====
-async function readAttr(ticket: string): Promise<Attr | null> {
-  const a = await cmd<{ result: (string | null)[] | null }>(
-    "HMGET",
-    ATTR(ticket),
-    "identity",
-    "deviceId",
-    "selfGender",
-    "selfCountry",
-    "filterGenders",
-    "filterCountries",
-    "vip",
-    "ts"
-  );
-  const v = a?.result;
-  if (!v || v.every((x) => x === null)) return null;
+export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null> {
+  const h = await redis.hgetall<Record<string, string>>(ATTR_KEY(ticket));
+  if (!h) return null;
+  const selfCountry = h.selfCountry ? String(h.selfCountry).toUpperCase() : null;
+  const genders = csvToArray(h.filterGendersCSV).map(normalizeGender).filter(Boolean) as GenderNorm[];
+  const countries = csvToArray(h.filterCountriesCSV).map((x) => x.toUpperCase());
   return {
-    identity: v[0] || "",
-    deviceId: v[1] || "",
-    selfGender: v[2] || "",
-    selfCountry: v[3] || "",
-    filterGenders: fromCSV(v[4]),
-    filterCountries: fromCSV(v[5]),
-    vip: v[6] === "1",
-    ts: Number(v[7] || "0"),
+    ticket,
+    identity: String(h.identity || ""),
+    deviceId: String(h.deviceId || ""),
+    selfGender: normalizeGender(h.selfGender || "u"),
+    selfCountry,
+    filterGenders: genders.slice(0, 2),
+    filterCountries: countries.slice(0, 15),
+    vip: !!(+String(h.vip || "0")),
+    ts: Number(h.ts || Date.now()),
   };
 }
 
-function matchOK(me: Attr, other: Attr, widen: boolean) {
-  // never self-match
-  if (me.deviceId && other.deviceId && me.deviceId === other.deviceId) return false;
+function elapsedLevel(elapsedMs: number): 0 | 1 | 2 | 3 | 4 {
+  if (elapsedMs < 3000) return 0;
+  if (elapsedMs < 8000) return 1;
+  if (elapsedMs < 12000) return 2;
+  if (elapsedMs < 20000) return 3;
+  return 4;
+}
 
-  const meG = me.filterGenders?.length ? me.filterGenders : null;
-  const meC = me.filterCountries?.length ? me.filterCountries : null;
-  const otG = other.selfGender || "";
-  const otC = other.selfCountry || "";
+type ScoreTuple = [number, number, number, number]; // (hardFlag, genderRank, countryRank, recencyRank)
 
-  const otherG = other.filterGenders?.length ? other.filterGenders : null;
-  const otherC = other.filterCountries?.length ? other.filterCountries : null;
-  const myG = me.selfGender || "";
-  const myC = me.selfCountry || "";
+function indexOfOrInf<T>(arr: T[] | null | undefined, v: T): number {
+  if (!arr || arr.length === 0) return Number.POSITIVE_INFINITY;
+  const i = arr.indexOf(v);
+  return i >= 0 ? i : Number.POSITIVE_INFINITY;
+}
 
-  // gender must always satisfy both sides
-  const gOK = (!meG || meG.includes(otG)) && (!otherG || otherG.includes(myG));
+function jitter(seed: string): number {
+  // simple xorshift-like hash to produce stable [-0.2..+0.2]
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  const x = (h >>> 0) / 0xffffffff;
+  return (x - 0.5) * 0.4; // [-0.2, +0.2]
+}
 
-  // countries may be relaxed when widen=true
-  if (widen) return gOK;
+function hardOK(me: TicketAttrs, other: TicketAttrs): boolean {
+  const meG = me.filterGenders;
+  const otherG = other.filterGenders;
+  const meC = me.filterCountries;
+  const otherC = other.filterCountries;
 
-  const cOK = (!meC || meC.includes(otC)) && (!otherC || otherC.includes(myC));
-  return gOK && cOK;
+  const meAcceptsGender   = meG.length === 0 || meG.includes(other.selfGender);
+  const otherAcceptsGender= otherG.length === 0 || otherG.includes(me.selfGender);
+
+  const meAcceptsCountry  = meC.length === 0 || (other.selfCountry ? meC.includes(other.selfCountry) : false);
+  const otherAcceptsCountry = otherC.length === 0 || (me.selfCountry ? otherC.includes(me.selfCountry) : false);
+
+  return meAcceptsGender && otherAcceptsGender && meAcceptsCountry && otherAcceptsCountry;
+}
+
+function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): boolean {
+  // 0–3s strict hardOK only. 3–8s same. 8–12s relax country. 12–20s allow soft if one constraint missing without explicit refusal.
+  const meG = me.filterGenders;
+  const otherG = other.filterGenders;
+  const meC = me.filterCountries;
+  const otherC = other.filterCountries;
+
+  const genderMutual = (meG.length === 0 || meG.includes(other.selfGender)) &&
+                       (otherG.length === 0 || otherG.includes(me.selfGender));
+  const countryMutual = (meC.length === 0 || (other.selfCountry ? meC.includes(other.selfCountry) : false)) &&
+                        (otherC.length === 0 || (me.selfCountry ? otherC.includes(me.selfCountry) : false));
+
+  if (level === 0 || level === 1) {
+    return genderMutual && countryMutual; // hard only
+  }
+  if (level === 2) {
+    return genderMutual; // relax country
+  }
+  if (level === 3) {
+    if (genderMutual && countryMutual) return true;
+    if (genderMutual) return true;
+    const meBlocksG = meG.length > 0 && !meG.includes(other.selfGender);
+       const otherBlocksG = otherG.length > 0 && !otherG.includes(me.selfGender);
+    return !(meBlocksG || otherBlocksG);
+  }
+  // level 4: stop widening (handled by caller returning 204)
+  return false;
+}
+
+function computeScore(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): ScoreTuple | null {
+  if (!allowedByWiden(level, me, other)) return null;
+
+  const genderOrder = me.filterGenders;
+  const countryOrder = me.filterCountries;
+
+  const genderRank = genderOrder.length === 0 ? Number.POSITIVE_INFINITY : indexOfOrInf(genderOrder, other.selfGender);
+  let countryRank: number;
+  if (countryOrder.length === 0) {
+    // prefer selfCountry first when empty
+    countryRank = other.selfCountry && me.selfCountry && other.selfCountry === me.selfCountry ? 0 : 1;
+    // add small jitter to diversify
+    countryRank = countryRank + jitter(`${me.ticket}|${other.ticket}`);
+  } else {
+    countryRank = indexOfOrInf(countryOrder, other.selfCountry as any);
+  }
+
+  const recencyRank = -other.ts;
+  const hardFlag = hardOK(me, other) ? 0 : 1;
+  return [hardFlag, genderRank, countryRank, recencyRank];
+}
+
+function roomNameFor(a: string, b: string): string {
+  const short = Date.now().toString(36).slice(-5);
+  return `pair-${short}-${a.slice(-3)}${b.slice(-3)}`;
+}
+
+async function claimBoth(me: string, other: string, ttlMs: number, room: string): Promise<boolean> {
+  const lock = await redis.set(LOCK_KEY(other), me, { nx: true, px: 4000 });
+  if (lock !== "OK") return false;
+  try {
+    const a = await redis.set(ROOM_KEY(me), room, { nx: true, px: ttlMs });
+    if (a !== "OK") return false;
+    const b = await redis.set(ROOM_KEY(other), room, { nx: true, px: ttlMs });
+    if (b !== "OK") {
+      // rollback
+      await redis.del(ROOM_KEY(me));
+      return false;
+    }
+    await redis.zrem(Q_KEY, me, other);
+    return true;
+  } finally {
+    await redis.del(LOCK_KEY(other));
+  }
+}
+
+function lexLess(a: ScoreTuple, b: ScoreTuple): boolean {
+  for (let i = 0; i < 4; i++) {
+    if (a[i] < b[i]) return true;
+    if (a[i] > b[i]) return false;
+  }
+  return false;
+}
+
+export async function tryMatch(ticket: string, now = Date.now()): Promise<MatchResult | null> {
+  const me = await getTicketAttrs(ticket);
+  if (!me) return null;
+  const elapsed = now - me.ts;
+  const level = elapsedLevel(elapsed);
+  if (level === 4) {
+    // stop widening. No match here.
+    return null;
+  }
+
+  // dynamic sampling by queue size
+  const zcount = await redis.zcard(Q_KEY);
+  const PAGE = 64;
+  let target = PAGE;
+  if (zcount > 2000) target = 256;
+  else if (zcount > 200) target = 128;
+  else target = 64;
+
+  const minScore = now - TTL_MS;
+  const maxScore = now;
+  let collected: string[] = [];
+  let offset = 0;
+  while (collected.length < target && offset < 1024) {
+    const batch: string[] = await redis.zrangebyscore(Q_KEY, minScore, maxScore, { limit: { offset, count: PAGE } }) as any;
+    if (!batch || batch.length === 0) break;
+    for (const t of batch) {
+      if (t && t !== ticket) collected.push(t);
+      if (collected.length >= target) break;
+    }
+    offset += PAGE;
+  }
+
+  if (collected.length === 0) return null;
+
+  // fetch attributes for candidates in small batches
+  const chunks: string[][] = [];
+  for (let i = 0; i < collected.length; i += 32) chunks.push(collected.slice(i, i + 32));
+
+  let best: {ticket: string, score: ScoreTuple} | null = null;
+
+  for (const ch of chunks) {
+    const pipe = redis.pipeline();
+    ch.forEach((t) => {
+      pipe.hgetall<Record<string, string>>(ATTR_KEY(t));
+      pipe.exists(ROOM_KEY(t));
+    });
+    const res = await pipe.exec();
+    for (let i = 0; i < ch.length; i++) {
+      const h = res[i*2] as any;
+      const ex = res[i*2+1] as any;
+      const exists = Array.isArray(ex) ? ex[1] : ex;
+      if (!h || (Array.isArray(h) && !h[1])) continue;
+      if (exists) continue; // already matched
+      const data = Array.isArray(h) ? h[1] as Record<string,string> : h as Record<string,string>;
+      const other: TicketAttrs = {
+        ticket: ch[i],
+        identity: String(data.identity || ""),
+        deviceId: String(data.deviceId || ""),
+        selfGender: normalizeGender(data.selfGender || "u"),
+        selfCountry: data.selfCountry ? String(data.selfCountry).toUpperCase() : null,
+        filterGenders: csvToArray(data.filterGendersCSV).map(normalizeGender) as GenderNorm[],
+        filterCountries: csvToArray(data.filterCountriesCSV).map((x)=>x.toUpperCase()),
+        vip: !!(+String(data.vip || "0")),
+        ts: Number(data.ts || now),
+      };
+      const sc = computeScore(level, me, other);
+      if (!sc) continue;
+      if (!best || lexLess(sc, best.score)) {
+        best = { ticket: ch[i], score: sc };
+      }
+    }
+  }
+
+  if (!best) return null;
+
+  const room = roomNameFor(ticket, best.ticket);
+  const ok = await claimBoth(ticket, best.ticket, TTL_MS, room);
+  if (!ok) return null;
+  return { room, matchedWith: best.ticket };
 }
