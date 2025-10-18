@@ -1,3 +1,4 @@
+// src/app/chat/ChatClient.tsx
 "use client";
 
 /**
@@ -6,7 +7,6 @@
  * No /api/rtc/* usage. DC shim global. Local preview persists across Next/Prev.
  * Remote media uses LiveKit track.attach()/detach() to avoid adaptiveStream stalls.
  */
-
 
 /* ===== 1) DC shim must load first ===== */
 import "@/app/chat/dcShim.client";
@@ -128,6 +128,8 @@ export default function ChatClient() {
 
   // session lock
   const sidRef = useRef(0);
+  const searchStartRef = useRef<number>(0);
+
   function newSid(): number {
     sidRef.current += 1;
     return sidRef.current;
@@ -138,6 +140,7 @@ export default function ChatClient() {
 
   /* ===== helpers ===== */
   function setPhase(p: Phase) {
+    if (p === "searching") searchStartRef.current = Date.now();
     setRtcPhase(p);
     try {
       window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
@@ -267,7 +270,7 @@ export default function ChatClient() {
     try { const vt = src.getVideoTracks?.()[0]; if (vt) vt.enabled = !!camOn; } catch {}
   }
 
-  // New helpers using LiveKit attach/detach
+  // LiveKit attach/detach
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
     if (!el || !track) return;
@@ -302,7 +305,7 @@ export default function ChatClient() {
     }
   }
 
-  // publish peer meta helper (twice with a short delay)
+  // publish peer meta helper (twice)
   async function requestPeerMetaTwice(room: Room) {
     try {
       const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
@@ -313,13 +316,15 @@ export default function ChatClient() {
     } catch {}
   }
 
-  // polling loop so searching never stops until matched or sid changes
+  // polling loop with backoff and sid cancellation
   async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
-    while (isActiveSid(sid)) {
-      const rn = await nextReq(ticket, 8000);
-      if (!isActiveSid(sid)) return null;
+    let wait = 8000; // 8s start
+    const active = () => isActiveSid(sid);
+    while (active()) {
+      const rn = await nextReq(ticket, wait);
+      if (!active()) return null;
       if (rn) return rn;
-      // continue polling
+      wait = Math.min(20000, Math.round(wait * 1.25)); // backoff up to 20s
     }
     return null;
   }
@@ -510,7 +515,7 @@ export default function ChatClient() {
       });
       if (!isActiveSid(sid)) return;
 
-      // wait for room with continuous polling
+      // wait for room with continuous polling + backoff
       const roomName = await waitRoomLoop(ticket, sid);
       if (!roomName) { setPhase("stopped"); return; }
 
@@ -532,7 +537,12 @@ export default function ChatClient() {
         (window as any).__pairId = roomName;
       } catch {}
 
-      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+      // ws URL fallback
+      const ws =
+        process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ??
+        process.env.LIVEKIT_URL ??
+        "";
+
       isConnectingRef.current = true;
       await room.connect(ws, token);
       if (!isActiveSid(sid)) { try { await room.disconnect(false); } catch {} isConnectingRef.current = false; return; }
@@ -732,6 +742,11 @@ export default function ChatClient() {
   }, [hydrated, filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
   /* ===== 9) UI ===== */
+  const elapsed = Date.now() - (searchStartRef.current || Date.now());
+  let waitMsg = "Searching for a match…";
+  if (elapsed > 8000 && elapsed <= 20000) waitMsg = "Widening the search. Hang tight…";
+  else if (elapsed > 20000) waitMsg = "Tip: try tweaking gender or countries for faster matches.";
+
   return (
     <>
       <LikeHud />
@@ -761,7 +776,7 @@ export default function ChatClient() {
 
             {rtcPhase === "searching" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
-                <div className="mb-4">Searching for a partner…</div>
+                <div className="mb-4">{waitMsg}</div>
                 <button
                   onClick={() => toast("🛑 Search cancelled")}
                   className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
