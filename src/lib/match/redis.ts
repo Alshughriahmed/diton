@@ -1,6 +1,6 @@
 // src/lib/match/redis.ts
 // Score-based matching per matching.md + ss.md.
-// No new deps. Talks to Upstash REST directly.
+// No new deps. Talks to Upstash REST directly, all args as strings.
 
 export type GenderNorm = "m" | "f" | "c" | "l" | "u";
 
@@ -20,6 +20,8 @@ export interface MatchResult {
   room?: string;
   matchedWith?: string; // other ticket
 }
+
+/* ================= ENV ================= */
 
 const BASE = process.env.UPSTASH_REDIS_REST_URL || "";
 const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
@@ -43,28 +45,37 @@ function toStrArray(cmd: Cmd): string[] {
 
 async function redisCmd(cmd: Cmd): Promise<any> {
   if (!haveRedisEnv()) throw new Error("Upstash env missing");
+  const arr = toStrArray(cmd);
   const res = await fetch(BASE, {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ command: toStrArray(cmd) }),
+    body: JSON.stringify({ command: arr }),
     cache: "no-store",
   });
-  const j = await res.json();
-  if (!res.ok || j.error) throw new Error(j.error || res.statusText);
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || (j && typeof j === "object" && "error" in j && j.error)) {
+    const msg = (j && j.error) || res.statusText || "unknown";
+    throw new Error(`UPSTASH ${arr[0]}: ${msg}`);
+  }
   return j.result;
 }
 
 async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
   if (!haveRedisEnv()) throw new Error("Upstash env missing");
+  const arr = cmds.map((c) => toStrArray(c));
   const res = await fetch(BASE + "/pipeline", {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ commands: cmds.map((c) => toStrArray(c)) }),
+    body: JSON.stringify({ commands: arr }),
     cache: "no-store",
   });
-  const j = await res.json();
-  const arr: any[] = Array.isArray(j) ? j : (Array.isArray(j.result) ? j.result : []);
-  return arr.map((x: any) => (x && typeof x === "object" && "result" in x ? x.result : x));
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || (j && typeof j === "object" && "error" in j && j.error)) {
+    const msg = (j && j.error) || res.statusText || "unknown";
+    throw new Error(`UPSTASH PIPELINE: ${msg}`);
+  }
+  const out: any[] = Array.isArray(j) ? j : (Array.isArray((j as any).result) ? (j as any).result : []);
+  return out.map((x: any) => (x && typeof x === "object" && "result" in x ? x.result : x));
 }
 
 async function zcard(key: string): Promise<number> {
@@ -78,7 +89,15 @@ async function zrangebyscore(
   offset: number,
   count: number
 ): Promise<string[]> {
-  const r = await redisCmd(["ZRANGEBYSCORE", key, String(min), String(max), "LIMIT", String(offset), String(count)]);
+  const r = await redisCmd([
+    "ZRANGEBYSCORE",
+    key,
+    String(min),
+    String(max),
+    "LIMIT",
+    String(offset),
+    String(count),
+  ]);
   return Array.isArray(r) ? r.map(String) : [];
 }
 
@@ -154,10 +173,6 @@ function csvToArray(s: string | null | undefined): string[] {
   return String(s).split(",").map((x) => x.trim()).filter(Boolean);
 }
 
-function toCSV(arr: string[]): string {
-  return arr.join(",");
-}
-
 /* ================= Read helpers ================= */
 
 export async function getRoom(ticket: string): Promise<string | null> {
@@ -168,10 +183,16 @@ export async function getRoom(ticket: string): Promise<string | null> {
 export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null> {
   const h = await hgetallObj(ATTR_KEY(ticket));
   if (!h) return null;
+
   const selfCountry = h.selfCountry ? String(h.selfCountry).toUpperCase() : null;
-  const genders = csvToArray(h.filterGendersCSV).map(normalizeGender)
+  const genders = csvToArray(h.filterGendersCSV)
+    .map(normalizeGender)
     .filter((g) => g !== "u") as Exclude<GenderNorm, "u">[];
   const countries = csvToArray(h.filterCountriesCSV).map((x) => x.toUpperCase());
+
+  const vipRaw = String(h.vip ?? "0").toLowerCase();
+  const vip = vipRaw === "1" || vipRaw === "true";
+
   return {
     ticket,
     identity: String(h.identity || ""),
@@ -180,7 +201,7 @@ export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null
     selfCountry,
     filterGenders: genders.slice(0, 2),
     filterCountries: countries.slice(0, 15),
-    vip: !!(+String(h.vip || "0")),
+    vip,
     ts: Number(h.ts || Date.now()),
   };
 }
@@ -298,8 +319,8 @@ function roomNameFor(a: string, b: string): string {
 
 async function claimBoth(me: string, other: string, ttlMs: number, room: string): Promise<boolean> {
   // lock "other" briefly to avoid double-claim races
-  const locked = await redisCmd(["SET", LOCK_KEY(other), me, "NX", "PX", String(4000)]);
-  if (locked !== "OK") return false;
+  const locked = await setNXPX(LOCK_KEY(other), me, 4000);
+  if (!locked) return false;
   try {
     const a = await setNXPX(ROOM_KEY(me), room, ttlMs);
     if (!a) return false;
@@ -389,7 +410,10 @@ export async function tryMatch(ticket: string, widenOrNow?: boolean | number): P
       filterGenders: csvToArray(data.filterGendersCSV).map(normalizeGender)
         .filter((g) => g !== "u") as Exclude<GenderNorm,"u">[],
       filterCountries: csvToArray(data.filterCountriesCSV).map((x) => x.toUpperCase()),
-      vip: !!(+String(data.vip || "0")),
+      vip: (() => {
+        const v = String(data.vip ?? "0").toLowerCase();
+        return v === "1" || v === "true";
+      })(),
       ts: Number(data.ts || now),
     };
 
@@ -451,31 +475,41 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
     .map((x) => String(x).toUpperCase())
     .slice(0, 15);
 
+  // تخزين VIP كـ "1"/"0" لتجنّب مشاكل التحويل
+  const vipStr = inp.vip ? 1 : 0;
+
   const obj: Record<string, string | number | boolean | null> = {
     identity: String(inp.identity || ""),
     deviceId: String(inp.deviceId || ""),
     selfGender,
     selfCountry: inp.selfCountry ? String(inp.selfCountry).toUpperCase() : null,
-    filterGendersCSV: toCSV(filterGenders as unknown as string[]),
-    filterCountriesCSV: toCSV(filterCountries),
-    vip: !!inp.vip,
+    filterGendersCSV: (filterGenders as unknown as string[]).join(","),
+    filterCountriesCSV: filterCountries.join(","),
+    vip: vipStr,
     ts,
   };
 
-  // write attributes + TTL
-  await hsetObj(ATTR_KEY(ticket), obj);
-  await pexpire(ATTR_KEY(ticket), TTL_MS);
+  // [ATTR:HSET]
+  try { await hsetObj(ATTR_KEY(ticket), obj); }
+  catch (e: any) { throw new Error(`[ATTR:HSET] ${e?.message || e}`); }
 
-  // device mapping
+  // [ATTR:PEXPIRE]
+  try { await pexpire(ATTR_KEY(ticket), TTL_MS); }
+  catch (e: any) { throw new Error(`[ATTR:PEXPIRE] ${e?.message || e}`); }
+
+  // device mapping [DEV:SET]
   if (inp.deviceId) {
-    try { await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", String(TTL_MS)]); } catch {}
+    try { await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", String(TTL_MS)]); }
+    catch (e: any) { throw new Error(`[DEV:SET] ${e?.message || e}`); }
   }
 
-  // queue push with recency score
-  await zaddNX(Q_KEY, ts, ticket);
+  // queue push with recency score [Q:ZADD]
+  try { await zaddNX(Q_KEY, ts, ticket); }
+  catch (e: any) { throw new Error(`[Q:ZADD] ${e?.message || e}`); }
 
-  // sweep old entries
-  await zremrangebyscore(Q_KEY, 0, now - TTL_MS);
+  // sweep old entries [Q:SWEEP]
+  try { await zremrangebyscore(Q_KEY, 0, now - TTL_MS); }
+  catch (e: any) { throw new Error(`[Q:SWEEP] ${e?.message || e}`); }
 
   return { ticket, ts };
 }
