@@ -165,7 +165,7 @@ export default function ChatClient() {
   }
   function identity(): string {
     const base = String(profile?.displayName || "anon").trim() || "anon";
-    const did = String(stableDid());
+    aconst did = String(stableDid());
     const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
     return `${base}#${tail}`;
   }
@@ -430,16 +430,19 @@ export default function ChatClient() {
         if (j?.t === "meta:init" || topic === "meta") {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
-        // chat: accept by t=chat or topic=chat
+        // chat: accept {t:"chat"} or topic="chat"
         if ((j?.t === "chat" || topic === "chat") && typeof j.text === "string") {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
+        // like: fan-out للحدثين القديم والجديد
+        if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
+          const detail = { pairId: roomName, liked: !!j?.liked };
+          window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
+          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
+        }
         if (j?.t === "peer-meta" && j.payload) {
           window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
-        }
-        if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
-          window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { pairId: roomName } }));
         }
       } catch {}
     };
@@ -536,7 +539,8 @@ export default function ChatClient() {
       // wsURL fallback chain
       const ws =
         process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ??
-        (process as any).env?.LIVEKIT_URL ?? "";
+        (process as any).env?.LIVEKIT_URL ??
+        "";
 
       isConnectingRef.current = true;
       await room.connect(ws, token);
@@ -843,7 +847,7 @@ export default function ChatClient() {
 
           {/* bars */}
           <ChatToolbar />
-          <UpsellModal />
+          <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
           <ChatMessagingBar />
         </div>
       </div>
