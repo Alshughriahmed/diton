@@ -1,3 +1,4 @@
+// src/app/chat/ChatClient.tsx
 "use client";
 
 /**
@@ -99,6 +100,13 @@ export default function ChatClient() {
   const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
+  // polling abort controller
+  const pollAbortRef = useRef<AbortController | null>(null);
+
+  // searching UX
+  const searchStartRef = useRef(0);
+  const [searchMsg, setSearchMsg] = useState("Searching for a match…");
+
   // state
   const [ready, setReady] = useState(false);
   const [like, setLike] = useState(false);
@@ -111,10 +119,6 @@ export default function ChatClient() {
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const lastNextTsRef = useRef(0);
 
-  // progressive search message
-  const searchStartRef = useRef(0);
-  const [searchMsg, setSearchMsg] = useState("Searching for a match…");
-
   // LiveKit room & guards
   const roomRef = useRef<Room | null>(null);
   const roomUnsubsRef = useRef<(() => void)[]>([]);
@@ -123,16 +127,17 @@ export default function ChatClient() {
   const isConnectingRef = useRef(false);
 
   // persist mic/cam and remote mute across Next/Prev
-  const lastMediaStateRef = useRef<{ micOn: boolean; camOn: boolean; remoteMuted: boolean }>({
-    micOn: true,
-    camOn: true,
-    remoteMuted: false,
-  });
+  const lastMediaStateRef = useRef<{ micOn: boolean; camOn: boolean; remoteMuted: boolean }>(
+    { micOn: true, camOn: true, remoteMuted: false }
+  );
 
   // session lock
   const sidRef = useRef(0);
   function newSid(): number {
     sidRef.current += 1;
+    // abort any in-flight /next long-poll
+    try { pollAbortRef.current?.abort(); } catch {}
+    pollAbortRef.current = null;
     return sidRef.current;
   }
   function isActiveSid(sid: number) {
@@ -192,22 +197,30 @@ export default function ChatClient() {
     const j = await r.json();
     return String(j.ticket || "");
   }
-  async function nextReq(ticket: string, waitMs = 8000): Promise<string | null> {
-    const r = await fetch(
-      `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`,
-      { method: "GET", credentials: "include", cache: "no-store" }
-    );
-    if (r.status === 204) return null;
-    if (!r.ok) throw new Error(`next failed ${r.status}`);
-    const j = await r.json();
-    const raw: unknown = (j as any)?.room;
-    if (typeof raw === "string") return raw;
-    if (raw && typeof raw === "object") {
-      const obj = raw as Record<string, unknown>;
-      return String(obj.name || obj.id || obj.room || JSON.stringify(obj));
+
+  async function nextReq(ticket: string, waitMs = 8000, elapsedMs = 0, signal?: AbortSignal): Promise<string | null> {
+    try {
+      const r = await fetch(
+        `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}&elapsed=${elapsedMs}`,
+        { method: "GET", credentials: "include", cache: "no-store", signal }
+      );
+      if (r.status === 204) return null;
+      if (!r.ok) throw new Error(`next failed ${r.status}`);
+      const j = await r.json();
+      const raw: unknown = (j as any)?.room;
+      if (typeof raw === "string") return raw;
+      if (raw && typeof raw === "object") {
+        const obj = raw as Record<string, unknown>;
+        return String(obj.name || obj.id || obj.room || JSON.stringify(obj));
+      }
+      return null;
+    } catch (e: any) {
+      // Abort is expected on cancel/sid change
+      if (e?.name === "AbortError") return null;
+      throw e;
     }
-    return null;
   }
+
   async function tokenReq(room: string, id: string): Promise<string> {
     const r = await fetch(
       `/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`,
@@ -320,23 +333,35 @@ export default function ChatClient() {
     } catch {}
   }
 
-  // polling loop so searching never stops until matched or sid changes
+  // polling loop: fixed 8s long-poll with immediate restart; abort on sid change
   async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
-    let wait = 8000; // start 8s
+    const WAIT_MS = 8000;
     const active = () => isActiveSid(sid);
+
+    // fresh controller for this loop
+    pollAbortRef.current?.abort();
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+
     while (active()) {
-      const rn = await nextReq(ticket, wait);
-      if (!active()) return null;
+      const elapsed = Date.now() - (searchStartRef.current || Date.now());
+      const rn = await nextReq(ticket, WAIT_MS, elapsed, controller.signal);
+      if (!active()) { controller.abort(); return null; }
       if (rn) return rn;
-      // backoff 8s → 10s → 12.5s … ≤ 20s
-      wait = Math.min(20000, Math.round(wait * 1.25));
+      // small gap to avoid tight loop if server returns early
+      await new Promise((r) => setTimeout(r, 50));
     }
+    controller.abort();
     return null;
   }
 
   async function leaveRoom(): Promise<void> {
     if (leavingRef.current) return;
     leavingRef.current = true;
+
+    // stop polling immediately
+    try { pollAbortRef.current?.abort(); } catch {}
+    pollAbortRef.current = null;
 
     snapshotMediaState();
 
@@ -441,7 +466,7 @@ export default function ChatClient() {
         if (j?.t === "meta:init" || topic === "meta") {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
-        // chat payload restricted to {t:"chat", text, pairId?}
+        // chat: only accept normalized shape; pass pairId when present
         if (j?.t === "chat" && typeof j.text === "string") {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
@@ -501,7 +526,7 @@ export default function ChatClient() {
       const selfGenderNorm = normalizeGender(profile?.gender as any); // m|f|c|l|u
       const payloadSelfGender = isEveryoneLike(selfGenderNorm) ? undefined : (selfGenderNorm as any);
 
-      // filter genders from store (preferred helper), fallback to manual
+      // filter genders from store or fallback
       const filterGendersNorm =
         typeof filters.filterGendersNorm === "function"
           ? (filters.filterGendersNorm() as ("m" | "f" | "c" | "l")[])
@@ -522,7 +547,7 @@ export default function ChatClient() {
       });
       if (!isActiveSid(sid)) return;
 
-      // wait for room with continuous polling + backoff
+      // wait for room with continuous fixed 8s long-poll
       const roomName = await waitRoomLoop(ticket, sid);
       if (!roomName) { setPhase("stopped"); return; }
 
@@ -544,11 +569,11 @@ export default function ChatClient() {
         (window as any).__pairId = roomName;
       } catch {}
 
-      // wsURL fallback as per plan
+      // ws URL with fallback
       const ws =
         process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ??
-        (process.env as any).LIVEKIT_URL ??
-        "";
+        (process.env as any).LIVEKIT_URL ?? "";
+
       isConnectingRef.current = true;
       await room.connect(ws, token);
       if (!isActiveSid(sid)) { try { await room.disconnect(false); } catch {} isConnectingRef.current = false; return; }
@@ -586,18 +611,19 @@ export default function ChatClient() {
     }
   }
 
-  /* ===== progressive wait message timer ===== */
+  /* ===== 8) Search message ticker ===== */
   useEffect(() => {
     if (rtcPhase !== "searching") return;
     const iv = setInterval(() => {
-      const e = Date.now() - searchStartRef.current;
+      const e = Date.now() - (searchStartRef.current || Date.now());
       if (e > 20000) setSearchMsg("Tip: try tweaking gender or countries for faster matches.");
       else if (e > 8000) setSearchMsg("Widening the search. Hang tight…");
+      else setSearchMsg("Searching for a match…");
     }, 500);
     return () => clearInterval(iv);
   }, [rtcPhase]);
 
-  /* ===== 8) Mount / UI wiring ===== */
+  /* ===== 9) Mount / UI wiring ===== */
   useEffect(() => {
     if (!hydrated || !isBrowser) return;
 
@@ -758,7 +784,7 @@ export default function ChatClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
-  /* ===== 9) UI ===== */
+  /* ===== 10) UI ===== */
   return (
     <>
       <LikeHud />
@@ -790,7 +816,12 @@ export default function ChatClient() {
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">{searchMsg}</div>
                 <button
-                  onClick={() => toast("🛑 Search cancelled")}
+                  onClick={async () => {
+                    // Cancel search: invalidate sid, abort polling, leave room, stop state
+                    newSid();
+                    await leaveRoom();
+                    toast("🛑 Search cancelled");
+                  }}
                   className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
                 >
                   Cancel
