@@ -8,12 +8,12 @@ export interface TicketAttrs {
   ticket: string;
   identity: string;
   deviceId: string;
-  selfGender: GenderNorm;       // normalized letter
-  selfCountry: string | null;   // ISO2 or null
+  selfGender: GenderNorm;            // normalized letter
+  selfCountry: string | null;        // ISO2 or null
   filterGenders: Exclude<GenderNorm, "u">[]; // 0..2
-  filterCountries: string[];    // 0..15 ISO2
+  filterCountries: string[];         // 0..15 ISO2
   vip: boolean;
-  ts: number;                   // enqueue time (ms)
+  ts: number;                        // enqueue time (ms)
 }
 
 export interface MatchResult {
@@ -94,10 +94,6 @@ async function hgetallObj(key: string): Promise<Record<string, string> | null> {
   return null;
 }
 
-async function exists(key: string): Promise<boolean> {
-  return Number(await redisCmd(["EXISTS", key])) > 0;
-}
-
 async function setNXPX(key: string, value: string, ttlMs: number): Promise<boolean> {
   const r = await redisCmd(["SET", key, value, "NX", "PX", ttlMs]);
   return r === "OK";
@@ -128,7 +124,7 @@ async function hsetObj(
   return Number(await redisCmd(["HSET", key, ...flat]));
 }
 
-/* ================= Matching logic ================= */
+/* ================= Keys / consts ================= */
 
 const Q_KEY = "mq:q";
 const ATTR_KEY = (t: string) => `mq:attr:${t}`;
@@ -136,6 +132,8 @@ const ROOM_KEY = (t: string) => `mq:room:${t}`;
 const DEV_KEY = (d: string) => `mq:dev:${d}`;      // reuse ticket per device
 const LOCK_KEY = (t: string) => `mq:lock:${t}`;
 const TTL_MS = 45_000;
+
+/* ================= Normalizers ================= */
 
 function normalizeGender(g: any): GenderNorm {
   const s = String(g || "").toLowerCase();
@@ -154,6 +152,13 @@ function csvToArray(s: string | null | undefined): string[] {
 
 function toCSV(arr: string[]): string {
   return arr.join(",");
+}
+
+/* ================= Read helpers ================= */
+
+export async function getRoom(ticket: string): Promise<string | null> {
+  const r = await redisCmd(["GET", ROOM_KEY(ticket)]);
+  return r ? String(r) : null;
 }
 
 export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null> {
@@ -176,12 +181,14 @@ export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null
   };
 }
 
+/* ================= Matching core ================= */
+
 function elapsedLevel(elapsedMs: number): 0 | 1 | 2 | 3 | 4 {
   if (elapsedMs < 3000) return 0;     // 0–3s: hard only
   if (elapsedMs < 8000) return 1;     // 3–8s: hard only
   if (elapsedMs < 12000) return 2;    // 8–12s: relax country
-  if (elapsedMs < 20000) return 3;    // 12–20s: soft match if no explicit gender blocks
-  return 4;                            // stop trying here; client continues polling
+  if (elapsedMs < 20000) return 3;    // 12–20s: soft if no explicit gender blocks
+  return 4;                            // stop trying here; client keeps polling
 }
 
 type ScoreTuple = [number, number, number, number]; // (hardFlag, genderRank, countryRank, recencyRank)
@@ -209,11 +216,11 @@ function hardOK(me: TicketAttrs, other: TicketAttrs): boolean {
   const meC = me.filterCountries;
   const otherC = other.filterCountries;
 
-  const meAcceptsGender    = meG.length === 0 || meG.includes(other.selfGender as any);
-  const otherAcceptsGender = otherG.length === 0 || otherG.includes(me.selfGender as any);
+  const meAcceptsGender     = meG.length === 0 || meG.includes(other.selfGender as any);
+  const otherAcceptsGender  = otherG.length === 0 || otherG.includes(me.selfGender as any);
 
-  const meAcceptsCountry   = meC.length === 0 || (!!other.selfCountry && meC.includes(other.selfCountry));
-  const otherAcceptsCountry= otherC.length === 0 || (!!me.selfCountry && otherC.includes(me.selfCountry));
+  const meAcceptsCountry    = meC.length === 0 || (!!other.selfCountry && meC.includes(other.selfCountry));
+  const otherAcceptsCountry = otherC.length === 0 || (!!me.selfCountry && otherC.includes(me.selfCountry));
 
   return meAcceptsGender && otherAcceptsGender && meAcceptsCountry && otherAcceptsCountry;
 }
@@ -301,10 +308,21 @@ async function claimBoth(me: string, other: string, ttlMs: number, room: string)
   }
 }
 
-export async function tryMatch(ticket: string, now = Date.now()): Promise<MatchResult | null> {
+/**
+ * tryMatch:
+ * second param kept flexible (boolean | number) for backward-compat with older route.ts.
+ * - if number: treated as "now" timestamp
+ * - if boolean: ignored, we compute elapsed from stored ts
+ */
+export async function tryMatch(ticket: string, widenOrNow?: boolean | number): Promise<MatchResult | null> {
+  // already assigned?
+  const assigned = await getRoom(ticket);
+  if (assigned) return { room: assigned };
+
   const me = await getTicketAttrs(ticket);
   if (!me) return null;
 
+  const now = typeof widenOrNow === "number" ? widenOrNow : Date.now();
   const elapsed = now - me.ts;
   const level = elapsedLevel(elapsed);
   if (level === 4) return null;
@@ -434,7 +452,7 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
     deviceId: String(inp.deviceId || ""),
     selfGender,
     selfCountry: inp.selfCountry ? String(inp.selfCountry).toUpperCase() : null,
-    filterGendersCSV: toCSV(filterGenders as string[]),
+    filterGendersCSV: toCSV(filterGenders as unknown as string[]),
     filterCountriesCSV: toCSV(filterCountries),
     vip: !!inp.vip,
     ts,
