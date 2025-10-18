@@ -1,6 +1,6 @@
 // src/lib/match/redis.ts
 // Score-based matching per matching.md + ss.md.
-// Upstash REST فقط. كل الوسائط تُرسل كسلاسل لتفادي "ERR failed to parse command".
+// Upstash REST only. Store ticket attrs as JSON via SET/GET (no HSET).
 
 export type GenderNorm = "m" | "f" | "c" | "l" | "u";
 
@@ -51,11 +51,11 @@ async function redisCmd(cmd: Cmd): Promise<any> {
     cache: "no-store",
   });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok || (j && (j as any).error)) {
-    const msg = (j as any)?.error || res.statusText || "unknown";
+  if (!res.ok || (j && j.error)) {
+    const msg = (j && j.error) || res.statusText || "unknown";
     throw new Error(`UPSTASH ${arr[0]}: ${msg}`);
   }
-  return (j as any).result;
+  return j.result;
 }
 
 async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
@@ -68,11 +68,11 @@ async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
     cache: "no-store",
   });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok || (j && (j as any).error)) {
-    const msg = (j as any)?.error || res.statusText || "unknown";
+  if (!res.ok || (j && j.error)) {
+    const msg = (j && j.error) || res.statusText || "unknown";
     throw new Error(`UPSTASH PIPELINE: ${msg}`);
   }
-  const out: any[] = Array.isArray(j) ? (j as any[]) : Array.isArray((j as any).result) ? (j as any).result : [];
+  const out: any[] = Array.isArray(j) ? j : Array.isArray(j.result) ? j.result : [];
   return out.map((x: any) => (x && typeof x === "object" && "result" in x ? x.result : x));
 }
 
@@ -95,21 +95,19 @@ async function zremrangebyscore(key: string, min: number, max: number): Promise<
   return Number(await redisCmd(["ZREMRANGEBYSCORE", key, String(min), String(max)]));
 }
 
-async function hgetallObj(key: string): Promise<Record<string, string> | null> {
-  const r = await redisCmd(["HGETALL", key]);
-  if (!r) return null;
-  if (Array.isArray(r)) {
-    const obj: Record<string, string> = {};
-    for (let i = 0; i < r.length; i += 2) obj[String(r[i])] = String(r[i + 1] ?? "");
-    return obj;
-  }
-  if (typeof r === "object") return r as Record<string, string>;
-  return null;
-}
-
 async function setNXPX(key: string, value: string, ttlMs: number): Promise<boolean> {
   const r = await redisCmd(["SET", key, value, "NX", "PX", String(ttlMs)]);
   return r === "OK";
+}
+
+async function setPX(key: string, value: string, ttlMs: number): Promise<boolean> {
+  const r = await redisCmd(["SET", key, value, "PX", String(ttlMs)]);
+  return r === "OK";
+}
+
+async function getStr(key: string): Promise<string | null> {
+  const r = await redisCmd(["GET", key]);
+  return r == null ? null : String(r);
 }
 
 async function pexpire(key: string, ttlMs: number): Promise<number> {
@@ -128,19 +126,10 @@ async function zaddNX(key: string, score: number, member: string): Promise<numbe
   return Number(await redisCmd(["ZADD", key, "NX", String(score), member]));
 }
 
-async function hsetObj(
-  key: string,
-  obj: Record<string, string | number | boolean | null>
-): Promise<number> {
-  const flat: string[] = [];
-  for (const [k, v] of Object.entries(obj)) flat.push(k, v === null ? "" : String(v));
-  return Number(await redisCmd(["HSET", key, ...flat]));
-}
-
 /* ================= Keys / consts ================= */
 
 const Q_KEY = "mq:q";
-const ATTR_KEY = (t: string) => `mq:attr:${t}`;
+const ATTR_KEY = (t: string) => `mq:attr:${t}`; // stores JSON string
 const ROOM_KEY = (t: string) => `mq:room:${t}`;
 const DEV_KEY = (d: string) => `mq:dev:${d}`; // reuse ticket per device
 const LOCK_KEY = (t: string) => `mq:lock:${t}`;
@@ -174,8 +163,19 @@ export async function getRoom(ticket: string): Promise<string | null> {
   return r ? String(r) : null;
 }
 
+async function getTicketRaw(ticket: string): Promise<Record<string, any> | null> {
+  const txt = await getStr(ATTR_KEY(ticket));
+  if (!txt) return null;
+  try {
+    const obj = JSON.parse(txt);
+    return obj && typeof obj === "object" ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getTicketAttrs(ticket: string): Promise<TicketAttrs | null> {
-  const h = await hgetallObj(ATTR_KEY(ticket));
+  const h = await getTicketRaw(ticket);
   if (!h) return null;
   const selfCountry = h.selfCountry ? String(h.selfCountry).toUpperCase() : null;
   const genders = csvToArray(h.filterGendersCSV).map(normalizeGender).filter((g) => g !== "u") as Exclude<
@@ -259,7 +259,6 @@ function allowedByWiden(level: 0 | 1 | 2 | 3 | 4, me: TicketAttrs, other: Ticket
   if (level === 3) {
     if (genderMutual && countryMutual) return true;
     if (genderMutual) return true;
-    // soft: allow if no explicit gender blocks on either side
     const meBlocks = meG.length > 0 && !meG.includes(other.selfGender as any);
     const otherBlocks = otherG.length > 0 && !otherG.includes(me.selfGender as any);
     return !(meBlocks || otherBlocks);
@@ -278,7 +277,6 @@ function computeScore(level: 0 | 1 | 2 | 3 | 4, me: TicketAttrs, other: TicketAt
 
   let countryRank: number;
   if (countryOrder.length === 0) {
-    // treat selfCountry as internal preference, not a hard constraint
     countryRank = other.selfCountry && me.selfCountry && other.selfCountry === me.selfCountry ? 0 : 1;
     countryRank += jitter(`${me.ticket}|${other.ticket}`);
   } else {
@@ -305,8 +303,7 @@ function roomNameFor(a: string, b: string): string {
 }
 
 async function claimBoth(me: string, other: string, ttlMs: number, room: string): Promise<boolean> {
-  // lock "other" briefly to avoid double-claim races
-  const locked = await setNXPX(LOCK_KEY(other), me, 4000);
+  const locked = await setNXPX(LOCK_KEY(other), me, ttlMs > 4000 ? 4000 : ttlMs);
   if (!locked) return false;
   try {
     const a = await setNXPX(ROOM_KEY(me), room, ttlMs);
@@ -325,10 +322,9 @@ async function claimBoth(me: string, other: string, ttlMs: number, room: string)
 
 /**
  * tryMatch:
- * البارام الثاني احتياطي للتوافق. إن كان رقمًا يُعامَل كـ now.
+ * second param kept for compat. If number, treated as "now".
  */
 export async function tryMatch(ticket: string, widenOrNow?: boolean | number): Promise<MatchResult | null> {
-  // already assigned?
   const assigned = await getRoom(ticket);
   if (assigned) return { room: assigned };
 
@@ -340,14 +336,12 @@ export async function tryMatch(ticket: string, widenOrNow?: boolean | number): P
   const level = elapsedLevel(elapsed);
   if (level === 4) return null;
 
-  // dynamic sampling based on queue size
   const qCount = await zcard(Q_KEY);
   const PAGE = 64;
   let target = 64;
   if (qCount > 2000) target = 256;
   else if (qCount > 200) target = 128;
 
-  // collect candidates from recent window [now - TTL .. now]
   const minScore = now - TTL_MS;
   const maxScore = now;
 
@@ -365,10 +359,10 @@ export async function tryMatch(ticket: string, widenOrNow?: boolean | number): P
 
   if (collected.length === 0) return null;
 
-  // pipeline: HGETALL + EXISTS(room) per candidate
+  // pipeline: GET(attr-json) + EXISTS(room)
   const cmds: Cmd[] = [];
   for (const t of collected) {
-    cmds.push(["HGETALL", ATTR_KEY(t)]);
+    cmds.push(["GET", ATTR_KEY(t)]);
     cmds.push(["EXISTS", ROOM_KEY(t)]);
   }
   const res = await redisPipeline(cmds);
@@ -376,17 +370,17 @@ export async function tryMatch(ticket: string, widenOrNow?: boolean | number): P
   let best: { ticket: string; score: ScoreTuple } | null = null;
 
   for (let i = 0; i < collected.length; i++) {
-    const h = res[i * 2];
+    const txt = res[i * 2] as string | null;
     const ex = res[i * 2 + 1];
-    if (!h || Number(ex) > 0) continue;
+    if (!txt || Number(ex) > 0) continue;
 
-    const data: Record<string, string> = Array.isArray(h)
-      ? (() => {
-          const obj: Record<string, string> = {};
-          for (let j = 0; j < h.length; j += 2) obj[String(h[j])] = String(h[j + 1] ?? "");
-          return obj;
-        })()
-      : (h as Record<string, string>);
+    let data: any = null;
+    try {
+      data = JSON.parse(String(txt));
+    } catch {
+      continue;
+    }
+    if (!data || typeof data !== "object") continue;
 
     const other: TicketAttrs = {
       ticket: collected[i],
@@ -459,7 +453,7 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
 
   const filterCountries = (inp.filterCountries || []).map((x) => String(x).toUpperCase()).slice(0, 15);
 
-  const obj: Record<string, string | number | boolean | null> = {
+  const obj: Record<string, any> = {
     identity: String(inp.identity || ""),
     deviceId: String(inp.deviceId || ""),
     selfGender,
@@ -470,19 +464,14 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
     ts,
   };
 
-  // labeled steps for precise error messages
+  // store JSON with TTL in single SET
   try {
-    await hsetObj(ATTR_KEY(ticket), obj); // [ATTR:HSET]
+    await setPX(ATTR_KEY(ticket), JSON.stringify(obj), TTL_MS); // [ATTR:SET]
   } catch (e: any) {
-    throw new Error(`[ATTR:HSET] ${e?.message || e}`);
+    throw new Error(`[ATTR:SET] ${e?.message || e}`);
   }
 
-  try {
-    await pexpire(ATTR_KEY(ticket), TTL_MS); // [ATTR:PEXPIRE]
-  } catch (e: any) {
-    throw new Error(`[ATTR:PEXPIRE] ${e?.message || e}`);
-  }
-
+  // device mapping
   if (inp.deviceId) {
     try {
       await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", String(TTL_MS)]); // [DEV:SET]
@@ -491,12 +480,14 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
     }
   }
 
+  // queue push with recency score
   try {
     await zaddNX(Q_KEY, ts, ticket); // [Q:ZADD]
   } catch (e: any) {
     throw new Error(`[Q:ZADD] ${e?.message || e}`);
   }
 
+  // sweep old entries
   try {
     await zremrangebyscore(Q_KEY, 0, now - TTL_MS); // [Q:SWEEP]
   } catch (e: any) {
