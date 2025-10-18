@@ -15,7 +15,7 @@ function noStore(h?: Headers) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function handle(ticket: string, wait: number) {
+async function handle(ticket: string, waitMs: number) {
   if (!ticket) {
     return new NextResponse(JSON.stringify({ error: "ticket required" }), {
       status: 400,
@@ -25,6 +25,7 @@ async function handle(ticket: string, wait: number) {
 
   const t0 = Date.now();
   while (true) {
+    // 1) إن كانت الغرفة مسجّلة مسبقًا
     const assigned = await getRoom(ticket);
     if (assigned) {
       return new NextResponse(JSON.stringify({ room: assigned }), {
@@ -33,19 +34,21 @@ async function handle(ticket: string, wait: number) {
       });
     }
 
-    const elapsed = Date.now() - t0;
-    const widen = elapsed > 3000;
-    const room = await tryMatch(ticket, widen);
-    if (room) {
-      return new NextResponse(JSON.stringify({ room }), {
+    // 2) محاولة مطابقة بنظام Score (المستوى يُحسب داخل tryMatch)
+    const mr = await tryMatch(ticket);
+    if (mr?.room) {
+      return new NextResponse(JSON.stringify({ room: mr.room }), {
         status: 200,
         headers: noStore(),
       });
     }
 
-    if (elapsed >= wait) {
+    // 3) انتهاء نافذة الانتظار لهذه الدورة
+    if (Date.now() - t0 >= waitMs) {
       return new NextResponse(null, { status: 204, headers: noStore(new Headers()) });
     }
+
+    // 4) انتظار قصير قبل تكرار المحاولة
     await sleep(400);
   }
 }
@@ -61,14 +64,14 @@ export async function GET(req: NextRequest) {
       headers: noStore(),
     });
   }
-
   const { searchParams } = new URL(req.url);
   const ticket = searchParams.get("ticket") || "";
-  const wait = Math.min(10_000, Math.max(0, Number(searchParams.get("wait") || "0")));
+  const rawWait = Number(searchParams.get("wait") || "0");
+  const wait = Math.min(8000, Math.max(0, isFinite(rawWait) ? rawWait : 0));
   return handle(ticket, wait);
 }
 
-// Accept POST as alias to GET for backward-compat
+// POST alias لحماية التوافق
 export async function POST(req: NextRequest) {
   if (!haveRedisEnv()) {
     return new NextResponse(JSON.stringify({ error: "redis env missing" }), {
@@ -76,7 +79,6 @@ export async function POST(req: NextRequest) {
       headers: noStore(),
     });
   }
-
   const url = new URL(req.url);
   const qsTicket = url.searchParams.get("ticket");
   const qsWait = url.searchParams.get("wait");
@@ -86,9 +88,8 @@ export async function POST(req: NextRequest) {
 
   const rawTicket = (qsTicket ?? body?.ticket ?? "") as string;
   const rawWait = Number(qsWait ?? body?.wait ?? 0);
-
   const ticket = rawTicket ? String(rawTicket) : "";
-  const wait = Math.min(10_000, Math.max(0, isFinite(rawWait) ? rawWait : 0));
+  const wait = Math.min(8000, Math.max(0, isFinite(rawWait) ? rawWait : 0));
 
   return handle(ticket, wait);
 }
