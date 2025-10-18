@@ -8,12 +8,12 @@ export interface TicketAttrs {
   ticket: string;
   identity: string;
   deviceId: string;
-  selfGender: GenderNorm;            // normalized letter
-  selfCountry: string | null;        // ISO2 or null
+  selfGender: GenderNorm;                  // normalized letter
+  selfCountry: string | null;              // ISO2 or null
   filterGenders: Exclude<GenderNorm, "u">[]; // 0..2
-  filterCountries: string[];         // 0..15 ISO2
+  filterCountries: string[];               // 0..15 ISO2
   vip: boolean;
-  ts: number;                        // enqueue time (ms)
+  ts: number;                              // enqueue time (ms)
 }
 
 export interface MatchResult {
@@ -37,12 +37,16 @@ if (!haveRedisEnv()) {
 
 type Cmd = (string | number)[];
 
+function toStrArray(cmd: Cmd): string[] {
+  return cmd.map((x) => String(x));
+}
+
 async function redisCmd(cmd: Cmd): Promise<any> {
   if (!haveRedisEnv()) throw new Error("Upstash env missing");
   const res = await fetch(BASE, {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ command: cmd }),
+    body: JSON.stringify({ command: toStrArray(cmd) }),
     cache: "no-store",
   });
   const j = await res.json();
@@ -55,7 +59,7 @@ async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
   const res = await fetch(BASE + "/pipeline", {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ commands: cmds }),
+    body: JSON.stringify({ commands: cmds.map((c) => toStrArray(c)) }),
     cache: "no-store",
   });
   const j = await res.json();
@@ -74,7 +78,7 @@ async function zrangebyscore(
   offset: number,
   count: number
 ): Promise<string[]> {
-  const r = await redisCmd(["ZRANGEBYSCORE", key, String(min), String(max), "LIMIT", offset, count]);
+  const r = await redisCmd(["ZRANGEBYSCORE", key, String(min), String(max), "LIMIT", String(offset), String(count)]);
   return Array.isArray(r) ? r.map(String) : [];
 }
 
@@ -95,12 +99,12 @@ async function hgetallObj(key: string): Promise<Record<string, string> | null> {
 }
 
 async function setNXPX(key: string, value: string, ttlMs: number): Promise<boolean> {
-  const r = await redisCmd(["SET", key, value, "NX", "PX", ttlMs]);
+  const r = await redisCmd(["SET", key, value, "NX", "PX", String(ttlMs)]);
   return r === "OK";
 }
 
 async function pexpire(key: string, ttlMs: number): Promise<number> {
-  return Number(await redisCmd(["PEXPIRE", key, ttlMs]));
+  return Number(await redisCmd(["PEXPIRE", key, String(ttlMs)]));
 }
 
 async function del(key: string): Promise<number> {
@@ -112,14 +116,14 @@ async function zrem(key: string, ...members: string[]): Promise<number> {
 }
 
 async function zaddNX(key: string, score: number, member: string): Promise<number> {
-  return Number(await redisCmd(["ZADD", key, "NX", score, member]));
+  return Number(await redisCmd(["ZADD", key, "NX", String(score), member]));
 }
 
 async function hsetObj(
   key: string,
   obj: Record<string, string | number | boolean | null>
 ): Promise<number> {
-  const flat: (string | number)[] = [];
+  const flat: string[] = [];
   for (const [k, v] of Object.entries(obj)) flat.push(k, v === null ? "" : String(v));
   return Number(await redisCmd(["HSET", key, ...flat]));
 }
@@ -294,8 +298,8 @@ function roomNameFor(a: string, b: string): string {
 
 async function claimBoth(me: string, other: string, ttlMs: number, room: string): Promise<boolean> {
   // lock "other" briefly to avoid double-claim races
-  const locked = await setNXPX(LOCK_KEY(other), me, 4000);
-  if (!locked) return false;
+  const locked = await redisCmd(["SET", LOCK_KEY(other), me, "NX", "PX", String(4000)]);
+  if (locked !== "OK") return false;
   try {
     const a = await setNXPX(ROOM_KEY(me), room, ttlMs);
     if (!a) return false;
@@ -464,7 +468,7 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
 
   // device mapping
   if (inp.deviceId) {
-    try { await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", TTL_MS]); } catch {}
+    try { await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", String(TTL_MS)]); } catch {}
   }
 
   // queue push with recency score
