@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { genderBadge } from "@/lib/gender";
+import { normalizeGender, genderLabel, genderSymbol } from "@/lib/gender";
 
 type Meta = {
   country?: string;
@@ -21,6 +21,28 @@ function loadCached(): Meta {
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
+  }
+}
+
+function genderBadgeLocal(g: unknown): { label: string; cls: string } | null {
+  const n = normalizeGender(g);
+  if (n === "u") return null;
+  const label = `${genderSymbol(n)} ${genderLabel(n)}`;
+  switch (n) {
+    case "m":
+      return { label, cls: "text-blue-500" };      // ذكر: أزرق غامق
+    case "f":
+      return { label, cls: "text-red-500" };       // أنثى: أحمر فاقع
+    case "c":
+      return { label, cls: "text-rose-400" };      // زوج: وردي/أحمر
+    case "l":
+      return {
+        label,
+        // نص قوس قزح بدون صندوق
+        cls: "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent",
+      };
+    default:
+      return null;
   }
 }
 
@@ -107,11 +129,11 @@ export default function PeerOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const g = genderBadge(meta.gender as any);
+  const g = genderBadgeLocal(meta.gender);
 
   return (
     <>
-      {/* Top-left: avatar + name + VIP + likes (transparent) */}
+      {/* Top-left: avatar + name + VIP + likes */}
       <div className="absolute top-2 left-2 z-30 flex items-center gap-2 select-none pointer-events-none">
         <div className="h-7 w-7 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
           {meta.avatarUrl ? (
@@ -129,7 +151,7 @@ export default function PeerOverlay() {
         </div>
       </div>
 
-      {/* Bottom-left: Country–City + gender badge (no box) */}
+      {/* Bottom-left: Country–City + gender badge */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         <span className="text-white/95">
           {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
