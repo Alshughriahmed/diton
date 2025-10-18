@@ -1,181 +1,96 @@
-// src/app/chat/components/MessageHud.tsx
+// src/app/chat/msgSendClient.ts
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+/**
+ * Chat sender over LiveKit Data (outbound only).
+ * يعتمد حصراً على publishData ولا يستخدم DC-fallback.
+ * - يستمع إلى 'ditona:chat:send' {text}
+ * - ينتظر اتصال الغرفة ثم يرسل topic:'chat' وبهيكل {t:'chat', text, pairId}
+ * - عند النجاح يطلق 'ditona:chat:sent' {text, pairId}
+ */
 
-type Line = { text: string; ts: number; dir: "out" | "in" };
+declare global {
+  interface Window {
+    __msgSendMounted3?: 1;
+    __lkRoom?: any;
+    __ditonaPairId?: string;
+    __pairId?: string;
+  }
+}
 
-const MIN_VISIBLE = 3;
+type SendDetail = { text: string; pairId?: string };
 
-export default function MessageHud() {
-  const containerRef = useRef<HTMLDivElement>(null);
+const TOPIC = "chat";
 
-  // pair context
-  const [currentPairId, setCurrentPairId] = useState<string | null>(null);
+function clamp2000(s: string) {
+  const t = (s || "").trim();
+  return t.length > 2000 ? t.slice(0, 2000) : t;
+}
 
-  // per-pair full history kept off-UI
-  const historyRef = useRef<Map<string, Line[]>>(new Map());
+function readPairId(): string | undefined {
+  try {
+    const w = window as any;
+    if (w.__ditonaPairId) return String(w.__ditonaPairId);
+    if (w.__pairId) return String(w.__pairId);
+    const rn = w.__lkRoom?.name;
+    if (typeof rn === "string" && rn.startsWith("pair-")) return rn;
+  } catch {}
+  return undefined;
+}
 
-  // visible window
-  const [visible, setVisible] = useState<Line[]>([]);
-  const [showCount, setShowCount] = useState<number>(MIN_VISIBLE);
+async function waitRoomConnected(ms = 1500): Promise<any | null> {
+  const start = Date.now();
+  // poll كل ~50ms حتى تتصل الغرفة
+  while (Date.now() - start < ms) {
+    const room = (window as any).__lkRoom;
+    if (room && room.state === "connected" && room.localParticipant?.publishData) return room;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return null;
+}
 
-  // autoscroll to bottom of visible
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [visible]);
+async function sendChat(text: string, pairIdHint?: string): Promise<{ ok: boolean; pairId?: string }> {
+  const trimmed = clamp2000(text);
+  if (!trimmed) return { ok: false };
 
-  /* ========== helpers ========== */
-  const setFromHistory = (pid: string | null, count = showCount) => {
-    if (!pid) { setVisible([]); return; }
-    const hist = historyRef.current.get(pid) || [];
-    const n = Math.max(MIN_VISIBLE, Math.min(count, hist.length || MIN_VISIBLE));
-    setVisible(hist.slice(-n));
-  };
+  const room = await waitRoomConnected();
+  if (!room) return { ok: false };
 
-  const pushToHistory = (pid: string, l: Line) => {
-    const hist = historyRef.current.get(pid) || [];
-    hist.push(l);
-    historyRef.current.set(pid, hist);
-    setFromHistory(pid); // keep last N on screen
-  };
+  const pid = pairIdHint || readPairId();
+  const payloadObj = { t: "chat", text: trimmed, pairId: pid };
+  const payloadBin = new TextEncoder().encode(JSON.stringify(payloadObj));
 
-  const clearHistory = (pid?: string | null) => {
-    if (pid) historyRef.current.delete(pid);
-    setShowCount(MIN_VISIBLE);
-    setVisible([]);
-  };
+  await room.localParticipant.publishData(payloadBin, { reliable: true, topic: TOPIC });
+  return { ok: true, pairId: pid };
+}
 
-  /* ========== pair switch / resets ========== */
-  useEffect(() => {
-    const onPair = (e: any) => {
-      const pid = e?.detail?.pairId || e?.pairId || null;
-      setCurrentPairId(pid);
-      setShowCount(MIN_VISIBLE);
-      // start a fresh history bucket for the new pair
-      if (pid) historyRef.current.set(pid, []);
-      setFromHistory(pid, MIN_VISIBLE);
-    };
-    const onReset = (e: any) => {
-      const pid = e?.detail?.pairId ?? currentPairId ?? null;
-      clearHistory(pid);
-      if (pid) historyRef.current.set(pid, []);
-    };
-    window.addEventListener("rtc:pair", onPair as any);
-    window.addEventListener("ui:msg:reset", onReset as any);
-    return () => {
-      window.removeEventListener("rtc:pair", onPair as any);
-      window.removeEventListener("ui:msg:reset", onReset as any);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPairId]);
+if (typeof window !== "undefined" && !window.__msgSendMounted3) {
+  window.__msgSendMounted3 = 1;
 
-  /* ========== in/out messages with ghost guard ========== */
-  useEffect(() => {
-    const add = (dir: "out" | "in") => (e: any) => {
-      const msg = e?.detail ?? {};
-      if (typeof msg.text !== "string") return;
-      const pid: string | null =
-        typeof msg.pairId === "string" && msg.pairId ? msg.pairId : currentPairId;
-      if (!pid || (currentPairId && pid !== currentPairId)) return; // block ghosts
-      pushToHistory(pid, { text: msg.text, ts: Date.now(), dir });
-    };
-    const sent = add("out");
-    const recv = add("in");
-    window.addEventListener("ditona:chat:sent", sent as any);
-    window.addEventListener("ditona:chat:recv", recv as any);
-    return () => {
-      window.removeEventListener("ditona:chat:sent", sent as any);
-      window.removeEventListener("ditona:chat:recv", recv as any);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPairId]);
-
-  /* ========== vertical swipe to reveal older messages ========== */
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    let startY = 0;
-    let baseCount = MIN_VISIBLE;
-    let dragging = false;
-
-    const maxForPair = () => {
-      if (!currentPairId) return MIN_VISIBLE;
-      return (historyRef.current.get(currentPairId) || []).length || MIN_VISIBLE;
-    };
-
-    const onDown = (ev: PointerEvent | TouchEvent) => {
-      const y =
-        (ev as PointerEvent).clientY ??
-        (ev as TouchEvent).touches?.[0]?.clientY ??
-        0;
-      startY = y;
-      baseCount = showCount;
-      dragging = true;
-    };
-    const onMove = (ev: PointerEvent | TouchEvent) => {
-      if (!dragging) return;
-      const y =
-        (ev as PointerEvent).clientY ??
-        (ev as TouchEvent).touches?.[0]?.clientY ??
-        0;
-      const dy = startY - y; // swipe up => positive
-      // each ~24px reveals one more message; down hides
-      const delta = Math.trunc(dy / 24);
-      const wanted = Math.max(MIN_VISIBLE, Math.min(maxForPair(), baseCount + delta));
-      if (wanted !== showCount) {
-        setShowCount(wanted);
-        setFromHistory(currentPairId, wanted);
+  const onSend = async (e: Event) => {
+    const detail = (e as CustomEvent).detail as SendDetail;
+    try {
+      const { ok, pairId } = await sendChat(detail?.text || "", detail?.pairId);
+      if (ok) {
+        window.dispatchEvent(new CustomEvent("ditona:chat:sent", { detail: { text: detail?.text || "", pairId } }));
+      } else {
+        // فشل الإرسال: لا نطلق sent حتى لا نعرض رسالة وهمية
+        console.warn("[chat] send failed: room not connected");
       }
-    };
-    const onUp = () => { dragging = false; };
+    } catch (err) {
+      console.warn("[chat] send error:", err);
+    }
+  };
 
-    el.addEventListener("pointerdown", onDown);
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
-    // touch support
-    el.addEventListener("touchstart", onDown, { passive: true });
-    el.addEventListener("touchmove", onMove as any, { passive: true });
-    el.addEventListener("touchend", onUp, { passive: true });
-    el.addEventListener("touchcancel", onUp, { passive: true });
+  window.addEventListener("ditona:chat:send", onSend as any);
 
-    return () => {
-      el.removeEventListener("pointerdown", onDown);
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.removeEventListener("touchstart", onDown as any);
-      el.removeEventListener("touchmove", onMove as any);
-      el.removeEventListener("touchend", onUp as any);
-      el.removeEventListener("touchcancel", onUp as any);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPairId, showCount]);
-
-  if (visible.length === 0) return null;
-
-  return (
-    <div
-      ref={containerRef}
-      className="pointer-events-none absolute inset-x-2 sm:inset-x-4 bottom-20 sm:bottom-24 z-[55] space-y-1 select-none"
-    >
-      {visible.map((l, i) => (
-        <div
-          key={i}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            try { navigator.clipboard?.writeText(l.text); } catch {}
-          }}
-          className="pointer-events-auto cursor-copy select-text text-white/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] text-sm"
-        >
-          <span className={l.dir === "in" ? "text-white/80" : "text-emerald-300"}>
-            {l.dir === "in" ? "• " : "▲ "}
-          </span>
-          {l.text}
-        </div>
-      ))}
-      <div ref={endRef} />
-    </div>
+  window.addEventListener(
+    "pagehide",
+    () => {
+      try { window.removeEventListener("ditona:chat:send", onSend as any); } catch {}
+    },
+    { once: true }
   );
 }
+
+export {};
