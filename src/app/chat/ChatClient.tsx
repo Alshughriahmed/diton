@@ -1,4 +1,3 @@
-// src/app/chat/ChatClient.tsx
 "use client";
 
 /**
@@ -112,7 +111,7 @@ export default function ChatClient() {
   const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
   const lastNextTsRef = useRef(0);
 
-  // waiting UI state
+  // progressive search message
   const searchStartRef = useRef(0);
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
 
@@ -321,15 +320,16 @@ export default function ChatClient() {
     } catch {}
   }
 
-  // polling loop with backoff and sid-cancel
+  // polling loop so searching never stops until matched or sid changes
   async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
-    let wait = 8000;
+    let wait = 8000; // start 8s
     const active = () => isActiveSid(sid);
     while (active()) {
       const rn = await nextReq(ticket, wait);
       if (!active()) return null;
       if (rn) return rn;
-      wait = Math.min(20000, Math.round(wait * 1.25)); // 8s→10s→12.5s…≤20s
+      // backoff 8s → 10s → 12.5s … ≤ 20s
+      wait = Math.min(20000, Math.round(wait * 1.25));
     }
     return null;
   }
@@ -441,7 +441,7 @@ export default function ChatClient() {
         if (j?.t === "meta:init" || topic === "meta") {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         }
-        // Restrict chat payload to {t:"chat", text, pairId?}
+        // chat payload restricted to {t:"chat", text, pairId?}
         if (j?.t === "chat" && typeof j.text === "string") {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
@@ -522,7 +522,7 @@ export default function ChatClient() {
       });
       if (!isActiveSid(sid)) return;
 
-      // wait for room with backoff, cancel if sid changes
+      // wait for room with continuous polling + backoff
       const roomName = await waitRoomLoop(ticket, sid);
       if (!roomName) { setPhase("stopped"); return; }
 
@@ -544,11 +544,11 @@ export default function ChatClient() {
         (window as any).__pairId = roomName;
       } catch {}
 
-      // wsURL fallback chain per plan
+      // wsURL fallback as per plan
       const ws =
         process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ??
-        (process.env as any).LIVEKIT_URL ?? "";
-
+        (process.env as any).LIVEKIT_URL ??
+        "";
       isConnectingRef.current = true;
       await room.connect(ws, token);
       if (!isActiveSid(sid)) { try { await room.disconnect(false); } catch {} isConnectingRef.current = false; return; }
@@ -586,14 +586,13 @@ export default function ChatClient() {
     }
   }
 
-  /* ===== waiting message updater ===== */
+  /* ===== progressive wait message timer ===== */
   useEffect(() => {
     if (rtcPhase !== "searching") return;
     const iv = setInterval(() => {
       const e = Date.now() - searchStartRef.current;
       if (e > 20000) setSearchMsg("Tip: try tweaking gender or countries for faster matches.");
       else if (e > 8000) setSearchMsg("Widening the search. Hang tight…");
-      else setSearchMsg("Searching for a match…");
     }, 500);
     return () => clearInterval(iv);
   }, [rtcPhase]);
