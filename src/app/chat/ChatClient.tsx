@@ -509,14 +509,14 @@ export default function ChatClient() {
         const newStream = await switchCamera();
         if (localRef.current && newStream) { (localRef.current as any).srcObject = newStream; safePlay(localRef.current); }
         const room = roomRef.current;
-        if (room && room.state === "connected") {
+        if (room && room.state === "connected" && newStream) {
           const lp: any = room.localParticipant;
           const pubs = typeof lp.getTrackPublications === "function" ? lp.getTrackPublications() : Array.from(lp.trackPublications?.values?.() ?? []);
           for (const pub of pubs) {
             const k = (pub as any).kind; const src = (pub as any).source; const tr: any = (pub as any).track;
             if ((k === Track.Kind.Video || src === "camera") && tr) { try { await lp.unpublishTrack(tr, { stop: false }); } catch {} }
           }
-          const nv = newStream.getVideoTracks()[0]; if (nv) { try { await room.localParticipant.publishTrack(nv); } catch {} }
+         const nv = newStream?.getVideoTracks?.()[0];  if (nv) { try { await room.localParticipant.publishTrack(nv); } catch {} }
         }
       } catch {}
     }));
