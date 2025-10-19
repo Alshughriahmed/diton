@@ -145,26 +145,38 @@ function jitter(seed: string): number {
   let h = 2166136261; for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h += (h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24); }
   const x = (h >>> 0) / 0xffffffff; return (x - 0.5) * 0.4;
 }
-function hardOK(me: TicketAttrs, other: TicketAttrs): boolean {
-  const meG = me.filterGenders, otherG = other.filterGenders, meC = me.filterCountries, otherC = other.filterCountries;
-  const meAcceptsGender = meG.length === 0 || meG.includes(other.selfGender);
-  const otherAcceptsGender = otherG.length === 0 || otherG.includes(me.selfGender);
+ function hardOK(me: TicketAttrs, other: TicketAttrs): boolean {
+   const meG = me.filterGenders, otherG = other.filterGenders, meC = me.filterCountries, otherC = other.filterCountries;
+  const meAcceptsGender = meG.length === 0 || (other.selfGender !== "u" && meG.includes(other.selfGender as Exclude<GenderNorm,"u">));   const otherAcceptsGender = otherG.length === 0 || (me.selfGender !== "u" && otherG.includes(me.selfGender as Exclude<GenderNorm,"u">));
   const meAcceptsCountry = meC.length === 0 || (!!other.selfCountry && meC.includes(other.selfCountry));
   const otherAcceptsCountry = otherC.length === 0 || (!!me.selfCountry && otherC.includes(me.selfCountry));
   return meAcceptsGender && otherAcceptsGender && meAcceptsCountry && otherAcceptsCountry;
 }
-function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): boolean {
-  const meG = me.filterGenders, otherG = other.filterGenders, meC = me.filterCountries, otherC = other.filterCountries;
-  const genderMutual = (meG.length===0 || meG.includes(other.selfGender)) && (otherG.length===0 || otherG.includes(me.selfGender));
-  const countryMutual = (meC.length===0 || (!!other.selfCountry && meC.includes(other.selfCountry))) &&
-                        (otherC.length===0 || (!!me.selfCountry && otherC.includes(me.selfCountry)));
-  if (level<=1) return genderMutual && countryMutual;
-  if (level===2) return genderMutual;
-  if (level===3) {
+function allowedByWiden(level: 0 | 1 | 2 | 3 | 4, me: TicketAttrs, other: TicketAttrs): boolean {
+  const meG = me.filterGenders;
+  const otherG = other.filterGenders;
+  const meC = me.filterCountries;
+  const otherC = other.filterCountries;
+
+  const meAcceptsOtherGender =
+    meG.length === 0 || (other.selfGender !== "u" && meG.includes(other.selfGender as Exclude<GenderNorm, "u">));
+  const otherAcceptsMyGender =
+    otherG.length === 0 || (me.selfGender !== "u" && otherG.includes(me.selfGender as Exclude<GenderNorm, "u">));
+  const genderMutual = meAcceptsOtherGender && otherAcceptsMyGender;
+
+  const countryMutual =
+    (meC.length === 0 || (!!other.selfCountry && meC.includes(other.selfCountry))) &&
+    (otherC.length === 0 || (!!me.selfCountry && otherC.includes(me.selfCountry)));
+
+  if (level === 0 || level === 1) return genderMutual && countryMutual; // hard only
+  if (level === 2) return genderMutual; // relax country
+  if (level === 3) {
     if (genderMutual && countryMutual) return true;
     if (genderMutual) return true;
-    const meBlocks = meG.length>0 && !meG.includes(other.selfGender);
-    const otherBlocks = otherG.length>0 && !otherG.includes(me.selfGender);
+    const meBlocks =
+      meG.length > 0 && (other.selfGender === "u" || !meG.includes(other.selfGender as Exclude<GenderNorm, "u">));
+    const otherBlocks =
+      otherG.length > 0 && (me.selfGender === "u" || !otherG.includes(me.selfGender as Exclude<GenderNorm, "u">));
     return !(meBlocks || otherBlocks);
   }
   return false;
@@ -172,7 +184,13 @@ function allowedByWiden(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): 
 function computeScore(level: 0|1|2|3|4, me: TicketAttrs, other: TicketAttrs): ScoreTuple | null {
   if (!allowedByWiden(level, me, other)) return null;
   const genderOrder = me.filterGenders, countryOrder = me.filterCountries;
-  const genderRank = genderOrder.length===0 ? Number.POSITIVE_INFINITY : indexOfOrInf(genderOrder, other.selfGender);
+ const genderRank =
+  genderOrder.length === 0
+    ? Number.POSITIVE_INFINITY
+    : indexOfOrInf<Exclude<GenderNorm, "u">>(
+        genderOrder,
+        other.selfGender as Exclude<GenderNorm, "u">
+      );
   let countryRank: number;
   if (countryOrder.length===0) {
     countryRank = other.selfCountry && me.selfCountry && other.selfCountry===me.selfCountry ? 0 : 1;
