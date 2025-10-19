@@ -24,8 +24,30 @@ async function handle(ticket: string, waitMs: number) {
   }
 
   const t0 = Date.now();
+
+  // 0) probe سريع جدًا: 6 محاولات متقاربة
+  for (let i = 0; i < 6; i++) {
+    const assigned = await getRoom(ticket);
+    if (assigned) {
+      return new NextResponse(JSON.stringify({ room: assigned }), {
+        status: 200,
+        headers: noStore(),
+      });
+    }
+    const mr = await tryMatch(ticket, Date.now());
+    if (mr?.room) {
+      return new NextResponse(JSON.stringify({ room: mr.room }), {
+        status: 200,
+        headers: noStore(),
+      });
+    }
+    await sleep(120);
+  }
+
+  // 1) long-poll قصير مع backoff صغير
+  let delay = 250; // يبدأ سريعًا ثم يكبر قليلًا
   while (true) {
-    // 1) إن كانت الغرفة مسجّلة مسبقًا
+    // غرفة معيّنة مسبقًا؟
     const assigned = await getRoom(ticket);
     if (assigned) {
       return new NextResponse(JSON.stringify({ room: assigned }), {
@@ -34,8 +56,8 @@ async function handle(ticket: string, waitMs: number) {
       });
     }
 
-    // 2) محاولة مطابقة بنظام Score (المستوى يُحسب داخل tryMatch)
-    const mr = await tryMatch(ticket);
+    // محاولة مطابقة
+    const mr = await tryMatch(ticket, Date.now());
     if (mr?.room) {
       return new NextResponse(JSON.stringify({ room: mr.room }), {
         status: 200,
@@ -43,13 +65,12 @@ async function handle(ticket: string, waitMs: number) {
       });
     }
 
-    // 3) انتهاء نافذة الانتظار لهذه الدورة
     if (Date.now() - t0 >= waitMs) {
       return new NextResponse(null, { status: 204, headers: noStore(new Headers()) });
     }
 
-    // 4) انتظار قصير قبل تكرار المحاولة
-    await sleep(400);
+    await sleep(delay);
+    delay = Math.min(600, Math.round(delay * 1.3));
   }
 }
 
@@ -71,7 +92,7 @@ export async function GET(req: NextRequest) {
   return handle(ticket, wait);
 }
 
-// POST alias لحماية التوافق
+// POST alias
 export async function POST(req: NextRequest) {
   if (!haveRedisEnv()) {
     return new NextResponse(JSON.stringify({ error: "redis env missing" }), {
