@@ -23,18 +23,11 @@ export async function OPTIONS() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!haveRedisEnv()) {
-    return bad("redis env missing", 503);
-  }
+  if (!haveRedisEnv()) return bad("redis env missing", 503);
 
   let body: any = null;
-  try {
-    body = await req.json();
-  } catch {
-    return bad("invalid json body");
-  }
+  try { body = await req.json(); } catch { return bad("invalid json body"); }
 
-  // تطبيع إدخال العميل
   const identity = String(body?.identity || "");
   const deviceId = String(body?.deviceId || "");
   if (!identity || !deviceId) return bad("identity and deviceId required");
@@ -46,6 +39,7 @@ export async function POST(req: NextRequest) {
   const vip = !!body?.vip;
   const ts = Number.isFinite(body?.ts) ? Number(body.ts) : undefined;
   const ticketHint = typeof body?.ticket === "string" ? body.ticket : undefined;
+  const forceNew = !!body?.forceNew; // جديد
 
   try {
     const { ticket, ts: ets } = await enqueue({
@@ -58,14 +52,11 @@ export async function POST(req: NextRequest) {
       vip,
       ts,
       ticketHint,
+      forceNew, // جديد
     });
 
-    return new NextResponse(JSON.stringify({ ticket, ts: ets }), {
-      status: 200,
-      headers: noStore(),
-    });
+    return new NextResponse(JSON.stringify({ ticket, ts: ets }), { status: 200, headers: noStore() });
   } catch (e: any) {
-    // أعد رسالة واضحة للتشخيص بدل 500 عام
     const msg = typeof e?.message === "string" ? e.message : String(e);
     return new NextResponse(JSON.stringify({ error: "enqueue failed", message: msg }), {
       status: 500,
@@ -74,7 +65,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET alias اختياري للتشخيص الآمن
+// GET للتشخيص: دعم reuse=0 لتعطيل إعادة الاستخدام
 export async function GET(req: NextRequest) {
   if (!haveRedisEnv()) return bad("redis env missing", 503);
   const u = new URL(req.url);
@@ -90,6 +81,7 @@ export async function GET(req: NextRequest) {
       filterGenders: (u.searchParams.getAll("g") || []).filter(Boolean),
       filterCountries: (u.searchParams.getAll("c") || []).filter(Boolean),
       vip: u.searchParams.get("vip") === "1",
+      forceNew: u.searchParams.get("reuse") === "0" || u.searchParams.get("forceNew") === "1",
     });
     return new NextResponse(JSON.stringify({ ticket, ts }), { status: 200, headers: noStore() });
   } catch (e: any) {
