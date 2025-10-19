@@ -15,7 +15,10 @@ function noStore(h?: Headers) {
 }
 
 function bad(msg: string, code = 400) {
-  return new NextResponse(JSON.stringify({ error: msg }), { status: code, headers: noStore() });
+  return new NextResponse(JSON.stringify({ error: msg }), {
+    status: code,
+    headers: noStore(),
+  });
 }
 
 export async function OPTIONS() {
@@ -26,7 +29,11 @@ export async function POST(req: NextRequest) {
   if (!haveRedisEnv()) return bad("redis env missing", 503);
 
   let body: any = null;
-  try { body = await req.json(); } catch { return bad("invalid json body"); }
+  try {
+    body = await req.json();
+  } catch {
+    return bad("invalid json body");
+  }
 
   const identity = String(body?.identity || "");
   const deviceId = String(body?.deviceId || "");
@@ -39,7 +46,6 @@ export async function POST(req: NextRequest) {
   const vip = !!body?.vip;
   const ts = Number.isFinite(body?.ts) ? Number(body.ts) : undefined;
   const ticketHint = typeof body?.ticket === "string" ? body.ticket : undefined;
-  const forceNew = !!body?.forceNew; // جديد
 
   try {
     const { ticket, ts: ets } = await enqueue({
@@ -52,10 +58,12 @@ export async function POST(req: NextRequest) {
       vip,
       ts,
       ticketHint,
-      forceNew, // جديد
     });
 
-    return new NextResponse(JSON.stringify({ ticket, ts: ets }), { status: 200, headers: noStore() });
+    return new NextResponse(JSON.stringify({ ticket, ts: ets }), {
+      status: 200,
+      headers: noStore(),
+    });
   } catch (e: any) {
     const msg = typeof e?.message === "string" ? e.message : String(e);
     return new NextResponse(JSON.stringify({ error: "enqueue failed", message: msg }), {
@@ -65,13 +73,15 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET للتشخيص: دعم reuse=0 لتعطيل إعادة الاستخدام
+// Optional GET alias for safe diagnostics
 export async function GET(req: NextRequest) {
   if (!haveRedisEnv()) return bad("redis env missing", 503);
+
   const u = new URL(req.url);
   const identity = u.searchParams.get("identity") || "";
   const deviceId = u.searchParams.get("deviceId") || "";
   if (!identity || !deviceId) return bad("identity and deviceId required");
+
   try {
     const { ticket, ts } = await enqueue({
       identity,
@@ -81,9 +91,11 @@ export async function GET(req: NextRequest) {
       filterGenders: (u.searchParams.getAll("g") || []).filter(Boolean),
       filterCountries: (u.searchParams.getAll("c") || []).filter(Boolean),
       vip: u.searchParams.get("vip") === "1",
-      forceNew: u.searchParams.get("reuse") === "0" || u.searchParams.get("forceNew") === "1",
     });
-    return new NextResponse(JSON.stringify({ ticket, ts }), { status: 200, headers: noStore() });
+    return new NextResponse(JSON.stringify({ ticket, ts }), {
+      status: 200,
+      headers: noStore(),
+    });
   } catch (e: any) {
     const msg = typeof e?.message === "string" ? e.message : String(e);
     return new NextResponse(JSON.stringify({ error: "enqueue failed", message: msg }), {
@@ -92,3 +104,4 @@ export async function GET(req: NextRequest) {
     });
   }
 }
+```0
