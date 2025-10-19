@@ -56,6 +56,7 @@ async function redisCmd(cmd: Cmd): Promise<any> {
     const msg = j?.error || j?.err || res.statusText || "unknown";
     throw new Error(`UPSTASH ${arr[0]}: ${msg}`);
   }
+  // Single command returns {result: ...}
   return (j && typeof j === "object" && "result" in j) ? j.result : j;
 }
 
@@ -74,6 +75,7 @@ async function redisPipeline(cmds: Cmd[]): Promise<any[]> {
     const msg = j?.error || j?.err || res.statusText || "unknown";
     throw new Error(`UPSTASH PIPELINE: ${msg}`);
   }
+  // Pipeline returns array of {result: ...}
   const out: any[] = Array.isArray(j) ? j : Array.isArray((j as any).result) ? (j as any).result : [];
   return out.map((x: any) => (x && typeof x === "object" && "result" in x ? x.result : x));
 }
@@ -426,6 +428,7 @@ export interface EnqueueInput {
   vip?: boolean;
   ts?: number;
   ticketHint?: string | null;
+  forceNew?: boolean; // NEW: force generating a fresh ticket
 }
 
 function genTicket(deviceId: string): string {
@@ -438,13 +441,18 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
   const now = Date.now();
   const ts = Number.isFinite(inp.ts as any) ? Number(inp.ts) : now;
 
-  // reuse ticket per device within TTL
-  let ticket = String(inp.ticketHint || "");
-  if (!ticket && inp.deviceId) {
-    try {
-      const reuse = await redisCmd(["GET", DEV_KEY(inp.deviceId)]);
-      if (reuse) ticket = String(reuse);
-    } catch {}
+  const forceNew = !!inp.forceNew;
+
+  // Reuse ticket per device within TTL unless forceNew=true
+  let ticket = "";
+  if (!forceNew) {
+    ticket = String(inp.ticketHint || "");
+    if (!ticket && inp.deviceId) {
+      try {
+        const reuse = await redisCmd(["GET", DEV_KEY(inp.deviceId)]);
+        if (reuse) ticket = String(reuse);
+      } catch {}
+    }
   }
   if (!ticket) ticket = genTicket(inp.deviceId || "");
 
