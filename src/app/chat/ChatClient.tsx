@@ -165,18 +165,22 @@ export default function ChatClient() {
   }
   function identity(): string {
     const base = String(profile?.displayName || "anon").trim() || "anon";
-   const did = String(stableDid()); 
+    const did = String(stableDid());
     const tail = did.length >= 6 ? did.slice(0, 6) : ("000000" + did).slice(-6);
     return `${base}#${tail}`;
   }
 
-  async function enqueueReq(b: any): Promise<string> {
+  async function enqueueReq(b: any, opts?: { forceNew?: boolean }): Promise<string> {
     const r = await fetch("/api/match/enqueue", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(b),
+      body: JSON.stringify({
+        ...b,
+        ts: Date.now(),
+        forceNew: !!opts?.forceNew, // أهم تعديل
+      }),
     });
     if (!r.ok) throw new Error("enqueue failed " + r.status);
     const j = await r.json();
@@ -310,14 +314,14 @@ export default function ChatClient() {
 
   // polling loop with backoff and sid-cancel
   async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
-    let wait = 8000; // 8s
+    let wait = 2000; // أسرع استجابة أولية
     const isActive = () => isActiveSid(sid);
     while (isActive()) {
-      const rn = await nextReq(ticket, wait); // GET /api/match/next?wait=wait
+      const rn = await nextReq(ticket, wait);
       if (!isActive()) return null;
       if (rn) return rn;
-      // backoff: 8s → 10s → 12.5s … ≤ 20s
-      wait = Math.min(20000, Math.round(wait * 1.25));
+      // backoff: 2s → 3s → 4s … ≤ 8s
+      wait = Math.min(8000, Math.round(wait * 1.3));
     }
     return null;
   }
@@ -435,7 +439,7 @@ export default function ChatClient() {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
-        // like: fan-out للحدثين القديم والجديد
+        // like: fan-out
         if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           const detail = { pairId: roomName, liked: !!j?.liked };
           window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
@@ -474,7 +478,7 @@ export default function ChatClient() {
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantConnected, onPeerJoined); } catch {} });
   }
 
-  async function joinViaRedisMatch(sid: number): Promise<void> {
+  async function joinViaRedisMatch(sid: number, opts?: { forceNew?: boolean }): Promise<void> {
     if (!isActiveSid(sid) || joiningRef.current || leavingRef.current || isConnectingRef.current) return;
     if (roomRef.current?.state === "connecting") return;
 
@@ -511,7 +515,7 @@ export default function ChatClient() {
         selfCountry,
         filterGenders: filterGendersNorm,
         filterCountries: Array.isArray(filters.countries) ? filters.countries : [],
-      });
+      }, { forceNew: !!opts?.forceNew });
       if (!isActiveSid(sid)) return;
 
       // wait for room with backoff and sid cancel
@@ -539,8 +543,7 @@ export default function ChatClient() {
       // wsURL fallback chain
       const ws =
         process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ??
-        (process as any).env?.LIVEKIT_URL ??
-        "";
+        (process as any).env?.LIVEKIT_URL ?? "";
 
       isConnectingRef.current = true;
       await room.connect(ws, token);
@@ -606,7 +609,7 @@ export default function ChatClient() {
         }
         setReady(true);
         const sid = newSid();
-        await joinViaRedisMatch(sid);
+        await joinViaRedisMatch(sid, { forceNew: false });
       } catch (error: any) {
         if (error?.name === "NotAllowedError")
           setCameraPermissionHint("Allow camera and microphone from browser settings");
@@ -679,7 +682,7 @@ export default function ChatClient() {
         localRef.current.muted = true;
         await safePlay(localRef.current);
       }
-      await joinViaRedisMatch(sid);
+      await joinViaRedisMatch(sid, { forceNew: true }); // مفتاح سرعة المطابقة
     }));
 
     offs.push(on("ui:prev", async () => {
@@ -698,7 +701,8 @@ export default function ChatClient() {
         localRef.current.muted = true;
         await safePlay(localRef.current);
       }
-      await joinViaRedisMatch(sid);
+      // حالياً نعامل "السابق" كمطابقة جديدة سريعة. لاحقاً يمكن إضافة استرجاع آخر غرفة.
+      await joinViaRedisMatch(sid, { forceNew: true });
     }));
 
     offs.push(on("ui:openMessaging" as any, () => setShowMessaging(true)));
@@ -821,7 +825,7 @@ export default function ChatClient() {
                               safePlay(localRef.current);
                               setReady(true);
                               const sid = newSid();
-                              joinViaRedisMatch(sid).catch(()=>{});
+                              joinViaRedisMatch(sid, { forceNew: false }).catch(()=>{});
                             }
                           })
                           .catch((error) => {
