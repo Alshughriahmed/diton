@@ -1,7 +1,8 @@
 // src/lib/media.ts
 /* Client-only media helpers for local cam/mic.
- * Exports used by ChatClient:
+ * Exports used by ChatClient & Toolbar:
  *   initLocalMedia(), getLocalStream(), toggleMic(), toggleCam(), switchCamera()
+ *   isTorchSupported(), toggleTorch(), getCurrentFacing()
  */
 
 let localStream: MediaStream | null = null;
@@ -16,17 +17,17 @@ function loadFacing() {
   } catch {}
 }
 function saveFacing() {
-  try { localStorage.setItem(FACE_KEY, currentFacing); } catch {}
+  try {
+    localStorage.setItem(FACE_KEY, currentFacing);
+  } catch {}
 }
 
 function baseVideoConstraints(face: "user" | "environment") {
-  // مرن، يعمل على معظم الأجهزة
   return {
     width: { ideal: 1280 },
     height: { ideal: 720 },
     frameRate: { ideal: 30, max: 30 },
-    facingMode: face, // المحاولة الأولى
-    // لاحقًا سنسقط إلى deviceId إذا فشلت facingMode
+    facingMode: face,
   } as MediaTrackConstraints;
 }
 
@@ -43,17 +44,13 @@ async function getWithFacing(face: "user" | "environment"): Promise<MediaStream>
     });
   } catch {}
 
-  // 2) deviceId fall-back: اختر أول كاميرا توافق الوجه المطلوب
+  // 2) deviceId fall-back
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const vids = devices.filter((d) => d.kind === "videoinput");
-    // heuristic: اسم يحتوي "front"/"back" أو ترتيب.
-    const pick = vids.find((d) =>
-      face === "user"
-        ? /front|user/i.test(d.label)
-        : /back|rear|environment/i.test(d.label)
-    ) || (face === "user" ? vids[0] : vids[vids.length - 1]);
-
+    const pick =
+      vids.find((d) => (face === "user" ? /front|user/i.test(d.label) : /back|rear|environment/i.test(d.label))) ||
+      (face === "user" ? vids[0] : vids[vids.length - 1]);
     if (!pick) throw new Error("no video device");
 
     return await navigator.mediaDevices.getUserMedia({
@@ -64,7 +61,7 @@ async function getWithFacing(face: "user" | "environment"): Promise<MediaStream>
         autoGainControl: true,
       },
     });
-  } catch (e) {
+  } catch {
     // 3) آخر محاولة: أي كاميرا
     return await navigator.mediaDevices.getUserMedia({
       video: true,
@@ -78,7 +75,6 @@ async function getWithFacing(face: "user" | "environment"): Promise<MediaStream>
 }
 
 function replaceLocalStream(newStream: MediaStream) {
-  // لا نوقف الصوت إن كان سيُعاد استخدامه
   try {
     const oldVid = localStream?.getVideoTracks?.()[0];
     if (oldVid) oldVid.stop();
@@ -112,15 +108,12 @@ export function toggleCam(): boolean {
 }
 
 /** Switch between front/back stably on iOS/Android/Desktop.
- * Returns a fresh MediaStream that contains new video track
- * and (if available) reuses the existing audio track.
+ * Returns a fresh MediaStream containing new video + existing audio if present.
  */
 export async function switchCamera(): Promise<MediaStream | null> {
-  // بدّل الوجه المطلوب
   currentFacing = currentFacing === "user" ? "environment" : "user";
   saveFacing();
 
-  // احتفظ بالصوت إن وُجد
   const oldAudio = localStream?.getAudioTracks?.()[0] || null;
 
   const newVidStream = await getWithFacing(currentFacing).catch(() => null);
@@ -134,4 +127,34 @@ export async function switchCamera(): Promise<MediaStream | null> {
 
   replaceLocalStream(out);
   return out;
+}
+
+// Torch support helpers
+export function getCurrentFacing(): "user" | "environment" {
+  return currentFacing;
+}
+
+export function isTorchSupported(): boolean {
+  try {
+    const v = localStream?.getVideoTracks?.()[0] as any;
+    const caps = v?.getCapabilities?.();
+    return !!caps?.torch;
+  } catch {
+    return false;
+  }
+}
+
+export async function toggleTorch(on?: boolean): Promise<boolean> {
+  try {
+    const v = (localStream?.getVideoTracks?.()[0] as any) || null;
+    if (!v) return false;
+    const caps = v.getCapabilities?.();
+    if (!caps?.torch) return false;
+    const cur = v.getSettings?.().torch as boolean | undefined;
+    const target = typeof on === "boolean" ? on : !cur;
+    await v.applyConstraints({ advanced: [{ torch: target }] });
+    return true;
+  } catch {
+    return false;
+  }
 }
