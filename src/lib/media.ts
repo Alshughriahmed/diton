@@ -1,19 +1,24 @@
-// src/lib/media.ts
 /* Client-only media helpers for local cam/mic.
  * Exports used by ChatClient & Toolbar:
- *   initLocalMedia(), getLocalStream(), toggleMic(), toggleCam(), switchCamera()
- *   isTorchSupported(), toggleTorch(), getCurrentFacing()
+ *   initLocalMedia(), getLocalStream(), toggleMic(), toggleCam()
+ *   cycleCameraNext(), isTorchSupported(), toggleTorch(), getCurrentFacing(), getMicState()
  */
 
 let localStream: MediaStream | null = null;
-let currentFacing: "user" | "environment" = "user";
 
+type Facing = "user" | "environment";
+let currentFacing: Facing = "user";
 const FACE_KEY = "ditona_cam_face";
+const CAM_INDEX_KEY = "ditona_cam_index";
+
+type VideoDevice = { deviceId: string; label: string };
+let videoDevices: VideoDevice[] = [];
+let videoIndex = 0;
 
 function loadFacing() {
   try {
     const v = String(localStorage.getItem(FACE_KEY) || "");
-    if (v === "user" || v === "environment") currentFacing = v as any;
+    if (v === "user" || v === "environment") currentFacing = v as Facing;
   } catch {}
 }
 function saveFacing() {
@@ -21,57 +26,62 @@ function saveFacing() {
     localStorage.setItem(FACE_KEY, currentFacing);
   } catch {}
 }
+function loadIndex() {
+  try {
+    const v = Number(localStorage.getItem(CAM_INDEX_KEY) || "0");
+    if (!Number.isNaN(v)) videoIndex = Math.max(0, v);
+  } catch {}
+}
+function saveIndex() {
+  try {
+    localStorage.setItem(CAM_INDEX_KEY, String(videoIndex));
+  } catch {}
+}
 
-function baseVideoConstraints(face: "user" | "environment") {
+function guessFacingByLabel(label: string): Facing {
+  const s = label.toLowerCase();
+  if (/back|rear|environment|tele|zoom/.test(s)) return "environment";
+  return "user";
+}
+
+async function refreshVideoDevices(): Promise<VideoDevice[]> {
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const vids = devs.filter((d) => d.kind === "videoinput").map((d) => ({ deviceId: d.deviceId, label: d.label || "" }));
+  // ترتيب ثابت: front → back → tele (إذا وُجد)
+  vids.sort((a, b) => {
+    const fa = /back|rear|environment/i.test(a.label) ? 1 : 0;
+    const fb = /back|rear|environment/i.test(b.label) ? 1 : 0;
+    if (fa !== fb) return fa - fb;
+    const ta = /tele|zoom/i.test(a.label) ? 1 : 0;
+    const tb = /tele|zoom/i.test(b.label) ? 1 : 0;
+    return ta - tb;
+  });
+  videoDevices = vids;
+  if (videoIndex >= videoDevices.length) videoIndex = 0;
+  saveIndex();
+  return videoDevices;
+}
+
+function baseVideoConstraints() {
   return {
     width: { ideal: 1280 },
     height: { ideal: 720 },
     frameRate: { ideal: 30, max: 30 },
-    facingMode: face,
   } as MediaTrackConstraints;
 }
 
-async function getWithFacing(face: "user" | "environment"): Promise<MediaStream> {
-  // 1) facingMode مباشرة
-  try {
-    return await navigator.mediaDevices.getUserMedia({
-      video: baseVideoConstraints(face),
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-  } catch {}
-
-  // 2) deviceId fall-back
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const vids = devices.filter((d) => d.kind === "videoinput");
-    const pick =
-      vids.find((d) => (face === "user" ? /front|user/i.test(d.label) : /back|rear|environment/i.test(d.label))) ||
-      (face === "user" ? vids[0] : vids[vids.length - 1]);
-    if (!pick) throw new Error("no video device");
-
-    return await navigator.mediaDevices.getUserMedia({
-      video: { ...baseVideoConstraints(face), deviceId: { exact: pick.deviceId } },
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-  } catch {
-    // 3) آخر محاولة: أي كاميرا
-    return await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-  }
+async function getWithDeviceId(deviceId?: string): Promise<MediaStream> {
+  const video: MediaTrackConstraints = deviceId
+    ? { ...baseVideoConstraints(), deviceId: { exact: deviceId } }
+    : true;
+  return await navigator.mediaDevices.getUserMedia({
+    video,
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
 }
 
 function replaceLocalStream(newStream: MediaStream) {
@@ -88,7 +98,12 @@ export function getLocalStream(): MediaStream | null {
 
 export async function initLocalMedia(): Promise<MediaStream> {
   loadFacing();
-  const s = await getWithFacing(currentFacing);
+  loadIndex();
+  await refreshVideoDevices().catch(() => {});
+  const initialDevice = videoDevices[videoIndex]?.deviceId;
+  const s = await getWithDeviceId(initialDevice).catch(async () => await getWithDeviceId());
+  const vt = s.getVideoTracks?.()[0];
+  if (vt) currentFacing = guessFacingByLabel(vt.label || videoDevices[videoIndex]?.label || "");
   replaceLocalStream(s);
   return s;
 }
@@ -107,33 +122,39 @@ export function toggleCam(): boolean {
   return v.enabled;
 }
 
-/** Switch between front/back stably on iOS/Android/Desktop.
- * Returns a fresh MediaStream containing new video + existing audio if present.
+/** Cycle cameras by deviceId:
+ * front → back → tele (إن وُجد) → الرجوع للبداية.
+ * يعمل دون اتصال، ويعيد MediaStream جديدة تحتوي الفيديو الجديد + الصوت القديم إن وُجد.
  */
-export async function switchCamera(): Promise<MediaStream | null> {
-  currentFacing = currentFacing === "user" ? "environment" : "user";
-  saveFacing();
+export async function cycleCameraNext(): Promise<MediaStream | null> {
+  await refreshVideoDevices().catch(() => {});
+  if (!videoDevices.length) return null;
 
+  // تقدّم المؤشر
+  videoIndex = (videoIndex + 1) % videoDevices.length;
+  saveIndex();
+
+  const target = videoDevices[videoIndex];
   const oldAudio = localStream?.getAudioTracks?.()[0] || null;
 
-  const newVidStream = await getWithFacing(currentFacing).catch(() => null);
+  const newVidStream = await getWithDeviceId(target.deviceId).catch(() => null);
   if (!newVidStream) return null;
 
   const newVideo = newVidStream.getVideoTracks()[0];
   const out = new MediaStream();
-
   if (newVideo) out.addTrack(newVideo);
   if (oldAudio) out.addTrack(oldAudio);
 
+  currentFacing = guessFacingByLabel(newVideo?.label || target.label || "");
+  saveFacing();
   replaceLocalStream(out);
   return out;
 }
 
-// Torch support helpers
-export function getCurrentFacing(): "user" | "environment" {
+// Torch helpers
+export function getCurrentFacing(): Facing {
   return currentFacing;
 }
-
 export function isTorchSupported(): boolean {
   try {
     const v = localStream?.getVideoTracks?.()[0] as any;
@@ -143,7 +164,6 @@ export function isTorchSupported(): boolean {
     return false;
   }
 }
-
 export async function toggleTorch(on?: boolean): Promise<boolean> {
   try {
     const v = (localStream?.getVideoTracks?.()[0] as any) || null;
@@ -154,6 +174,16 @@ export async function toggleTorch(on?: boolean): Promise<boolean> {
     const target = typeof on === "boolean" ? on : !cur;
     await v.applyConstraints({ advanced: [{ torch: target }] });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// Mic state for accurate icon
+export function getMicState(): boolean {
+  try {
+    const a = localStream?.getAudioTracks?.()[0];
+    return !!a?.enabled;
   } catch {
     return false;
   }
