@@ -1,51 +1,62 @@
 "use client";
 
 import { useEffect } from "react";
-import { isHorizontalDrag, isVerticalDrag } from "@/utils/media-bridge";
-import { useNextPrev } from "@/hooks/useNextPrev";
+import { emit } from "@/utils/events";
 
-function inModal(target: EventTarget | null): boolean {
-  const sel = '[data-modal="gender"],[data-modal="country"]';
-  return target instanceof Node && !!(target as Element).closest?.(sel);
-}
-
-function inMessages(target: EventTarget | null): boolean {
-  const sel = '[data-ui="messages-overlay"],[data-ui="messages-fixed"]';
-  return target instanceof Node && !!(target as Element).closest?.(sel);
-}
+const THRESHOLD = 48;         // بيكسل أفقية لازمة
+const MAX_ANGLE = 25;         // درجة ميلان عن الأفق
+const COOLDOWN_MS = 300;
 
 export function useGestures() {
-  const { next, prev } = useNextPrev();
-
   useEffect(() => {
-    let sx = 0, sy = 0;
+    let startX = 0, startY = 0, active = false, fired = false;
+    let lastFire = 0;
 
-    const onStart = (e: TouchEvent) => {
-      if (inModal(e.target) || inMessages(e.target)) return;
-      const t = e.touches?.[0]; if (!t) return;
-      sx = t.clientX; sy = t.clientY;
+    const start = (x: number, y: number) => { active = true; fired = false; startX = x; startY = y; };
+    const move  = (x: number, y: number) => {
+      if (!active || fired) return;
+      const dx = x - startX, dy = y - startY;
+      const absx = Math.abs(dx), absy = Math.abs(dy);
+      if (absx < THRESHOLD) return;
+      // تجاهل السحب العمودي
+      const angle = Math.atan2(absy, absx) * 180 / Math.PI;
+      if (angle > MAX_ANGLE) return;
+
+      const now = Date.now();
+      if (now - lastFire < COOLDOWN_MS) return;
+
+      fired = true; lastFire = now;
+      if (dx < 0) emit("ui:next"); else emit("ui:prev");
     };
+    const end = () => { active = false; };
 
-    const onEnd = (e: TouchEvent) => {
-      if (inModal(e.target) || inMessages(e.target)) return;
-      const t = e.changedTouches?.[0]; if (!t) return;
-      const dx = t.clientX - sx, dy = t.clientY - sy;
+    // لمس
+    const onTouchStart = (e: TouchEvent) => { const t = e.touches[0]; if (t) start(t.clientX, t.clientY); };
+    const onTouchMove  = (e: TouchEvent) => { const t = e.touches[0]; if (t) move(t.clientX, t.clientY); };
+    const onTouchEnd   = () => end();
 
-      if (isHorizontalDrag(dx, dy)) {
-        dx < 0 ? next() : prev();
-      } else if (isVerticalDrag(dx, dy)) {
-        try { window.dispatchEvent(new CustomEvent("ui:toggle-mode")); } catch {}
-      }
-    };
+    // ماوس للسحب على الديسكتوب
+    let mouseDown = false;
+    const onMouseDown = (e: MouseEvent) => { mouseDown = true; start(e.clientX, e.clientY); };
+    const onMouseMove = (e: MouseEvent) => { if (mouseDown) move(e.clientX, e.clientY); };
+    const onMouseUp   = () => { mouseDown = false; end(); };
 
-    window.addEventListener("touchstart", onStart, { passive: true });
-    window.addEventListener("touchend", onEnd, { passive: true });
+    // اربط على window ليعمل فوق أي طبقة
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove",  onTouchMove,  { passive: true });
+    window.addEventListener("touchend",   onTouchEnd,   { passive: true });
+    window.addEventListener("mousedown",  onMouseDown);
+    window.addEventListener("mousemove",  onMouseMove);
+    window.addEventListener("mouseup",    onMouseUp);
 
     return () => {
-      window.removeEventListener("touchstart", onStart as any);
-      window.removeEventListener("touchend", onEnd as any);
+      window.removeEventListener("touchstart", onTouchStart as any);
+      window.removeEventListener("touchmove",  onTouchMove as any);
+      window.removeEventListener("touchend",   onTouchEnd as any);
+      window.removeEventListener("mousedown",  onMouseDown as any);
+      window.removeEventListener("mousemove",  onMouseMove as any);
+      window.removeEventListener("mouseup",    onMouseUp as any);
     };
-  }, [next, prev]);
+  }, []);
 }
-
 export default useGestures;
