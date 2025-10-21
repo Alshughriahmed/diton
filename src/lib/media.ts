@@ -5,22 +5,20 @@
  *  - getCurrentFacing(), isTorchSupported(), toggleTorch()
  */
 
-
 let localStream: MediaStream | null = null;
 
 type Facing = "user" | "environment";
 type VideoDevice = { deviceId: string; label: string; facing: Facing };
 
 let devicesCached: VideoDevice[] = [];
-let order: VideoDevice[] = []; // front1→front2→back1→back2
+let order: VideoDevice[] = []; // front1 → front2 → back1 → back2
 let currentIndex = 0;
 
-const FACE_KEY = "ditona_cam_face";
 const IDX_KEY = "ditona_cam_index";
 
 function guessFacing(label: string): Facing {
   const s = (label || "").toLowerCase();
-  if (/back|rear|environment|tele|zoom/i.test(s)) return "environment";
+  if (/back|rear|environment|tele|zoom/.test(s)) return "environment";
   return "user";
 }
 
@@ -38,7 +36,6 @@ function baseVideoConstraints(): MediaTrackConstraints {
 }
 
 function setLocalStream(newStream: MediaStream) {
-  // أوقف فقط فيديو القديم، وأبقِ الصوت
   try {
     const oldVid = localStream?.getVideoTracks?.()[0];
     if (oldVid) oldVid.stop();
@@ -57,13 +54,10 @@ export async function enumerateVideoInputs(): Promise<VideoDevice[]> {
     .map((d) => ({ deviceId: d.deviceId, label: d.label || "", facing: guessFacing(d.label) as Facing }));
   devicesCached = vids;
 
-  // بناء ترتيب ثابت: fronts ثم backs
   const fronts = vids.filter((v) => v.facing === "user");
   const backs = vids.filter((v) => v.facing === "environment");
-  // حافظ على الاستقرار الداخلي بالترتيب الأصلي
   order = [...fronts, ...backs];
 
-  // اضبط مؤشر البداية على أول front إن وجد وإلا صفر
   const savedIdx = Number(localStorage.getItem(IDX_KEY) || "0");
   currentIndex = Number.isFinite(savedIdx) ? Math.min(Math.max(0, savedIdx), Math.max(0, order.length - 1)) : 0;
   if (order.length && order[currentIndex]?.facing !== "user") currentIndex = 0;
@@ -96,6 +90,7 @@ export function toggleCam(): boolean {
   const v = localStream?.getVideoTracks?.()[0];
   if (!v) return false;
   v.enabled = !v.enabled;
+  emitMediaState();
   return v.enabled;
 }
 
@@ -163,7 +158,6 @@ export async function switchCameraCycle(room?: any, localVideoEl?: HTMLVideoElem
     if (!order.length) await enumerateVideoInputs().catch(() => {});
     if (!order.length) return false;
 
-    // جرّب بحد أقصى عدد الأجهزة للعثور على جهاز صالح
     let tried = 0;
     let newStream: MediaStream | null = null;
     let nextIdx = currentIndex;
@@ -174,7 +168,7 @@ export async function switchCameraCycle(room?: any, localVideoEl?: HTMLVideoElem
       try {
         const constraints: MediaStreamConstraints = {
           video: { ...baseVideoConstraints(), deviceId: { exact: dev.deviceId } },
-          audio: false, // نعيد استخدام الصوت القديم
+          audio: false,
         };
         newStream = await navigator.mediaDevices.getUserMedia(constraints);
       } catch {
@@ -188,13 +182,11 @@ export async function switchCameraCycle(room?: any, localVideoEl?: HTMLVideoElem
     const newVideo = newStream.getVideoTracks()[0];
     if (!newVideo) return false;
 
-    // دمج الصوت القديم
     const oldAudio = localStream?.getAudioTracks?.()[0] || null;
     const merged = new MediaStream();
     merged.addTrack(newVideo);
     if (oldAudio) merged.addTrack(oldAudio);
 
-    // عيّن المعاينة المحلية دائمًا
     if (localVideoEl) {
       try {
         (localVideoEl as any).srcObject = merged;
@@ -202,11 +194,9 @@ export async function switchCameraCycle(room?: any, localVideoEl?: HTMLVideoElem
       } catch {}
     }
 
-    // استبدل في LiveKit إن وُجد room متصل
     if (room && room.state === "connected") {
       try {
         const lp: any = room.localParticipant;
-        // ابحث عن منشور الفيديو
         let pub: any =
           typeof lp.getTrackPublication === "function" ? lp.getTrackPublication(1 /* Track.Source.Camera */) : null;
         if (!pub) {
@@ -219,12 +209,10 @@ export async function switchCameraCycle(room?: any, localVideoEl?: HTMLVideoElem
             pubs.find((p: any) => p?.track?.mediaStreamTrack?.kind === "video");
         }
 
-        // حاول replaceTrack أولًا
         if (pub && typeof pub.replaceTrack === "function") {
           try {
             await pub.replaceTrack(newVideo);
           } catch {
-            // فالـباك
             try {
               if (pub?.track) await lp.unpublishTrack(pub.track, { stop: false });
               await lp.publishTrack(newVideo);
@@ -236,15 +224,10 @@ export async function switchCameraCycle(room?: any, localVideoEl?: HTMLVideoElem
             await lp.publishTrack(newVideo);
           } catch {}
         }
-      } catch {
-        // تجاهل، المعاينة ما زالت تعمل
-      }
+      } catch {}
     }
 
-    // بدّل المرجع المحلي
     setLocalStream(merged);
-
-    // حدّث الفهرس واحفظه
     currentIndex = nextIdx;
     localStorage.setItem(IDX_KEY, String(currentIndex));
 
