@@ -1,57 +1,67 @@
-// src/app/chat/components/FilterBar.tsx
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useFFA } from "@/lib/useFFA";
-import { useVip } from "@/hooks/useVip";
 import { useFilters, type GenderOpt } from "@/state/filters";
 import type { GenderKey } from "./GenderModal";
+import { getAllRegions } from "@/lib/regions";
 
+// Modals
 const GenderModal = dynamic(() => import("./GenderModal"), { ssr: false });
 const CountryModal = dynamic(() => import("./CountryModal"), { ssr: false });
 
-const optToKey = (g: GenderOpt): GenderKey | null =>
-  g === "male" ? "male"
-  : g === "female" ? "female"
-  : g === "couple" ? "couples"
-  : g === "lgbt" ? "lgbt"
-  : null;
+// map UI key ↔ norm
+const keyToNorm = (k: GenderKey): "m" | "f" | "c" | "l" | "u" =>
+  k === "male" ? "m" :
+  k === "female" ? "f" :
+  k === "couples" ? "c" :
+  k === "lgbt" ? "l" : "u";
 
-const keyToOpt = (k: GenderKey): GenderOpt =>
-  k === "male" ? "male"
-  : k === "female" ? "female"
-  : k === "couples" ? "couple"
-  : "lgbt";
+const normToKey = (n: "m" | "f" | "c" | "l" | "u"): GenderKey =>
+  n === "m" ? "male" :
+  n === "f" ? "female" :
+  n === "c" ? "couples" :
+  n === "l" ? "lgbt" : "any";
 
 export default function FilterBar() {
   const ffa = useFFA();
-  const { isVip } = useVip();
   const filters = useFilters();
 
-  const currentOpt: GenderOpt = filters.gender ?? "all";
+  // derive current selection
+  const legacyOpt: GenderOpt = filters.gender ?? "all";
+  const currentKeysFromLegacy: GenderKey[] =
+    legacyOpt === "all" ? [] :
+    [legacyOpt === "male" ? "male" :
+     legacyOpt === "female" ? "female" :
+     legacyOpt === "couple" ? "couples" : "lgbt"];
+
+  const currentKeys: GenderKey[] =
+    Array.isArray(filters.genderKeys) && filters.genderKeys.length > 0
+      ? filters.genderKeys.map((n) => normToKey(n as any)).filter((k) => k !== "any")
+      : currentKeysFromLegacy;
+
   const currentCountries: string[] = Array.isArray(filters.countries) ? filters.countries : [];
 
   const [openGender, setOpenGender] = useState(false);
   const [openCountry, setOpenCountry] = useState(false);
-  const [selectedGenders, setSelectedGenders] = useState<GenderKey[]>(
-    currentOpt === "all" ? [] : (optToKey(currentOpt) ? [optToKey(currentOpt)!] : [])
-  );
+  const [selectedGenders, setSelectedGenders] = useState<GenderKey[]>(currentKeys);
   const [selectedCountries, setSelectedCountries] = useState<string[]>(currentCountries);
 
+  // countries map for labeling
+  const regions = useMemo(() => getAllRegions(), []);
+  const codeToName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of regions) m.set(r.code.toUpperCase(), r.name);
+    return m;
+  }, [regions]);
+
   function applyGender(keys: GenderKey[]) {
-    let v = Array.isArray(keys) ? keys.slice(0, 2) : [];
-    if (!isVip && !ffa && v.length > 1) v = [v[0]];
-
-    if (v.length === 0) {
-      filters.setGender("all");
-      setSelectedGenders([]);
-      return;
-    }
-
-    const first = v[0];
-    filters.setGender(keyToOpt(first));
-    setSelectedGenders([first]);
+    // allow up to 2; auto-trim
+    const clean = Array.isArray(keys) ? keys.filter(k => k !== "any").slice(0, 2) : [];
+    setSelectedGenders(clean);
+    const norms = clean.map(keyToNorm).filter((n) => n !== "u");
+    filters.setGenderKeys(norms);
   }
 
   function applyCountries(codes: string[]) {
@@ -60,35 +70,52 @@ export default function FilterBar() {
     setSelectedCountries(next);
   }
 
+  // button labels
+  const genderLabel = (() => {
+    if (selectedGenders.length === 0) return "Everyone";
+    if (selectedGenders.length === 1) {
+      const k = selectedGenders[0];
+      return k === "female" ? "♀ Female"
+           : k === "male" ? "♂ Male"
+           : k === "couples" ? "👫 Couples"
+           : "🏳️‍🌈 LGBT";
+    }
+    return "2 selected";
+  })();
+
+  const countryLabel = (() => {
+    const n = selectedCountries.length;
+    if (n === 0) return "All";
+    if (n === 1) return codeToName.get(selectedCountries[0].toUpperCase()) || selectedCountries[0].toUpperCase();
+    return `${n} countries`;
+  })();
+
   return (
-    <div
-      className="absolute top-2 right-2 z-[999] pointer-events-auto flex items-center gap-2"
-      data-ui="filter-bar"
-    >
+    <div className="absolute top-2 right-2 z-[999] pointer-events-auto flex items-center gap-2" data-ui="filter-bar">
+      {/* Gender */}
       <button
         type="button"
         data-ui="gender-button"
         aria-label="Gender"
-        onClick={() => {
-          const init = currentOpt === "all" ? [] : (optToKey(currentOpt) ? [optToKey(currentOpt)!] : []);
-          setSelectedGenders(init);
-          setOpenGender(true);
-        }}
+        onClick={() => { setSelectedGenders(currentKeys); setOpenGender(true); }}
         title="Gender filters"
-        className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur focus:outline-none focus:ring-2 focus:ring-white/30"
+        className="h-9 px-3 rounded-xl bg-black/30 hover:bg-black/40 text-white text-xs font-medium backdrop-blur focus:outline-none focus:ring-2 focus:ring-white/30 min-w-[96px] flex items-center gap-1"
       >
-        <span aria-hidden className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-rose-400">⚧</span>
+        <span aria-hidden>⚧</span>
+        <span className="truncate">{genderLabel}</span>
       </button>
 
+      {/* Countries */}
       <button
         type="button"
         data-ui="country-button"
         aria-label="Countries"
         onClick={() => { setSelectedCountries(currentCountries); setOpenCountry(true); }}
         title="Country filters"
-        className="h-9 w-9 grid place-items-center rounded-xl bg-black/30 hover:bg-black/40 text-white backdrop-blur focus:outline-none focus:ring-2 focus:ring-white/30"
+        className="h-9 px-3 rounded-xl bg-black/30 hover:bg-black/40 text-white text-xs font-medium backdrop-blur focus:outline-none focus:ring-2 focus:ring-white/30 min-w-[96px] flex items-center gap-1"
       >
         <span aria-hidden>🌍</span>
+        <span className="truncate">{countryLabel}</span>
       </button>
 
       {openGender && (
