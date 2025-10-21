@@ -229,6 +229,17 @@ export async function prevPreassign(ticket: string): Promise<void> {
   try { await setNXPX(ROOM_KEY(ticket), String(lastRoom), 10_000); } catch {}
 }
 
+/** إرجاع الغرفة السابقة للتذكرة إن وُجدت، مع تعيين سريع في mq:room:<ticket> */
+export async function getPrevRoomForTicket(ticket: string): Promise<string | null> {
+  const me = await getTicketAttrs(ticket); if (!me) return null;
+  // اقرأ آخر غرفة للجهاز
+  const lastRoom = await getStr(LAST_ROOM_FOR(me.deviceId));
+  if (!lastRoom) return null;
+  // عيّنها سريعًا لهذه التذكرة ليعمل prev والـ next معًا دون تضارب
+  try { await setNXPX(ROOM_KEY(ticket), String(lastRoom), 10_000); } catch {}
+  return String(lastRoom);
+}
+
 /* tryMatch */
 export async function tryMatch(ticket: string, widenOrNow?: boolean | number): Promise<MatchResult | null> {
   const assigned = await getRoom(ticket); if (assigned) return { room: assigned };
