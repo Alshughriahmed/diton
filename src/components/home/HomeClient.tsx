@@ -1,6 +1,7 @@
 // src/components/home/HomeClient.tsx
 "use client";
 
+import "@/app/i18nReset.client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import HeaderLite from "@/components/HeaderLite";
