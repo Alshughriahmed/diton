@@ -4,14 +4,13 @@ import { useState, useEffect } from "react";
 import { emit } from "@/utils/events";
 
 function isMobileUA() {
-  if (typeof navigator === "undefined") return false;
-  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || "ontouchstart" in window;
+  if (typeof navigator === "undefined" || typeof window === "undefined") return false;
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ("ontouchstart" in window);
 }
 
 export default function ChatToolbar() {
   const ffa = useFFA();
   const [msgOpen, setMsgOpen] = useState(false);
-  const [paused, setPaused] = useState(false);
 
   // اتصال لأزرار Prev
   const dc = (globalThis as any).__ditonaDataChannel;
@@ -54,16 +53,13 @@ export default function ChatToolbar() {
   const canPrev = ffa || (dc?.readyState === "open" && pairId);
   const onMobile = isMobileUA();
 
-  // Flash: مرئي على الموبايل فقط. معطّل إذا أمامية أو بلا دعم torch.
   const flashEnabled = torchSupported && facing === "environment";
 
   return (
     <>
       {/* Prev / Next large icons */}
       <button
-        onClick={() => {
-          if (canPrev) emit("ui:prev");
-        }}
+        onClick={() => { if (canPrev) emit("ui:prev"); }}
         disabled={!canPrev}
         title={!canPrev ? "Available during active connection or FFA" : "Previous match"}
         className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${
@@ -122,9 +118,7 @@ export default function ChatToolbar() {
           {/* 🎤 mic — مرتبط بالحالة الفعلية */}
           <button
             data-ui="btn-mic"
-            onClick={() => {
-              emit("ui:toggleMic");
-            }}
+            onClick={() => { emit("ui:toggleMic"); }}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${
               micReal ? "bg-green-600/30 border-green-400/40" : "bg-red-600/30 border-red-400/40"
             }`}
@@ -133,7 +127,7 @@ export default function ChatToolbar() {
             {micReal ? "🎤" : "🔇"}
           </button>
 
-          {/* ⚡ Flash — لا زر Matching Stat إطلاقًا */}
+          {/* ⚡ Flash — بلا زر Matching Stat */}
           {onMobile ? (
             <button
               data-ui="btn-flash"
@@ -150,28 +144,10 @@ export default function ChatToolbar() {
             </button>
           ) : null}
 
-          {/* ⏸️ pause */}
-          <button
-            data-ui="btn-pause"
-            onClick={() => {
-              setPaused((v) => !v);
-              emit("ui:togglePlay");
-            }}
-            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${
-              paused ? "bg-orange-600/30 border-orange-400/40" : "bg-green-600/30 border-green-400/40"
-            }`}
-          >
-            {paused ? "▶️" : "⏸️"}
-          </button>
-
           {/* ⚙️ settings */}
           <button
             data-ui="btn-settings"
-            onClick={() => {
-              try {
-                window.location.href = "/settings";
-              } catch {}
-            }}
+            onClick={() => { try { window.location.href = "/settings"; } catch {} }}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10"
           >
             ⚙️
