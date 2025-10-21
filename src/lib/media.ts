@@ -5,6 +5,7 @@
  *  - getCurrentFacing(), isTorchSupported(), toggleTorch()
  */
 
+
 let localStream: MediaStream | null = null;
 
 type Facing = "user" | "environment";
