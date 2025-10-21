@@ -24,21 +24,29 @@ function loadCached(): Meta {
   }
 }
 
-function genderBadgeLocal(g: unknown): { label: string; cls: string } | null {
+/** Return label + color class + symbol (with Couples overridden to ⚤). */
+function genderBadgeLocal(
+  g: unknown
+): { symbol: string; label: string; cls: string } | null {
   const n = normalizeGender(g);
   if (n === "u") return null;
-  const label = `${genderSymbol(n)} ${genderLabel(n)}`;
+
+  // override only here
+  const symbol = n === "c" ? "⚤" : genderSymbol(n);
+  const label = genderLabel(n);
+
   switch (n) {
     case "m":
-      return { label, cls: "text-blue-500" };      // ذكر: أزرق غامق
+      return { symbol, label, cls: "text-blue-500" };      // Male: deep blue
     case "f":
-      return { label, cls: "text-red-500" };       // أنثى: أحمر فاقع
+      return { symbol, label, cls: "text-red-500" };       // Female: bright red
     case "c":
-      return { label, cls: "text-rose-400" };      // زوج: وردي/أحمر
+      return { symbol, label, cls: "text-rose-400" };      // Couples: rose/red
     case "l":
       return {
+        symbol,
         label,
-        // نص قوس قزح بدون صندوق
+        // rainbow text
         cls: "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent",
       };
     default:
@@ -156,7 +164,15 @@ export default function PeerOverlay() {
         <span className="text-white/95">
           {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
         </span>
-        {g && <span className={"ml-2 " + g.cls}>{g.label}</span>}
+        {g && (
+          <span className="ml-2 inline-flex items-center gap-1">
+            {/* slightly larger symbol */}
+            <span className={`${g.cls} text-[1.15em] leading-none`} aria-hidden>
+              {g.symbol}
+            </span>
+            <span className={g.cls}>{g.label}</span>
+          </span>
+        )}
       </div>
     </>
   );
