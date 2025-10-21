@@ -1,4 +1,3 @@
-// src/app/chat/ChatClient.tsx
 "use client";
 import "@/app/chat/dcShim.client";
 import "@/app/chat/metaInit.client";
@@ -19,10 +18,11 @@ import {
   getLocalStream,
   toggleMic,
   toggleCam,
-  switchCamera,
+  cycleCameraNext,
   isTorchSupported,
   toggleTorch,
   getCurrentFacing,
+  getMicState,
 } from "@/lib/media";
 import { useFilters } from "@/state/filters";
 import { useFFA } from "@/lib/useFFA";
@@ -54,7 +54,7 @@ import PeerOverlay from "./components/PeerOverlay";
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected" | "stopped";
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 1000;
-const SWITCH_PAUSE_MS = 250; // 200–300ms ثابت
+const SWITCH_PAUSE_MS = 250; // 200–300ms
 const isBrowser = typeof window !== "undefined";
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -94,6 +94,7 @@ export default function ChatClient() {
   const joiningRef = useRef(false);
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
+  const isSwitchingRef = useRef(false);
 
   const lastMediaStateRef = useRef<{ micOn: boolean; camOn: boolean; remoteMuted: boolean }>({
     micOn: true,
@@ -110,7 +111,7 @@ export default function ChatClient() {
     return sid === sidRef.current;
   }
 
-  // إلغاء polling/long-poll عند أي انتقال
+  // Abort لكل long-poll
   const pollAbortRef = useRef<AbortController | null>(null);
   function abortPolling() {
     try {
@@ -122,7 +123,7 @@ export default function ChatClient() {
   const searchStartRef = useRef(0);
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
 
-  // نتذكر آخر تذكرة لإتاحة prev
+  // آخر تذكرة لـ Prev
   const lastTicketRef = useRef<string>("");
 
   function resetMsgs(pid?: string) {
@@ -157,7 +158,11 @@ export default function ChatClient() {
     try {
       window.dispatchEvent(
         new CustomEvent("media:state", {
-          detail: { facing: getCurrentFacing(), torchSupported: isTorchSupported() },
+          detail: {
+            facing: getCurrentFacing(),
+            torchSupported: isTorchSupported(),
+            micOn: getMicState(),
+          },
         }),
       );
     } catch {}
@@ -195,11 +200,13 @@ export default function ChatClient() {
     return String(j.ticket || "");
   }
   async function nextReq(ticket: string, waitMs = 8000, signal?: AbortSignal): Promise<string | null> {
-    const r = await fetch(
-      `/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`,
-      { method: "GET", credentials: "include", cache: "no-store", signal },
-    );
-    if (r.status === 204) return null;
+    const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      signal,
+    });
+    if (r.status === 204) return null; // أعِد الجدولة فورًا في الحلقة
     if (!r.ok) throw new Error(`next failed ${r.status}`);
     const j = await r.json();
     const raw: unknown = (j as any)?.room;
@@ -210,7 +217,6 @@ export default function ChatClient() {
     }
     return null;
   }
-  // prev API
   async function prevReq(ticket: string): Promise<string | null> {
     if (!ticket) return null;
     const r = await fetch(`/api/match/prev?ticket=${encodeURIComponent(ticket)}`, {
@@ -378,13 +384,13 @@ export default function ChatClient() {
       try {
         rn = await nextReq(ticket, wait, ctrl.signal);
       } catch (e: any) {
-        // aborted → خروج نظيف
         if (e?.name === "AbortError") return null;
       } finally {
         if (pollAbortRef.current === ctrl) pollAbortRef.current = null;
       }
       if (!isActive()) return null;
       if (rn) return rn;
+      // 204 → أعِد المحاولة فورًا مع backoff محدود
       wait = Math.min(20000, Math.round(wait * 1.25));
     }
     return null;
@@ -395,7 +401,6 @@ export default function ChatClient() {
     leavingRef.current = true;
     snapshotMediaState();
 
-    // أوقف أي polling/long-poll جارٍ
     abortPolling();
 
     const room = roomRef.current;
@@ -414,10 +419,7 @@ export default function ChatClient() {
 
     if (room) {
       try {
-        // أوقف adaptiveStream مؤقتًا قبل الفصل
-        try {
-          (room as any).setAdaptiveStream?.(false);
-        } catch {}
+        (room as any).setAdaptiveStream?.(false);
         const lp: any = room.localParticipant;
         const pubs =
           typeof lp.getTrackPublications === "function"
@@ -513,6 +515,7 @@ export default function ChatClient() {
         try {
           (room as any).setAdaptiveStream?.(true);
         } catch {}
+        broadcastMediaState();
       }
     };
     room.on(RoomEvent.ConnectionStateChanged, onConn);
@@ -567,6 +570,7 @@ export default function ChatClient() {
       if (!isActiveSid(sid)) return;
       dcDetach();
       setPhase("stopped");
+      broadcastMediaState();
     };
     room.on(RoomEvent.Disconnected, onDisc);
     roomUnsubsRef.current.push(() => {
@@ -597,7 +601,6 @@ export default function ChatClient() {
     joiningRef.current = true;
     setPhase("searching");
 
-    // أوقف أي polling سابق قبل بداية دورة جديدة
     abortPolling();
 
     try {
@@ -618,7 +621,6 @@ export default function ChatClient() {
               return isEveryoneLike(sel) ? [] : [sel as any];
             })();
 
-      // enqueue → خزّن التذكرة لاستخدام prev
       const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
@@ -655,7 +657,6 @@ export default function ChatClient() {
 
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ?? (process as any).env?.LIVEKIT_URL ?? "";
       isConnectingRef.current = true;
-      // خفّض adaptiveStream أثناء الانتقال
       try {
         (room as any).setAdaptiveStream?.(false);
       } catch {}
@@ -689,21 +690,20 @@ export default function ChatClient() {
         if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
         if (remoteVideoRef.current) remoteVideoRef.current.muted = muted;
       } catch {}
-      // إعادة تفعيل adaptiveStream بعد الاستقرار
       try {
         (room as any).setAdaptiveStream?.(true);
       } catch {}
       setPhase("connected");
+      broadcastMediaState();
     } catch (e) {
       console.warn("joinViaRedisMatch failed", e);
     } finally {
       joiningRef.current = false;
       isConnectingRef.current = false;
-      broadcastMediaState();
     }
   }
 
-  // محاولة استرجاع آخر غرفة مباشرة عبر التذكرة خلال 7s
+  // Prev خلال 7s
   async function tryPrevReconnect(): Promise<boolean> {
     const ticket = lastTicketRef.current || "";
     if (!ticket) return false;
@@ -753,6 +753,7 @@ export default function ChatClient() {
       (room as any).setAdaptiveStream?.(true);
     } catch {}
     setPhase("connected");
+    broadcastMediaState();
     return true;
   }
 
@@ -792,67 +793,73 @@ export default function ChatClient() {
     })().catch(() => {});
 
     const offs: Array<() => void> = [];
-    offs.push(on("ui:toggleMic", () => toggleMic()));
+    offs.push(
+      on("ui:toggleMic", () => {
+        toggleMic();
+        broadcastMediaState();
+      }),
+    );
     offs.push(on("ui:toggleCam", () => toggleCam()));
 
-    // تبديل الكاميرا مع replaceTrack + broadcast
+    // تبديل الكاميرا: دورة deviceId + replaceTrack + يعمل دون اتصال
     offs.push(
       on("ui:switchCamera", async () => {
+        if (isSwitchingRef.current) return;
+        isSwitchingRef.current = true;
         try {
-          const newStream = await switchCamera();
+          const newStream = await cycleCameraNext();
           if (localRef.current && newStream) {
             (localRef.current as any).srcObject = newStream;
-            safePlay(localRef.current);
+            await safePlay(localRef.current);
           }
           const room = roomRef.current;
-          if (room && room.state === "connected" && newStream) {
-            const nv = newStream.getVideoTracks?.()[0];
-            if (nv) {
-              const lp: any = room.localParticipant;
-              // حاول العثور على منشور الكاميرا
-              let pub: any = typeof lp.getTrackPublication === "function" ? lp.getTrackPublication(Track.Source.Camera) : null;
-              if (!pub) {
-                const pubs =
-                  typeof lp.getTrackPublications === "function"
-                    ? lp.getTrackPublications()
-                    : Array.from(lp.trackPublications?.values?.() ?? []);
-                pub =
-                  pubs.find((p: any) => p?.source === Track.Source.Camera || p?.kind === Track.Kind.Video) ||
-                  pubs.find((p: any) => p?.track?.mediaStreamTrack?.kind === "video");
-              }
+          const nv = newStream?.getVideoTracks?.()[0] || null;
+          if (room && room.state === "connected" && nv) {
+            const lp: any = room.localParticipant;
+            let pub: any =
+              typeof lp.getTrackPublication === "function" ? lp.getTrackPublication(Track.Source.Camera) : null;
+            if (!pub) {
+              const pubs =
+                typeof lp.getTrackPublications === "function"
+                  ? lp.getTrackPublications()
+                  : Array.from(lp.trackPublications?.values?.() ?? []);
+              pub =
+                pubs.find((p: any) => p?.source === Track.Source.Camera || p?.kind === Track.Kind.Video) ||
+                pubs.find((p: any) => p?.track?.mediaStreamTrack?.kind === "video");
+            }
+            try {
+              (room as any).setAdaptiveStream?.(false);
+            } catch {}
+            if (pub && typeof pub.replaceTrack === "function") {
               try {
-                (room as any).setAdaptiveStream?.(false);
-              } catch {}
-              if (pub && typeof pub.replaceTrack === "function") {
+                await pub.replaceTrack(nv);
+              } catch {
                 try {
-                  await pub.replaceTrack(nv);
-                } catch {
-                  // fallback
-                  try {
-                    await lp.unpublishTrack(pub.track, { stop: false });
-                    await lp.publishTrack(nv);
-                  } catch {}
-                }
-              } else {
-                // fallback
-                try {
-                  if (pub?.track) await lp.unpublishTrack(pub.track, { stop: false });
-                } catch {}
-                try {
+                  await lp.unpublishTrack(pub.track, { stop: false });
                   await lp.publishTrack(nv);
                 } catch {}
               }
+            } else {
               try {
-                (room as any).setAdaptiveStream?.(true);
+                if (pub?.track) await lp.unpublishTrack(pub.track, { stop: false });
+              } catch {}
+              try {
+                await lp.publishTrack(nv);
               } catch {}
             }
+            try {
+              (room as any).setAdaptiveStream?.(true);
+            } catch {}
           }
           broadcastMediaState();
-        } catch {}
+        } catch {
+        } finally {
+          isSwitchingRef.current = false;
+        }
       }),
     );
 
-    // فتح الإعدادات
+    // إعدادات
     offs.push(
       on("ui:openSettings", () => {
         try {
@@ -861,7 +868,7 @@ export default function ChatClient() {
       }),
     );
 
-    // Flash/Torch toggle
+    // Flash/Torch
     offs.push(
       on("ui:toggleTorch", async () => {
         const ok = await toggleTorch();
@@ -889,7 +896,7 @@ export default function ChatClient() {
     );
     offs.push(on("ui:report", () => { toast("Report sent. Moving on"); }));
 
-    // NEXT — تسلسل آمن
+    // NEXT
     offs.push(
       on("ui:next", async () => {
         const now = Date.now();
@@ -898,22 +905,26 @@ export default function ChatClient() {
         lastNextTsRef.current = now;
 
         toast("⏭️ Next");
-        // أوقف أي polling جارٍ
         abortPolling();
         const sid = newSid();
-        await leaveRoom();
-        await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
-        const s1 = await ensureLocalAliveLocal();
-        if (localRef.current && s1) {
-          (localRef.current as any).srcObject = s1;
-          localRef.current.muted = true;
-          await safePlay(localRef.current);
+        try {
+          isSwitchingRef.current = true;
+          await leaveRoom();
+          await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
+          const s1 = await ensureLocalAliveLocal();
+          if (localRef.current && s1) {
+            (localRef.current as any).srcObject = s1;
+            localRef.current.muted = true;
+            await safePlay(localRef.current);
+          }
+          await joinViaRedisMatch(sid);
+        } finally {
+          isSwitchingRef.current = false;
         }
-        await joinViaRedisMatch(sid);
       }),
     );
 
-    // PREV — نافذة 7s + فشل 2s ثم رجوع تلقائي
+    // PREV (7s نافذة)
     offs.push(
       on("ui:prev", async () => {
         if (!filters.isVip && !ffa) {
@@ -928,27 +939,32 @@ export default function ChatClient() {
 
         toast("⏮️ Trying to restore…");
         abortPolling();
-        await leaveRoom();
-        await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
+        try {
+          isSwitchingRef.current = true;
+          await leaveRoom();
+          await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
 
-        const ok = await Promise.race<boolean>([
-          (async () => await tryPrevReconnect())(),
-          (async () => {
-            await new Promise((r) => setTimeout(r, 7000));
-            return false;
-          })(),
-        ]);
+          const ok = await Promise.race<boolean>([
+            (async () => await tryPrevReconnect())(),
+            (async () => {
+              await new Promise((r) => setTimeout(r, 7000));
+              return false;
+            })(),
+          ]);
 
-        if (!ok) {
-          toast("Couldn’t restore the last chat");
-          const sid = newSid();
-          const s2 = await ensureLocalAliveLocal();
-          if (localRef.current && s2) {
-            (localRef.current as any).srcObject = s2;
-            localRef.current.muted = true;
-            await safePlay(localRef.current);
+          if (!ok) {
+            toast("Couldn’t restore the last chat");
+            const sid = newSid();
+            const s2 = await ensureLocalAliveLocal();
+            if (localRef.current && s2) {
+              (localRef.current as any).srcObject = s2;
+              localRef.current.muted = true;
+              await safePlay(localRef.current);
+            }
+            await joinViaRedisMatch(sid);
           }
-          await joinViaRedisMatch(sid);
+        } finally {
+          isSwitchingRef.current = false;
         }
       }),
     );
@@ -1019,12 +1035,6 @@ export default function ChatClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
-  // حدث حالة الميديا الأولي
-  useEffect(() => {
-    broadcastMediaState();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   return (
     <>
       <LikeHud />
@@ -1078,7 +1088,7 @@ export default function ChatClient() {
                             if (localRef.current && s) {
                               (localRef.current as any).srcObject = s;
                               localRef.current.muted = true;
-                              safePlay(localRef.current);
+                              await safePlay(localRef.current);
                               setReady(true);
                               broadcastMediaState();
                               const sid = newSid();
@@ -1107,7 +1117,7 @@ export default function ChatClient() {
             <MyControls />
             <div id="gesture-layer" className="absolute inset-0 -z-10" />
           </section>
-          
+
           <ChatToolbar />
           <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
           <ChatMessagingBar />
