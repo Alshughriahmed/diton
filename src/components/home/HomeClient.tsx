@@ -1,9 +1,12 @@
+// src/components/home/HomeClient.tsx
 "use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import HeaderLite from "@/components/HeaderLite";
 import safeFetch from "@/app/chat/safeFetch";
 import { useProfile } from "@/state/profile";
+import { normalizeGender } from "@/lib/gender";
 
 type MyGender = "male" | "female" | "couple" | "lgbt";
 
@@ -14,69 +17,82 @@ const genderOptions = [
   { key: "lgbt",   label: "LGBT",   symbol: "🏳️‍🌈 ⚧" },
 ] as const;
 
-function classesFor(g: MyGender){
-  switch(g){
-    case "male":   return { text:"text-blue-600",  border:"border-blue-600",  rainbow:false };
-    case "female": return { text:"text-red-600",   border:"border-red-600",   rainbow:false };
-    case "couple": return { text:"text-red-400",   border:"border-red-400",   rainbow:false };
-    case "lgbt":   return { text:"",               border:"border-purple-600", rainbow:true };
+function classesFor(g: MyGender) {
+  switch (g) {
+    case "male":   return { text: "text-blue-600",  border: "border-blue-600",  rainbow: false };
+    case "female": return { text: "text-red-600",   border: "border-red-600",   rainbow: false };
+    case "couple": return { text: "text-rose-400",  border: "border-rose-400",  rainbow: false };
+    case "lgbt":   return { text: "",               border: "border-purple-600", rainbow: true };
   }
 }
 
 const rainbowText =
   "bg-gradient-to-r from-red-500 via-orange-400 via-yellow-400 via-green-500 via-blue-500 to-purple-600 bg-clip-text text-transparent";
 
-export default function HomeClient(){
+function normToHome(n: string | undefined): MyGender | null {
+  switch (normalizeGender(n)) {
+    case "m": return "male";
+    case "f": return "female";
+    case "c": return "couple";
+    case "l": return "lgbt";
+    default:  return null;
+  }
+}
+
+export default function HomeClient() {
   const router = useRouter();
   const profileStore = useProfile();
 
   const [gender, setGender] = useState<MyGender | null>(null);
   const [ageOk, setAgeOk] = useState(false);
-  const [geo, setGeo] = useState<any>(null);
 
-  function selectGender(next: MyGender){
-    setGender(next);
-    try { profileStore.set({ gender: next as any }); } catch {}
-    try { localStorage.setItem("ditona_myGender", String(next)); } catch {}
-    // ملاحظة: لا نلمس فلاتر المطابقة هنا إطلاقًا
-  }
-
+  // read persisted choice or profile on first load
   useEffect(() => {
-    let timedOut = false;
-    const done = (d:any)=>{
-      try{ localStorage.setItem("ditona_geo", JSON.stringify(d)); }catch{}
-      setGeo(d);
-    };
-    try{
-      const g = (navigator as any)?.geolocation;
-      if (g){
-        const t = setTimeout(()=>{ timedOut = true; }, 3000);
-        g.getCurrentPosition(
-          (pos:any)=>{
-            if(!timedOut){
-              clearTimeout(t);
-              done({ lat:pos.coords.latitude, lon:pos.coords.longitude, src:"geolocation" });
-            }
-          },
-          ()=>{},
-          { enableHighAccuracy:false, maximumAge:60_000, timeout:2500 }
-        );
+    try {
+      const saved = localStorage.getItem("ditona_myGender");
+      if (saved) {
+        setGender(saved as MyGender);
+        profileStore.setGender(saved);
+        return;
       }
-    }catch{}
-    safeFetch("/api/geo")
-      .then(r=>r.json()).then(d=>{ if(!geo) done(d); })
-      .catch(()=>{});
+    } catch {}
+    setGender(normToHome((profileStore as any)?.profile?.gender) as MyGender | null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const canStart = useMemo(()=> Boolean(gender) && ageOk, [gender, ageOk]);
+  function selectGender(next: MyGender) {
+    setGender(next);
+    // Update *profile only*. Do not touch filters here.
+    try { profileStore.setGender(next); } catch {}
+    try { localStorage.setItem("ditona_myGender", String(next)); } catch {}
+  }
 
-  async function onStart(){
-    if(!canStart) return;
-    try{
-      await safeFetch("/api/age/allow", { method:"POST" }).catch(()=>{});
-    } finally {
-      router.push("/chat");
-    }
+  // lightweight geo cache (optional; used elsewhere)
+  useEffect(() => {
+    const done = (d: any) => {
+      try { localStorage.setItem("ditona_geo", JSON.stringify(d)); } catch {}
+    };
+    try {
+      const g = (navigator as any)?.geolocation;
+      if (g) {
+        let timedOut = false;
+        const t = setTimeout(() => { timedOut = true; }, 3000);
+        g.getCurrentPosition(
+          (pos: any) => { if (!timedOut) { clearTimeout(t); done({ lat: pos.coords.latitude, lon: pos.coords.longitude, src: "geolocation" }); } },
+          () => {},
+          { enableHighAccuracy: false, maximumAge: 60_000, timeout: 2500 }
+        );
+      }
+    } catch {}
+    safeFetch("/api/geo").then(r => r.json()).then(done).catch(() => {});
+  }, []);
+
+  const canStart = useMemo(() => Boolean(gender) && ageOk, [gender, ageOk]);
+
+  async function onStart() {
+    if (!canStart) return;
+    try { await safeFetch("/api/age/allow", { method: "POST" }).catch(() => {}); }
+    finally { router.push("/chat"); }
   }
 
   return (
@@ -92,26 +108,26 @@ export default function HomeClient(){
       <main className="mx-auto max-w-4xl px-4 pt-28 pb-12">
         <h1 className="text-5xl sm:text-6xl font-extrabold leading-tight">
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600">
-            Welcome to Ditona Video Chat 🤗
+            Welcome to Ditona Video Chat
           </span>
         </h1>
-        <p className="mt-4 text-lg text-gray-300">🔥 Unleash Your Wild Side 🫦</p>
+        <p className="mt-4 text-lg text-gray-300">Fun, fast, and simple.</p>
 
         <div className="mt-8 bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl max-w-lg">
           <label className="block text-sm text-gray-300 mb-2">Select your gender</label>
           <div className="grid grid-cols-2 gap-3">
-            {genderOptions.map(opt=>{
+            {genderOptions.map(opt => {
               const cls = classesFor(opt.key as MyGender);
-              const active = gender===opt.key ? "ring-2 ring-white" : "";
+              const active = gender === opt.key ? "ring-2 ring-white" : "";
               return (
                 <button
                   key={opt.key}
                   type="button"
-                  onClick={()=>selectGender(opt.key as MyGender)}
+                  onClick={() => selectGender(opt.key as MyGender)}
                   className={`px-3 py-3 rounded-lg border bg-black/40 hover:bg-black/30 transition-colors ${active} ${cls.border}`}
                   aria-label={opt.label}
                 >
-                  {opt.key!=="lgbt" ? (
+                  {opt.key !== "lgbt" ? (
                     <span className={`flex items-center gap-2 ${cls.text}`}>
                       <span className="text-2xl leading-none">{opt.symbol}</span>
                       <span className="text-base font-semibold">{opt.label}</span>
@@ -129,7 +145,7 @@ export default function HomeClient(){
           </div>
 
           <div className="mt-4 flex items-center gap-2">
-            <input id="ageok" type="checkbox" className="h-4 w-4" checked={ageOk} onChange={(e)=>setAgeOk(e.target.checked)} />
+            <input id="ageok" type="checkbox" className="h-4 w-4" checked={ageOk} onChange={(e) => setAgeOk(e.target.checked)} />
             <label htmlFor="ageok" className="text-sm text-gray-200">I confirm I am 18+</label>
           </div>
 
