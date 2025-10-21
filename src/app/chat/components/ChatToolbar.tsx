@@ -11,14 +11,13 @@ function isMobileUA() {
 export default function ChatToolbar() {
   const ffa = useFFA();
   const [msgOpen, setMsgOpen] = useState(false);
-  const [micOn, setMicOn] = useState(true);
   const [paused, setPaused] = useState(false);
 
-  // حالة الاتصال لأزرار Prev
+  // اتصال لأزرار Prev
   const dc = (globalThis as any).__ditonaDataChannel;
   const [pairId, setPairId] = useState<string | null>(null);
 
-  // حالة الميديا للبث على الزرار
+  // حالة الميديا للبث على الأزرار
   const [torchSupported, setTorchSupported] = useState(false);
   const [facing, setFacing] = useState<"user" | "environment">("user");
   const [micReal, setMicReal] = useState<boolean>(true);
@@ -55,7 +54,7 @@ export default function ChatToolbar() {
   const canPrev = ffa || (dc?.readyState === "open" && pairId);
   const onMobile = isMobileUA();
 
-  // إظهار زر Flash دائمًا على الموبايل، مُعطّل عند عدم الدعم أو الأمامية
+  // Flash: مرئي على الموبايل فقط. معطّل إذا أمامية أو بلا دعم torch.
   const flashEnabled = torchSupported && facing === "environment";
 
   return (
@@ -125,7 +124,6 @@ export default function ChatToolbar() {
             data-ui="btn-mic"
             onClick={() => {
               emit("ui:toggleMic");
-              // ستصل حالة micOn الحقيقية عبر media:state
             }}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${
               micReal ? "bg-green-600/30 border-green-400/40" : "bg-red-600/30 border-red-400/40"
@@ -135,7 +133,7 @@ export default function ChatToolbar() {
             {micReal ? "🎤" : "🔇"}
           </button>
 
-          {/* ⚡ Flash (بدل matching stat) — يُخفى على الديسكتوب، مرئي دائمًا على الموبايل */}
+          {/* ⚡ Flash — لا زر Matching Stat إطلاقًا */}
           {onMobile ? (
             <button
               data-ui="btn-flash"
