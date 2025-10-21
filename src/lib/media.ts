@@ -71,18 +71,19 @@ function baseVideoConstraints() {
 }
 
 async function getWithDeviceId(deviceId?: string): Promise<MediaStream> {
-  const video: MediaTrackConstraints = deviceId
-    ? { ...baseVideoConstraints(), deviceId: { exact: deviceId } }
-    : true;
-  return await navigator.mediaDevices.getUserMedia({
-    video,
+  const constraints: MediaStreamConstraints = {
+    video: deviceId
+      ? { ...baseVideoConstraints(), deviceId: { exact: deviceId } }
+      : { ...baseVideoConstraints() },
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
     },
-  });
+  };
+  return await navigator.mediaDevices.getUserMedia(constraints);
 }
+
 
 function replaceLocalStream(newStream: MediaStream) {
   try {
