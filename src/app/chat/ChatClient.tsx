@@ -1,4 +1,3 @@
-// src/app/chat/ChatClient.tsx
 "use client";
 
 import "@/app/chat/dcShim.client";
@@ -11,10 +10,8 @@ import "./msgSendClient";
 
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
-import { useNextPrev } from "@/hooks/useNextPrev";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useGestures } from "@/hooks/useGestures";
-import { useHydrated } from "@/hooks/useHydrated";
 import {
   initLocalMedia,
   getLocalStream,
@@ -68,8 +65,6 @@ const isEveryoneLike = (g: unknown) => {
 export default function ChatClient() {
   const ffa = useFFA();
   const router = useRouter();
-  const hydrated = useHydrated();
-  const { next, prev } = useNextPrev();
   useKeyboardShortcuts();
   useGestures();
 
@@ -733,7 +728,7 @@ export default function ChatClient() {
   }, [rtcPhase]);
 
   useEffect(() => {
-    if (!hydrated || !isBrowser) return;
+    if (!isBrowser) return;
     (async () => {
       setPhase("boot");
       try {
@@ -765,7 +760,7 @@ export default function ChatClient() {
     );
     offs.push(on("ui:toggleCam", () => toggleCam()));
 
-    // camera switch (works offline and during a call)
+    // camera switch
     offs.push(
       on("ui:switchCamera", async () => {
         const ok = await switchCameraCycle(roomRef.current, localRef.current || undefined);
@@ -837,7 +832,7 @@ export default function ChatClient() {
       }),
     );
 
-    // prev (7s window, VIP-gated unless ffa)
+    // prev (VIP unless FFA)
     offs.push(
       on("ui:prev", async () => {
         if (!filters.isVip && !ffa) {
@@ -891,7 +886,7 @@ export default function ChatClient() {
       }),
     );
 
-    // removed "ui:togglePlay" to drop the Matching State button functionality at source
+    // no "Matching Stat" action
 
     offs.push(
       on("ui:toggleMasks", () => {
@@ -943,7 +938,7 @@ export default function ChatClient() {
       leaveRoom().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
+  }, [filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
   return (
     <>
@@ -974,7 +969,7 @@ export default function ChatClient() {
             )}
           </section>
 
-          <section className="relative rounded-2xl bg-black/20 overflow-hidden">
+            <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
               data-local-video
