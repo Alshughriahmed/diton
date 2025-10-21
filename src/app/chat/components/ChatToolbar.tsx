@@ -1,5 +1,5 @@
 "use client";
-import { useFFA } from "@/lib/useFFA";
+
 import { useState, useEffect } from "react";
 import { emit } from "@/utils/events";
 
@@ -9,34 +9,22 @@ function isMobileUA() {
 }
 
 export default function ChatToolbar() {
-  const ffa = useFFA();
   const [msgOpen, setMsgOpen] = useState(false);
 
-  // اتصال لأزرار Prev
-  const dc = (globalThis as any).__ditonaDataChannel;
-  const [pairId, setPairId] = useState<string | null>(null);
-
-  // حالة الميديا للبث على الأزرار
+  // حالة الميديا من المصدر الحقيقي
   const [torchSupported, setTorchSupported] = useState(false);
   const [facing, setFacing] = useState<"user" | "environment">("user");
   const [micReal, setMicReal] = useState<boolean>(true);
 
   useEffect(() => {
-    const handlePair = (event: any) => setPairId(event.detail?.pairId || null);
     const handleMediaState = (event: any) => {
       const d = event?.detail || {};
       if (typeof d.torchSupported === "boolean") setTorchSupported(!!d.torchSupported);
       if (d.facing === "user" || d.facing === "environment") setFacing(d.facing);
       if (typeof d.micOn === "boolean") setMicReal(!!d.micOn);
     };
-    if (typeof window !== "undefined") {
-      window.addEventListener("rtc:pair", handlePair);
-      window.addEventListener("media:state", handleMediaState);
-      return () => {
-        window.removeEventListener("rtc:pair", handlePair);
-        window.removeEventListener("media:state", handleMediaState);
-      };
-    }
+    window.addEventListener("media:state", handleMediaState);
+    return () => window.removeEventListener("media:state", handleMediaState);
   }, []);
 
   useEffect(() => {
@@ -50,21 +38,16 @@ export default function ChatToolbar() {
     };
   }, []);
 
-  const canPrev = ffa || (dc?.readyState === "open" && pairId);
   const onMobile = isMobileUA();
-
   const flashEnabled = torchSupported && facing === "environment";
 
   return (
     <>
       {/* Prev / Next large icons */}
       <button
-        onClick={() => { if (canPrev) emit("ui:prev"); }}
-        disabled={!canPrev}
-        title={!canPrev ? "Available during active connection or FFA" : "Previous match"}
-        className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${
-          !canPrev ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-        }`}
+        onClick={() => emit("ui:prev")}
+        title="Previous"
+        className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none"
       >
         ⏮️
       </button>
@@ -115,10 +98,10 @@ export default function ChatToolbar() {
             🔊
           </button>
 
-          {/* 🎤 mic — مرتبط بالحالة الفعلية */}
+          {/* 🎤 mic — يعكس حالة المسار الفعلية */}
           <button
             data-ui="btn-mic"
-            onClick={() => { emit("ui:toggleMic"); }}
+            onClick={() => emit("ui:toggleMic")}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${
               micReal ? "bg-green-600/30 border-green-400/40" : "bg-red-600/30 border-red-400/40"
             }`}
@@ -127,7 +110,7 @@ export default function ChatToolbar() {
             {micReal ? "🎤" : "🔇"}
           </button>
 
-          {/* ⚡ Flash — بلا زر Matching Stat */}
+          {/* ⚡ Flash — يبقى ويُعطّل تلقائيًا عند عدم دعم torch أو عند front */}
           {onMobile ? (
             <button
               data-ui="btn-flash"
@@ -147,7 +130,11 @@ export default function ChatToolbar() {
           {/* ⚙️ settings */}
           <button
             data-ui="btn-settings"
-            onClick={() => { try { window.location.href = "/settings"; } catch {} }}
+            onClick={() => {
+              try {
+                window.location.href = "/settings";
+              } catch {}
+            }}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10"
           >
             ⚙️
