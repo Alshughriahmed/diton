@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { normalizeGender, genderLabel, genderSymbol } from "@/lib/gender";
+import { normalizeGender, genderLabel } from "@/lib/gender";
 
 type Meta = {
   country?: string;
@@ -24,31 +24,28 @@ function loadCached(): Meta {
   }
 }
 
-/** Return label + color class + symbol (with Couples overridden to ⚤). */
+/** Badge data with larger symbol size. Couples symbol overridden to ⚤. */
 function genderBadgeLocal(
   g: unknown
-): { symbol: string; label: string; cls: string } | null {
+): { symbol: string; label: string; labelCls: string; symbolCls: string } | null {
   const n = normalizeGender(g);
   if (n === "u") return null;
 
-  // override only here
-  const symbol = n === "c" ? "⚤" : genderSymbol(n);
   const label = genderLabel(n);
+  const BIG = "text-[1.25rem] sm:text-[1.5rem] leading-none"; // bigger symbol only
 
   switch (n) {
     case "m":
-      return { symbol, label, cls: "text-blue-500" };      // Male: deep blue
+      return { symbol: "♂", label, labelCls: "text-blue-500", symbolCls: `text-blue-500 ${BIG}` };
     case "f":
-      return { symbol, label, cls: "text-red-500" };       // Female: bright red
+      return { symbol: "♀", label, labelCls: "text-red-500", symbolCls: `text-red-500 ${BIG}` };
     case "c":
-      return { symbol, label, cls: "text-rose-400" };      // Couples: rose/red
+      // override to ⚤, keep couples color
+      return { symbol: "⚤", label, labelCls: "text-rose-400", symbolCls: `text-rose-400 ${BIG}` };
     case "l":
-      return {
-        symbol,
-        label,
-        // rainbow text
-        cls: "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent",
-      };
+      // rainbow gradient for both symbol and label
+      const GRAD = "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
+      return { symbol: "🏳️‍🌈", label: "LGBTQ+", labelCls: GRAD, symbolCls: `${GRAD} ${BIG}` };
     default:
       return null;
   }
@@ -159,18 +156,17 @@ export default function PeerOverlay() {
         </div>
       </div>
 
-      {/* Bottom-left: Country–City + gender badge */}
+      {/* Bottom-left: Country–City + gender badge (bigger symbol only) */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         <span className="text-white/95">
           {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
         </span>
         {g && (
-          <span className="ml-2 inline-flex items-center gap-1">
-            {/* slightly larger symbol */}
-            <span className={`${g.cls} text-[1.15em] leading-none`} aria-hidden>
+          <span className="ml-2 inline-flex items-center gap-1 align-middle">
+            <span className={g.symbolCls} aria-hidden>
               {g.symbol}
             </span>
-            <span className={g.cls}>{g.label}</span>
+            <span className={g.labelCls}>{g.label}</span>
           </span>
         )}
       </div>
