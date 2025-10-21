@@ -51,12 +51,11 @@ import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
 
-type Phase = "boot" | "idle" | "searching" | "matched" | "connected" | "stopped";
+type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
-const DISCONNECT_TIMEOUT_MS = 1000;
-const SWITCH_PAUSE_MS = 250;
-const isBrowser = typeof window !== "undefined";
+const DISCONNECT_TIMEOUT_MS = 800;
+const SWITCH_PAUSE_MS = 100;
 
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -80,14 +79,11 @@ export default function ChatClient() {
 
   const [ready, setReady] = useState(false);
   const [like, setLike] = useState(false);
-  const [peerLikes, setPeerLikes] = useState(0);
   const [rtcPhase, setRtcPhase] = useState<Phase>("idle");
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
   const [isMirrored, setIsMirrored] = useState(true);
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
-
-  const [effectsStream, setEffectsStream] = useState<MediaStream | null>(null);
 
   const roomRef = useRef<Room | null>(null);
   const roomUnsubsRef = useRef<(() => void)[]>([]);
@@ -112,9 +108,8 @@ export default function ChatClient() {
     sidRef.current += 1;
     return sidRef.current;
   }
-  function isActiveSid(sid: number) {
-    return sid === sidRef.current;
-  }
+  const isActiveSid = (sid: number) => sid === sidRef.current;
+
   function abortPolling() {
     try {
       pollAbortRef.current?.abort();
@@ -122,11 +117,6 @@ export default function ChatClient() {
     pollAbortRef.current = null;
   }
 
-  function resetMsgs(pid?: string) {
-    try {
-      window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId: pid } }));
-    } catch {}
-  }
   function setPhase(p: Phase) {
     setRtcPhase(p);
     try {
@@ -135,14 +125,16 @@ export default function ChatClient() {
     if (p === "searching") {
       searchStartRef.current = Date.now();
       setSearchMsg("Searching for a match…");
+      try {
+        window.dispatchEvent(new CustomEvent("ui:msg:reset"));
+      } catch {}
     }
-    if (p === "searching" || p === "stopped") resetMsgs();
   }
   function emitPair(pairId: string, role: "caller" | "callee") {
     try {
       window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
+      window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId } }));
     } catch {}
-    resetMsgs(pairId);
   }
   function emitRemoteTrackStarted() {
     try {
@@ -269,16 +261,12 @@ export default function ChatClient() {
       const videoEnded = !vt || vt.readyState === "ended";
       const audioEnded = at ? at.readyState === "ended" : false;
       if (!s || videoEnded || audioEnded) {
-        try {
-          await initLocalMedia();
-        } catch {}
+        await initLocalMedia().catch(() => {});
         s = getLocalStream() as MediaStream | null;
       }
       return s ?? null;
     } catch {
-      try {
-        await initLocalMedia();
-      } catch {}
+      await initLocalMedia().catch(() => {});
       return (getLocalStream() as MediaStream | null) ?? null;
     }
   }
@@ -334,14 +322,6 @@ export default function ChatClient() {
       if (remoteAudioRef.current) (remoteAudioRef.current as any).srcObject = null;
     } catch {}
   }
-  function restoreLocalPreview() {
-    const s = getLocalStream();
-    if (localRef.current && s) {
-      (localRef.current as any).srcObject = s;
-      localRef.current.muted = true;
-      safePlay(localRef.current);
-    }
-  }
 
   async function requestPeerMetaTwice(room: Room) {
     try {
@@ -357,19 +337,18 @@ export default function ChatClient() {
 
   async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
     let wait = 8000;
-    const isActive = () => isActiveSid(sid);
-    while (isActive()) {
+    while (isActiveSid(sid)) {
       const ctrl = new AbortController();
       pollAbortRef.current = ctrl;
       let rn: string | null = null;
       try {
         rn = await nextReq(ticket, wait, ctrl.signal);
       } catch (e: any) {
-        if (e?.name === "AbortError") return null;
+        if (e?.name === "AbortError") return null; // sid سيتغيّر في next/prev
       } finally {
         if (pollAbortRef.current === ctrl) pollAbortRef.current = null;
       }
-      if (!isActive()) return null;
+      if (!isActiveSid(sid)) return null;
       if (rn) return rn;
       wait = Math.min(20000, Math.round(wait * 1.25));
     }
@@ -388,15 +367,14 @@ export default function ChatClient() {
 
     dcDetach();
     clearRoomListeners();
-    resetMsgs();
 
     try {
       (window as any).__ditonaPairId = undefined;
       (window as any).__pairId = undefined;
     } catch {}
 
+    // لا تلمس المعاينة المحلية لتفادي الوميض
     detachRemoteAll();
-    restoreLocalPreview();
 
     if (room) {
       try {
@@ -437,7 +415,6 @@ export default function ChatClient() {
 
     (globalThis as any).__lkRoom = null;
     leavingRef.current = false;
-    setPhase("stopped");
   }
 
   function wireRoomEvents(room: Room, roomName: string, sid: number) {
@@ -544,7 +521,7 @@ export default function ChatClient() {
     const onDisc = () => {
       if (!isActiveSid(sid)) return;
       dcDetach();
-      setPhase("stopped");
+      setPhase("searching");
       broadcastMediaState();
     };
     room.on(RoomEvent.Disconnected, onDisc);
@@ -607,11 +584,17 @@ export default function ChatClient() {
       lastTicketRef.current = ticket;
       if (!isActiveSid(sid)) return;
 
-      const roomName = await waitRoomLoop(ticket, sid);
-      if (!roomName) {
-        setPhase("stopped");
-        return;
+      // حلقة انتظار: لا نتوقف حتى تصل غرفة أو يتغير sid
+      let roomName: string | null = null;
+      while (isActiveSid(sid) && !roomName) {
+        roomName = await waitRoomLoop(ticket, sid);
+        if (!isActiveSid(sid)) return;
+        if (!roomName) {
+          setPhase("searching"); // استمر في البحث
+          continue;
+        }
       }
+      if (!roomName || !isActiveSid(sid)) return;
 
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
@@ -645,7 +628,7 @@ export default function ChatClient() {
 
       await requestPeerMetaTwice(room);
 
-      const src = (effectsStream ?? getLocalStream()) || null;
+      const src = getLocalStream() || null;
       if (src && room.state === "connected") {
         applyLocalTrackStatesBeforePublish(src);
         for (const t of src.getTracks()) {
@@ -665,6 +648,7 @@ export default function ChatClient() {
       broadcastMediaState();
     } catch (e) {
       console.warn("joinViaRedisMatch failed", e);
+      setPhase("searching"); // ابقِ المؤشر في حالة البحث عند الفشل
     } finally {
       joiningRef.current = false;
       isConnectingRef.current = false;
@@ -704,7 +688,7 @@ export default function ChatClient() {
     dcAttach(room);
     await requestPeerMetaTwice(room);
 
-    const src = (effectsStream ?? getLocalStream()) || null;
+    const src = getLocalStream() || null;
     if (src) {
       applyLocalTrackStatesBeforePublish(src);
       for (const t of src.getTracks()) {
@@ -729,13 +713,14 @@ export default function ChatClient() {
   }, [rtcPhase]);
 
   useEffect(() => {
-    if (!isBrowser) return;
     (async () => {
       setPhase("boot");
       try {
         const s0 = await ensureLocalAliveLocal();
         if (localRef.current && s0) {
-          (localRef.current as any).srcObject = s0;
+          if ((localRef.current as any).srcObject !== s0) {
+            (localRef.current as any).srcObject = s0;
+          }
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
@@ -761,7 +746,6 @@ export default function ChatClient() {
     );
     offs.push(on("ui:toggleCam", () => toggleCam()));
 
-    // camera switch
     offs.push(
       on("ui:switchCamera", async () => {
         const ok = await switchCameraCycle(roomRef.current, localRef.current || undefined);
@@ -778,7 +762,6 @@ export default function ChatClient() {
       }),
     );
 
-    // torch
     offs.push(
       on("ui:toggleTorch", async () => {
         const ok = await toggleTorch();
@@ -787,7 +770,6 @@ export default function ChatClient() {
       }),
     );
 
-    // like
     offs.push(
       on("ui:like", async () => {
         const room = roomRef.current;
@@ -805,13 +787,9 @@ export default function ChatClient() {
       }),
     );
 
-    offs.push(
-      on("ui:report", () => {
-        toast("Report sent. Moving on");
-      }),
-    );
+    offs.push(on("ui:report", () => toast("Report sent. Moving on")));
 
-    // next
+    // NEXT
     offs.push(
       on("ui:next", async () => {
         const now = Date.now();
@@ -823,8 +801,9 @@ export default function ChatClient() {
         const sid = newSid();
         await leaveRoom();
         await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
+
         const s1 = await ensureLocalAliveLocal();
-        if (localRef.current && s1) {
+        if (localRef.current && s1 && (localRef.current as any).srcObject !== s1) {
           (localRef.current as any).srcObject = s1;
           localRef.current.muted = true;
           await safePlay(localRef.current);
@@ -833,7 +812,7 @@ export default function ChatClient() {
       }),
     );
 
-    // prev (VIP unless FFA)
+    // PREV
     offs.push(
       on("ui:prev", async () => {
         if (!filters.isVip && !ffa) {
@@ -861,7 +840,7 @@ export default function ChatClient() {
         if (!ok) {
           const sid = newSid();
           const s2 = await ensureLocalAliveLocal();
-          if (localRef.current && s2) {
+          if (localRef.current && s2 && (localRef.current as any).srcObject !== s2) {
             (localRef.current as any).srcObject = s2;
             localRef.current.muted = true;
             await safePlay(localRef.current);
@@ -887,13 +866,7 @@ export default function ChatClient() {
       }),
     );
 
-    // no "Matching Stat" action
-
-    offs.push(
-      on("ui:toggleMasks", () => {
-        toast("Enable/disable masks");
-      }),
-    );
+    offs.push(on("ui:toggleMasks", () => toast("Enable/disable masks")));
     offs.push(
       on("ui:toggleMirror", () => {
         setIsMirrored((prev) => {
@@ -910,29 +883,13 @@ export default function ChatClient() {
       }),
     );
 
-    function onPeerMeta(e: any) {
-      const meta = e?.detail;
-      if (!meta) return;
-    }
-    window.addEventListener("ditona:peer-meta", onPeerMeta as any);
-
-    function onPeerLike(e: any) {
-      const detail = e.detail;
-      if (detail && typeof detail.liked === "boolean") {
-        setPeerLikes(detail.liked ? 1 : 0);
-        toast(detail.liked ? "Partner liked you ❤️" : "Partner unliked 💔");
-      }
-    }
-    window.addEventListener("rtc:peer-like", onPeerLike as any);
-
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe(() => {});
 
     return () => {
       for (const off of offs) try { off(); } catch {}
       try {
-        window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
-        window.removeEventListener("rtc:peer-like", onPeerLike as any);
+        window.removeEventListener("rtc:peer-like", () => {});
       } catch {}
       unsubMob();
       abortPolling();
@@ -970,7 +927,7 @@ export default function ChatClient() {
             )}
           </section>
 
-            <section className="relative rounded-2xl bg-black/20 overflow-hidden">
+          <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
               data-local-video
@@ -992,7 +949,9 @@ export default function ChatClient() {
                           .then(async () => {
                             const s = getLocalStream();
                             if (localRef.current && s) {
-                              (localRef.current as any).srcObject = s;
+                              if ((localRef.current as any).srcObject !== s) {
+                                (localRef.current as any).srcObject = s;
+                              }
                               localRef.current.muted = true;
                               await safePlay(localRef.current);
                               setReady(true);
