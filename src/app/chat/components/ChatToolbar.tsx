@@ -1,8 +1,12 @@
-// src/app/chat/components/ChatToolbar.tsx
 "use client";
 import { useFFA } from "@/lib/useFFA";
 import { useState, useEffect } from "react";
 import { emit } from "@/utils/events";
+
+function isMobileUA() {
+  if (typeof navigator === "undefined") return false;
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || "ontouchstart" in window;
+}
 
 export default function ChatToolbar() {
   const ffa = useFFA();
@@ -10,24 +14,23 @@ export default function ChatToolbar() {
   const [micOn, setMicOn] = useState(true);
   const [paused, setPaused] = useState(false);
 
-  // DataChannel and pair state for button guards
+  // حالة الاتصال لأزرار Prev
   const dc = (globalThis as any).__ditonaDataChannel;
   const [pairId, setPairId] = useState<string | null>(null);
 
-  // Flash/Torch state from media events
+  // حالة الميديا للبث على الزرار
   const [torchSupported, setTorchSupported] = useState(false);
   const [facing, setFacing] = useState<"user" | "environment">("user");
+  const [micReal, setMicReal] = useState<boolean>(true);
 
   useEffect(() => {
-    const handlePair = (event: any) => {
-      setPairId(event.detail?.pairId || null);
-    };
+    const handlePair = (event: any) => setPairId(event.detail?.pairId || null);
     const handleMediaState = (event: any) => {
       const d = event?.detail || {};
       if (typeof d.torchSupported === "boolean") setTorchSupported(!!d.torchSupported);
       if (d.facing === "user" || d.facing === "environment") setFacing(d.facing);
+      if (typeof d.micOn === "boolean") setMicReal(!!d.micOn);
     };
-
     if (typeof window !== "undefined") {
       window.addEventListener("rtc:pair", handlePair);
       window.addEventListener("media:state", handleMediaState);
@@ -50,8 +53,9 @@ export default function ChatToolbar() {
   }, []);
 
   const canPrev = ffa || (dc?.readyState === "open" && pairId);
+  const onMobile = isMobileUA();
 
-  const showFlashButton = torchSupported; // على الديسكتوب سيبقى معطّلاً في العادة
+  // إظهار زر Flash دائمًا على الموبايل، مُعطّل عند عدم الدعم أو الأمامية
   const flashEnabled = torchSupported && facing === "environment";
 
   return (
@@ -116,22 +120,23 @@ export default function ChatToolbar() {
             🔊
           </button>
 
-          {/* 🎤 mic */}
+          {/* 🎤 mic — مرتبط بالحالة الفعلية */}
           <button
             data-ui="btn-mic"
             onClick={() => {
-              setMicOn((v) => !v);
               emit("ui:toggleMic");
+              // ستصل حالة micOn الحقيقية عبر media:state
             }}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${
-              micOn ? "bg-green-600/30 border-green-400/40" : "bg-red-600/30 border-red-400/40"
+              micReal ? "bg-green-600/30 border-green-400/40" : "bg-red-600/30 border-red-400/40"
             }`}
+            title={micReal ? "Mic On" : "Mic Off"}
           >
-            {micOn ? "🎤" : "🔇"}
+            {micReal ? "🎤" : "🔇"}
           </button>
 
-          {/* ⚡ Flash (بدل matching stat) */}
-          {showFlashButton ? (
+          {/* ⚡ Flash (بدل matching stat) — يُخفى على الديسكتوب، مرئي دائمًا على الموبايل */}
+          {onMobile ? (
             <button
               data-ui="btn-flash"
               disabled={!flashEnabled}
