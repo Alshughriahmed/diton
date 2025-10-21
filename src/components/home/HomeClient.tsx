@@ -4,8 +4,6 @@ import { useRouter } from "next/navigation";
 import HeaderLite from "@/components/HeaderLite";
 import safeFetch from "@/app/chat/safeFetch";
 import { useProfile } from "@/state/profile";
-import { useFilters, type GenderOpt } from "@/state/filters";
-import { normalizeGender } from "@/lib/gender";
 
 type MyGender = "male" | "female" | "couple" | "lgbt";
 
@@ -31,7 +29,6 @@ const rainbowText =
 export default function HomeClient(){
   const router = useRouter();
   const profileStore = useProfile();
-  const filtersStore = useFilters();
 
   const [gender, setGender] = useState<MyGender | null>(null);
   const [ageOk, setAgeOk] = useState(false);
@@ -40,8 +37,8 @@ export default function HomeClient(){
   function selectGender(next: MyGender){
     setGender(next);
     try { profileStore.set({ gender: next as any }); } catch {}
-    try { filtersStore.setGender(next as GenderOpt); } catch {}
     try { localStorage.setItem("ditona_myGender", String(next)); } catch {}
+    // ملاحظة: لا نلمس فلاتر المطابقة هنا إطلاقًا
   }
 
   useEffect(() => {
