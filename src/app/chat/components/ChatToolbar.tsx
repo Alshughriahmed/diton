@@ -107,7 +107,7 @@ export default function ChatToolbar() {
             }`}
             title={micReal ? "Mic On" : "Mic Off"}
           >
-            {micReal ? "🎤" : "🔇"}
+            {micReal ? "🎤" : "🎤🚫"}
           </button>
 
           {/* ⚡ Flash — يبقى ويُعطّل تلقائيًا عند عدم دعم torch أو عند front */}
