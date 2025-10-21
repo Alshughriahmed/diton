@@ -9,22 +9,21 @@ const SYNS: Record<GenderNorm, string[]> = {
   u: ["u", "everyone", "all", "any", "unknown", "unspecified", "every", ""],
 };
 
-const VALID_FILTERS: GenderNorm[] = ["m", "f", "c", "l"]; // "u" never sent as a filter constraint
+const VALID_FILTERS: GenderNorm[] = ["m", "f", "c", "l"]; // "u" is never sent as a filter constraint
 
 function normToken(x: unknown): string {
   if (x == null) return "";
   return String(x).trim().toLowerCase();
 }
 
-/** Normalize any user/UI value into one of: "m"|"f"|"c"|"l"|"u". */
+/** Normalize any user/UI value into one of: "m" | "f" | "c" | "l" | "u". */
 export function normalizeGender(v?: unknown): GenderNorm {
   const t = normToken(v);
   for (const k of Object.keys(SYNS) as GenderNorm[]) {
     if (SYNS[k].includes(t)) return k;
   }
-  // also accept common abbreviations
   if (t.startsWith("mal")) return "m";
-  if (t.startsWith("fem") || t == "w") return "f";
+  if (t.startsWith("fem") || t === "w") return "f";
   if (t.startsWith("coupl")) return "c";
   if (t.startsWith("lg") || t.startsWith("queer") || t.startsWith("gay") || t.startsWith("lesb")) return "l";
   return "u";
@@ -32,16 +31,15 @@ export function normalizeGender(v?: unknown): GenderNorm {
 
 /** Everyone-like flag. Treats "u"/"everyone"/"all"/empty as no constraint. */
 export function isEveryone(val?: unknown): boolean {
-  const t = normalizeGender(val);
-  return t == "u";
+  return normalizeGender(val) === "u";
 }
 
 /**
  * Convert a UI field into a normalized filter array.
- * - Accepts: undefined | "everyone" | "m" | "male,female" | string[]
- * - Returns only items in ["m","f","c","l"] and de-duplicates.
- * - Returns [] for Everyone/All or when input has no valid tokens.
- * - Enforces optional `limit` (default 2) for FFA/VIP parity.
+ * Accepts undefined | "everyone" | "m" | "male,female" | string[].
+ * Returns only items in ["m","f","c","l"] and de-duplicates.
+ * Returns [] for Everyone/All or when input has no valid tokens.
+ * Enforces optional `limit` (default 2).
  */
 export function asFilterGenders(input?: unknown, limit = 2): GenderNorm[] {
   const push: GenderNorm[] = [];
@@ -62,14 +60,14 @@ export function asFilterGenders(input?: unknown, limit = 2): GenderNorm[] {
   return push;
 }
 
-/** UI helpers kept minimal. */
+/** UI helpers. */
 export function genderLabel(g: unknown): string {
   switch (normalizeGender(g)) {
     case "m": return "Male";
     case "f": return "Female";
     case "c": return "Couples";
     case "l": return "LGBTQ+";
-    default: return "Everyone";
+    default:  return "Everyone";
   }
 }
 export function genderSymbol(g: unknown): string {
@@ -78,6 +76,6 @@ export function genderSymbol(g: unknown): string {
     case "f": return "♀";
     case "c": return "❤";
     case "l": return "🏳️‍🌈";
-    default: return "•";
+    default:  return "•";
   }
 }
