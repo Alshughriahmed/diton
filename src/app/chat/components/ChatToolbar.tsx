@@ -1,12 +1,14 @@
+// src/app/chat/components/ChatToolbar.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { emit } from "@/utils/events";
 import { useFFA } from "@/lib/useFFA";
+import MaskTray from "./MaskTray";
 
 function isMobileUA() {
   if (typeof navigator === "undefined" || typeof window === "undefined") return false;
-  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ("ontouchstart" in window);
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || "ontouchstart" in window;
 }
 
 export default function ChatToolbar() {
@@ -23,6 +25,9 @@ export default function ChatToolbar() {
   const [micOn, setMicOn] = useState<boolean>(true);
   const [remoteMuted, setRemoteMuted] = useState<boolean>(false);
 
+  // mask tray
+  const [maskOpen, setMaskOpen] = useState(false);
+
   useEffect(() => {
     const onPair = (e: any) => setPairId(e?.detail?.pairId || null);
 
@@ -31,10 +36,10 @@ export default function ChatToolbar() {
       if (typeof d.torchSupported === "boolean") setTorchSupported(!!d.torchSupported);
       if (d.facing === "user" || d.facing === "environment") setFacing(d.facing);
       if (typeof d.micOn === "boolean") setMicOn(!!d.micOn);
-      if (typeof d.remoteMuted === "boolean") setRemoteMuted(!!d.remoteMuted); // يستخدم إن وُجد
+      if (typeof d.remoteMuted === "boolean") setRemoteMuted(!!d.remoteMuted);
     };
 
-    const onToggleRemoteAudio = () => setRemoteMuted((v) => !v); // مزامنة محلية فورية
+    const onToggleRemoteAudio = () => setRemoteMuted((v) => !v);
 
     window.addEventListener("rtc:pair", onPair as any);
     window.addEventListener("media:state", onMediaState as any);
@@ -66,7 +71,9 @@ export default function ChatToolbar() {
     <>
       {/* Prev / Next big touch targets */}
       <button
-        onClick={() => { if (canPrev) emit("ui:prev"); }}
+        onClick={() => {
+          if (canPrev) emit("ui:prev");
+        }}
         disabled={!canPrev}
         title={!canPrev ? "Available during active connection or FFA" : "Previous match"}
         className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${
@@ -157,17 +164,21 @@ export default function ChatToolbar() {
           {/* Settings */}
           <button
             data-ui="btn-settings"
-            onClick={() => { try { window.location.href = "/settings"; } catch {} }}
+            onClick={() => {
+              try {
+                window.location.href = "/settings";
+              } catch {}
+            }}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10"
             title="Settings"
           >
             ⚙️
           </button>
 
-          {/* Masks */}
+          {/* Masks: افتح/أغلق الشريط فقط */}
           <button
             data-ui="btn-masks"
-            onClick={() => emit("ui:toggleMasks")}
+            onClick={() => setMaskOpen((v) => !v)}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10"
             title="Masks"
           >
@@ -185,6 +196,8 @@ export default function ChatToolbar() {
           </button>
         </div>
       </section>
+
+      <MaskTray open={maskOpen} onClose={() => setMaskOpen(false)} />
     </>
   );
 }
