@@ -66,6 +66,17 @@ const isEveryoneLike = (g: unknown) => {
   return v === "everyone" || v === "all" || v === "u";
 };
 
+function readLSBool(key: string, defVal: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === "1") return true;
+    if (v === "0") return false;
+    return defVal;
+  } catch {
+    return defVal;
+  }
+}
+
 export default function ChatClient() {
   const ffa = useFFA();
   const router = useRouter();
@@ -92,10 +103,10 @@ export default function ChatClient() {
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
 
   // حالة المؤثرات
-  const effectsOnRef = useRef<boolean>(false);         // هل خط المعالجة يعمل
-  const effectsMaskOnRef = useRef<boolean>(false);     // هل هناك ماسك مفعّل
-  const beautyOnRef = useRef<boolean>(false);          // حالة التجميل فقط
-  const processedStreamRef = useRef<MediaStream | null>(null); // المسار المُعالَج
+  const effectsOnRef = useRef<boolean>(false);
+  const effectsMaskOnRef = useRef<boolean>(false);
+  const beautyOnRef = useRef<boolean>(false);
+  const processedStreamRef = useRef<MediaStream | null>(null);
 
   // إدارة الغرفة
   const roomRef = useRef<Room | null>(null);
@@ -164,7 +175,12 @@ export default function ChatClient() {
     try {
       window.dispatchEvent(
         new CustomEvent("media:state", {
-          detail: { facing: getCurrentFacing(), torchSupported: isTorchSupported(), micOn: getMicState() },
+          detail: {
+            facing: getCurrentFacing(),
+            torchSupported: isTorchSupported(),
+            micOn: getMicState(),
+            remoteMuted: !!lastMediaStateRef.current.remoteMuted,
+          },
         }),
       );
     } catch {}
@@ -489,6 +505,12 @@ export default function ChatClient() {
         try {
           window.dispatchEvent(new CustomEvent("lk:attached"));
         } catch {}
+        // طبّق حالة كتم الصوت البعيد المحفوظة
+        try {
+          const muted = !!lastMediaStateRef.current.remoteMuted;
+          if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
+          if (remoteVideoRef.current) remoteVideoRef.current.muted = muted;
+        } catch {}
         broadcastMediaState();
       }
     };
@@ -621,7 +643,6 @@ export default function ChatClient() {
       await ensureEffectsRunning();
       toast("Beauty ON");
     } else {
-      // إذا لا ماسك مفعّل أوقف الخط بالكامل لتوفير الموارد
       if (!effectsMaskOnRef.current) {
         await disableAllEffects();
       } else {
@@ -637,12 +658,14 @@ export default function ChatClient() {
       await ensureEffectsRunning();
       toast(`Mask: ${name}`);
       try {
-        localStorage.setItem("ditona_mask", name);
+        localStorage.setItem("ditona_mask_name", name);
+        localStorage.setItem("ditona_mask", name); // توافق خلفي
       } catch {}
     } else {
       await setMask(null as any).catch(() => {});
       effectsMaskOnRef.current = false;
       try {
+        localStorage.setItem("ditona_mask_name", "null");
         localStorage.removeItem("ditona_mask");
       } catch {}
       if (!beautyOnRef.current) {
@@ -658,7 +681,6 @@ export default function ChatClient() {
     const restored = await stopEffects(raw ?? (processedStreamRef.current as any)).catch(() => raw);
     processedStreamRef.current = null;
     effectsOnRef.current = false;
-    // لا تغيّر beautyOnRef هنا؛ فقط أطفئ الخط كله
     if (restored) {
       applyLocalTrackStatesBeforePublish(restored);
       await replaceLocalVideoTrack(restored);
@@ -819,6 +841,11 @@ export default function ChatClient() {
         } catch {}
       }
     }
+    try {
+      const muted = !!lastMediaStateRef.current.remoteMuted;
+      if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
+      if (remoteVideoRef.current) remoteVideoRef.current.muted = muted;
+    } catch {}
     setPhase("connected");
     broadcastMediaState();
     return true;
@@ -841,6 +868,18 @@ export default function ChatClient() {
       setPhase("boot");
       try {
         const s0 = await ensureLocalAliveLocal();
+
+        // استرجاع وحفظ تفضيلات الصوت
+        try {
+          const savedMic = readLSBool("ditona_mic_on", true);
+          lastMediaStateRef.current.micOn = savedMic;
+          const at = s0?.getAudioTracks?.()[0];
+          if (at) at.enabled = savedMic;
+
+          const savedRemoteMuted = readLSBool("ditona_remote_muted", false);
+          lastMediaStateRef.current.remoteMuted = savedRemoteMuted;
+        } catch {}
+
         if (localRef.current && s0) {
           if ((localRef.current as any).srcObject !== s0) {
             (localRef.current as any).srcObject = s0;
@@ -851,8 +890,8 @@ export default function ChatClient() {
         // استرجاع تفضيلات المؤثرات
         try {
           beautyOnRef.current = localStorage.getItem("ditona_beauty_on") === "1";
-          const savedMask = localStorage.getItem("ditona_mask");
-          if (savedMask) {
+          const savedMask = (localStorage.getItem("ditona_mask_name") ?? localStorage.getItem("ditona_mask")) || "";
+          if (savedMask && savedMask !== "null") {
             await setMask(savedMask).catch(() => {});
             effectsMaskOnRef.current = true;
           }
@@ -881,6 +920,11 @@ export default function ChatClient() {
     offs.push(
       on("ui:toggleMic", () => {
         toggleMic();
+        const v = !!getMicState();
+        lastMediaStateRef.current.micOn = v;
+        try {
+          localStorage.setItem("ditona_mic_on", v ? "1" : "0");
+        } catch {}
         broadcastMediaState();
       }),
     );
@@ -1019,6 +1063,10 @@ export default function ChatClient() {
         if (target) {
           target.muted = !target.muted;
           lastMediaStateRef.current.remoteMuted = target.muted;
+          try {
+            localStorage.setItem("ditona_remote_muted", target.muted ? "1" : "0");
+          } catch {}
+          broadcastMediaState();
           toast(target.muted ? "Remote muted" : "Remote unmuted");
         }
       }),
@@ -1044,7 +1092,7 @@ export default function ChatClient() {
     // اختيار ماسك محدد
     offs.push(
       on("ui:setMask", async (d: any) => {
-        const name = d?.name || null;
+        const name = d?.name ?? null;
         await enableMask(name);
       }),
     );
