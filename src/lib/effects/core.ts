@@ -1,13 +1,12 @@
 // src/lib/effects/core.ts
 let running = false;
-let videoEl: HTMLVideoElement | null = null;
-let canvasEl: HTMLCanvasElement | null = null;
+let v: HTMLVideoElement | null = null;
+let c: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
-let rafId: number | null = null;
+let raf: number | null = null;
 let maskImg: HTMLImageElement | null = null;
 let processed: MediaStream | null = null;
 
-/** تحميل/تفريغ الماسك */
 export async function setMask(name: string | null) {
   if (!name) { maskImg = null; return; }
   const img = new Image();
@@ -17,51 +16,46 @@ export async function setMask(name: string | null) {
   maskImg = img;
 }
 
-/** بدء خط التجميل/الماسك وإرجاع مسار فيديو معالج */
 export async function startEffects(src: MediaStream): Promise<MediaStream> {
+  if (typeof document === "undefined") return src; // SSR guard
   if (running && processed) return processed;
 
   running = true;
 
-  // عناصر الرسم
-  videoEl = document.createElement("video");
-  videoEl.muted = true;
-  videoEl.playsInline = true;
-  // @ts-expect-error srcObject مدعوم بالمتصفح
-  videoEl.srcObject = src;
-  try { await videoEl.play(); } catch {}
+  v = document.createElement("video");
+  v.muted = true;
+  v.playsInline = true;
+  (v as any).srcObject = src;
+  try { await v.play(); } catch {}
 
-  const vs = (src.getVideoTracks?.()[0]?.getSettings?.() || {}) as MediaTrackSettings;
-  const w = (vs.width as number) || 640;
-  const h = (vs.height as number) || 480;
+  const s = (src.getVideoTracks?.()[0]?.getSettings?.() || {}) as MediaTrackSettings;
+  const w = (s.width as number) || 640;
+  const h = (s.height as number) || 480;
 
-  canvasEl = document.createElement("canvas");
-  canvasEl.width = w;
-  canvasEl.height = h;
-  ctx = canvasEl.getContext("2d");
+  c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  ctx = c.getContext("2d");
 
   const draw = () => {
-    if (!running || !ctx || !canvasEl || !videoEl) return;
+    if (!running || !ctx || !c || !v) return;
     try {
+      ctx.clearRect(0, 0, w, h);
       // تنعيم بسيط وتحسين لون
       ctx.filter = "blur(0.6px) saturate(1.05) contrast(1.05)";
-      ctx.drawImage(videoEl, 0, 0, w, h);
+      ctx.drawImage(v, 0, 0, w, h);
 
-      // رسم الماسك (مركزيًا كقناع بسيط)
+      // رسم الماسك في المنتصف كطبقة فوقية
       if (maskImg) {
-        const mw = Math.min(w, h) * 0.6;
-        const mh = mw;
+        const mw = Math.min(w, h) * 0.6, mh = mw;
         ctx.drawImage(maskImg, (w - mw) / 2, (h - mh) / 2, mw, mh);
       }
     } catch {}
-    rafId = requestAnimationFrame(draw);
+    raf = requestAnimationFrame(draw);
   };
   draw();
 
-  // إنتاج مسار الفيديو المعالج
-  const fps = Math.min(30, (vs.frameRate as number) || 30);
-  // @ts-expect-error captureStream متاح على canvas
-  processed = canvasEl.captureStream ? canvasEl.captureStream(fps) : null;
+  const fps = Math.min(30, Number(s.frameRate) || 30);
+  processed = (c as any).captureStream ? (c as any).captureStream(fps) : src;
 
   // ضم الصوت الأصلي
   try {
@@ -72,27 +66,18 @@ export async function startEffects(src: MediaStream): Promise<MediaStream> {
   return processed || src;
 }
 
-/** إيقاف التأثيرات والعودة للمسار الأصلي */
 export async function stopEffects(fallback?: MediaStream | null): Promise<MediaStream> {
   running = false;
-  if (rafId != null) cancelAnimationFrame(rafId);
-  rafId = null;
+  if (raf != null) cancelAnimationFrame(raf);
+  raf = null;
 
   try {
-    // تنظيف
-    if (videoEl) {
-      // @ts-expect-error
-      videoEl.srcObject = null;
-      videoEl.pause?.();
+    if (v) {
+      (v as any).srcObject = null;
+      v.pause?.();
     }
   } catch {}
 
-  videoEl = null;
-  canvasEl = null;
-  ctx = null;
-  maskImg = null;
-
-  const out = fallback || null;
-  processed = null;
-  return out as MediaStream;
+  v = null; c = null; ctx = null; maskImg = null; processed = null;
+  return fallback || null as any;
 }
