@@ -1,4 +1,4 @@
-// فقط المقتطفات المعدّلة — استبدل الملف كاملاً بهذا الإصدار
+// src/app/chat/ChatClient.tsx
 "use client";
 
 import "@/app/chat/dcShim.client";
@@ -33,7 +33,13 @@ import { toast } from "@/lib/ui/toast";
 import { useProfile } from "@/state/profile";
 import { normalizeGender } from "@/lib/gender";
 import {
-  Room, RoomEvent, RemoteParticipant, RemoteTrackPublication, RemoteTrack, Track, ConnectionState,
+  Room,
+  RoomEvent,
+  RemoteParticipant,
+  RemoteTrackPublication,
+  RemoteTrack,
+  Track,
+  ConnectionState,
 } from "livekit-client";
 
 import LikeSystem from "@/components/chat/LikeSystem";
@@ -45,17 +51,96 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
-import MaskPicker from "@/components/chat/MaskPicker";
-import {
-  effectsStart, effectsStop, effectsSetBeauty, effectsSetMask,
-  effectsActive, effectsGetStream,
-} from "@/lib/effects/engine";
+
+/* --------------------------- Effects Pipeline --------------------------- */
+/** Canvas-based effects: beauty smoothing + optional emoji mask. No camera stop. */
+type EffectsOpts = { beauty: boolean; maskEmoji?: string | null; fps?: number };
+type EffectsHandle = {
+  stream: MediaStream;
+  stop: () => void;
+  getVideoTrack: () => MediaStreamTrack | null;
+};
+
+function createEffectsStream(src: MediaStream, opts: EffectsOpts): EffectsHandle | null {
+  const v = document.createElement("video");
+  v.playsInline = true;
+  v.muted = true;
+  try { (v as any).srcObject = src; } catch {}
+  const vTrack = src.getVideoTracks?.()[0];
+  if (!vTrack) return null;
+
+  const settings = vTrack.getSettings?.() || {};
+  const width = Math.max(320, Number(settings.width) || 640);
+  const height = Math.max(240, Number(settings.height) || 480);
+  const fps = Math.min(30, Math.max(10, Number(settings.frameRate) || opts.fps || 24));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { alpha: false }) as CanvasRenderingContext2D | null;
+  if (!ctx) return null;
+
+  let rafId = 0;
+  let running = true;
+
+  const draw = () => {
+    if (!running) return;
+    try {
+      // beauty: small blur + slight vibrance
+      if (opts.beauty) {
+        // baseline
+        ctx.filter = "brightness(1.03) contrast(1.06) saturate(1.08) blur(0.7px)";
+      } else {
+        ctx.filter = "none";
+      }
+      ctx.drawImage(v, 0, 0, width, height);
+
+      // emoji mask overlay (simple, centered upper area)
+      if (opts.maskEmoji) {
+        const emoji = String(opts.maskEmoji);
+        const fontSize = Math.round(Math.min(width, height) * 0.18);
+        ctx.filter = "none";
+        ctx.font = `bold ${fontSize}px system-ui, Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = "rgba(0,0,0,0.35)";
+        ctx.shadowBlur = Math.round(fontSize * 0.15);
+        ctx.fillText(emoji, width / 2, height * 0.32);
+      }
+    } catch {}
+    rafId = window.requestAnimationFrame(draw);
+  };
+
+  v.onloadedmetadata = () => {
+    try { v.play().catch(() => {}); } catch {}
+  };
+  rafId = window.requestAnimationFrame(draw);
+
+  const out = canvas.captureStream(fps);
+  // keep original audio
+  const at = src.getAudioTracks?.()[0];
+  if (at) {
+    try { out.addTrack(at); } catch {}
+  }
+
+  const stop = () => {
+    running = false;
+    try { window.cancelAnimationFrame(rafId); } catch {}
+    // do not stop source tracks
+    try { out.getTracks().forEach(t => { if (t.kind === "video") t.stop(); }); } catch {}
+  };
+
+  const getVideoTrack = () => out.getVideoTracks?.()[0] || null;
+  return { stream: out, stop, getVideoTrack };
+}
+
+/* ----------------------------------------------------------------------- */
 
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 800;
-const SWITCH_PAUSE_MS = 100;
+const SWITCH_PAUSE_MS = 120;
 
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -85,6 +170,11 @@ export default function ChatClient() {
   const [isMirrored, setIsMirrored] = useState(true);
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
 
+  // effects state
+  const beautyOnRef = useRef(false);
+  const maskEmojiRef = useRef<string | null>(null);
+  const effectsRef = useRef<EffectsHandle | null>(null);
+
   const roomRef = useRef<Room | null>(null);
   const roomUnsubsRef = useRef<(() => void)[]>([]);
   const joiningRef = useRef(false);
@@ -112,7 +202,11 @@ export default function ChatClient() {
   function setPhase(p: Phase) {
     setRtcPhase(p);
     try { window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } })); } catch {}
-    if (p === "searching") { searchStartRef.current = Date.now(); setSearchMsg("Searching for a match…"); try { window.dispatchEvent(new CustomEvent("ui:msg:reset")); } catch {} }
+    if (p === "searching") {
+      searchStartRef.current = Date.now();
+      setSearchMsg("Searching for a match…");
+      try { window.dispatchEvent(new CustomEvent("ui:msg:reset")); } catch {}
+    }
   }
   function emitPair(pairId: string, role: "caller" | "callee") {
     try {
@@ -126,12 +220,7 @@ export default function ChatClient() {
   function broadcastMediaState() {
     try {
       window.dispatchEvent(new CustomEvent("media:state", {
-        detail: {
-          facing: getCurrentFacing(),
-          torchSupported: isTorchSupported(),
-          micOn: getMicState(),
-          remoteMuted: !!lastMediaStateRef.current.remoteMuted,
-        },
+        detail: { facing: getCurrentFacing(), torchSupported: isTorchSupported(), micOn: getMicState() },
       }));
     } catch {}
   }
@@ -206,7 +295,21 @@ export default function ChatClient() {
   function clearRoomListeners() {
     for (const off of roomUnsubsRef.current.splice(0)) { try { off(); } catch {} }
   }
-  async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) { if (!el) return; try { await el.play(); } catch {} }
+  async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) {
+    if (!el) return; try { await el.play(); } catch {}
+  }
+
+  async function ensureLocalAliveLocal(): Promise<MediaStream | null> {
+    try {
+      let s = getLocalStream() as MediaStream | null;
+      const vt = s?.getVideoTracks?.()[0] || null;
+      const at = s?.getAudioTracks?.()[0] || null;
+      const videoEnded = !vt || vt.readyState === "ended";
+      const audioEnded = at ? at.readyState === "ended" : false;
+      if (!s || videoEnded || audioEnded) { await initLocalMedia().catch(() => {}); s = getLocalStream() as MediaStream | null; }
+      return s ?? null;
+    } catch { await initLocalMedia().catch(() => {}); return (getLocalStream() as MediaStream | null) ?? null; }
+  }
 
   function snapshotMediaState() {
     const s = getLocalStream() as MediaStream | null;
@@ -242,11 +345,78 @@ export default function ChatClient() {
     } catch {}
   }
 
+  function currentPublishSource(): MediaStream | null {
+    // prefer effects if enabled
+    if (effectsRef.current?.stream) return effectsRef.current.stream;
+    return getLocalStream() || null;
+  }
+  async function updateLocalPreviewToCurrent() {
+    const src = currentPublishSource();
+    if (localRef.current && src) {
+      if ((localRef.current as any).srcObject !== src) {
+        (localRef.current as any).srcObject = src;
+      }
+      localRef.current.muted = true;
+      await safePlay(localRef.current);
+    }
+  }
+  async function maybeSwapPublishedVideo() {
+    const room = roomRef.current;
+    const src = currentPublishSource();
+    if (!room || room.state !== "connected" || !src) { await updateLocalPreviewToCurrent(); return; }
+
+    const newTrack = src.getVideoTracks?.()[0] || null;
+    if (!newTrack) { await updateLocalPreviewToCurrent(); return; }
+
+    // find current published video track
+    let currentPub: any = null;
+    try {
+      const pubs =
+        typeof (room.localParticipant as any).getTrackPublications === "function"
+          ? (room.localParticipant as any).getTrackPublications()
+          : Array.from((room.localParticipant as any).trackPublications?.values?.() ?? []);
+      for (const p of pubs) { if (p?.kind === Track.Kind.Video || p?.track?.kind === "video") { currentPub = p; break; } }
+    } catch {}
+
+    const curTrack: MediaStreamTrack | null = currentPub?.track ?? null;
+    if (curTrack && curTrack.id === newTrack.id) { await updateLocalPreviewToCurrent(); return; }
+
+    try {
+      if (curTrack && typeof (room.localParticipant as any).unpublishTrack === "function") {
+        await (room.localParticipant as any).unpublishTrack(curTrack, { stop: false });
+      }
+    } catch {}
+    try {
+      await (room.localParticipant as any).publishTrack(newTrack);
+    } catch {}
+    await updateLocalPreviewToCurrent();
+  }
+
+  function stopEffects() {
+    try { effectsRef.current?.stop(); } catch {}
+    effectsRef.current = null;
+  }
+  async function rebuildEffectsAndSwap() {
+    stopEffects();
+    if (!beautyOnRef.current && !maskEmojiRef.current) {
+      await maybeSwapPublishedVideo();
+      return;
+    }
+    const base = getLocalStream();
+    if (!base) return;
+    const h = createEffectsStream(base, { beauty: !!beautyOnRef.current, maskEmoji: maskEmojiRef.current, fps: 24 });
+    if (!h) { await maybeSwapPublishedVideo(); return; }
+    effectsRef.current = h;
+    await maybeSwapPublishedVideo();
+  }
+
   async function requestPeerMetaTwice(room: Room) {
     try {
       const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
       await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
-      setTimeout(async () => { try { await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" }); } catch {} }, 250);
+      setTimeout(async () => {
+        try { await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" }); } catch {}
+      }, 250);
     } catch {}
   }
 
@@ -256,7 +426,8 @@ export default function ChatClient() {
       const ctrl = new AbortController();
       pollAbortRef.current = ctrl;
       let rn: string | null = null;
-      try { rn = await nextReq(ticket, wait, ctrl.signal); } catch (e: any) { if (e?.name === "AbortError") return null; }
+      try { rn = await nextReq(ticket, wait, ctrl.signal); }
+      catch (e: any) { if (e?.name === "AbortError") return null; }
       finally { if (pollAbortRef.current === ctrl) pollAbortRef.current = null; }
       if (!isActiveSid(sid)) return null;
       if (rn) return rn;
@@ -271,19 +442,28 @@ export default function ChatClient() {
     snapshotMediaState();
     abortPolling();
 
-    const room = roomRef.current; roomRef.current = null;
+    const room = roomRef.current;
+    roomRef.current = null;
+
     dcDetach();
     clearRoomListeners();
+
+    try { (window as any).__ditonaPairId = undefined; (window as any).__pairId = undefined; } catch {}
+
+    // keep local preview alive to prevent flash
     detachRemoteAll();
 
     if (room) {
       try {
         const lp: any = room.localParticipant;
-        const pubs = typeof lp.getTrackPublications === "function" ? lp.getTrackPublications() : Array.from(lp.trackPublications?.values?.() ?? []);
+        const pubs =
+          typeof lp.getTrackPublications === "function" ? lp.getTrackPublications() : Array.from(lp.trackPublications?.values?.() ?? []);
         for (const pub of pubs) {
-          try { const tr: any = (pub as any).track; if (tr && typeof lp.unpublishTrack === "function") await lp.unpublishTrack(tr, { stop: false }); } catch {}
+          try { const tr: any = (pub as any).track; if (tr && typeof lp.unpublishTrack === "function") { await lp.unpublishTrack(tr, { stop: false }); } }
+          catch {}
         }
       } catch {}
+
       await new Promise<void>((resolve) => {
         let done = false;
         const finish = () => { if (done) return; done = true; try { room.off(RoomEvent.Disconnected, finish); } catch {} resolve(); };
@@ -292,6 +472,7 @@ export default function ChatClient() {
         setTimeout(finish, DISCONNECT_TIMEOUT_MS);
       });
     }
+
     (globalThis as any).__lkRoom = null;
     leavingRef.current = false;
   }
@@ -338,6 +519,7 @@ export default function ChatClient() {
         const txt = new TextDecoder().decode(payload);
         if (!txt || !/^\s*\{/.test(txt)) return;
         const j = JSON.parse(txt);
+
         if (j?.t === "meta:init" || topic === "meta") window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         if ((j?.t === "chat" || topic === "chat") && typeof j.text === "string") {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
@@ -354,66 +536,30 @@ export default function ChatClient() {
     room.on(RoomEvent.DataReceived, onData as any);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.DataReceived, onData as any); } catch {} });
 
-    const onPart = () => { if (!isActiveSid(sid)) return; setPhase("searching"); try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {} };
+    const onPart = () => {
+      if (!isActiveSid(sid)) return;
+      setPhase("searching");
+      try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {}
+    };
     room.on(RoomEvent.ParticipantDisconnected, onPart);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
 
-    const onDisc = () => { if (!isActiveSid(sid)) return; dcDetach(); setPhase("searching"); broadcastMediaState(); };
+    const onDisc = () => {
+      if (!isActiveSid(sid)) return;
+      dcDetach();
+      setPhase("searching");
+      broadcastMediaState();
+    };
     room.on(RoomEvent.Disconnected, onDisc);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.Disconnected, onDisc); } catch {} });
 
-    const onPeerJoined = () => { if (!isActiveSid(sid)) return; requestPeerMetaTwice(room); try { window.dispatchEvent(new CustomEvent("livekit:participant-connected")); } catch {} };
+    const onPeerJoined = () => {
+      if (!isActiveSid(sid)) return;
+      requestPeerMetaTwice(room);
+      try { window.dispatchEvent(new CustomEvent("livekit:participant-connected")); } catch {}
+    };
     room.on(RoomEvent.ParticipantConnected, onPeerJoined);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantConnected, onPeerJoined); } catch {} });
-  }
-
-  // === Effects: swap local track when active ===
-  async function maybePublishLocal(room: Room | null, previewEl: HTMLVideoElement | null) {
-    const base = getLocalStream();
-    if (!base || !previewEl) return;
-
-    const needEffects = effectsActive();
-    const src = needEffects ? effectsStart(base) : base;
-
-    // keep states
-    applyLocalTrackStatesBeforePublish(src);
-
-    // set preview
-    try {
-      if ((previewEl as any).srcObject !== src) {
-        (previewEl as any).srcObject = src;
-        previewEl.muted = true;
-        await safePlay(previewEl);
-      }
-    } catch {}
-
-    // publish/replace in room
-    if (room && room.state === "connected") {
-      try {
-        const lp: any = room.localParticipant;
-        const pubs =
-          typeof lp.getTrackPublications === "function"
-            ? lp.getTrackPublications()
-            : Array.from(lp.trackPublications?.values?.() ?? []);
-        let camPub =
-          pubs.find((p: any) => p?.source === 1 || p?.kind === 0) ||
-          pubs.find((p: any) => p?.track?.mediaStreamTrack?.kind === "video");
-
-        const newV = (src.getVideoTracks?.()[0] as MediaStreamTrack) || null;
-        if (newV) {
-          if (camPub?.replaceTrack) {
-            try { await camPub.replaceTrack(newV); }
-            catch {
-              try { if (camPub?.track) await lp.unpublishTrack(camPub.track, { stop: false }); } catch {}
-              try { await lp.publishTrack(newV); } catch {}
-            }
-          } else {
-            try { if (camPub?.track) await lp.unpublishTrack(camPub.track, { stop: false }); } catch {}
-            try { await lp.publishTrack(newV); } catch {}
-          }
-        }
-      } catch {}
-    }
   }
 
   async function joinViaRedisMatch(sid: number): Promise<void> {
@@ -479,9 +625,17 @@ export default function ChatClient() {
 
       (globalThis as any).__lkRoom = room;
       dcAttach(room);
+
       await requestPeerMetaTwice(room);
 
-      await maybePublishLocal(room, localRef.current || null);
+      const src = currentPublishSource() || getLocalStream();
+      if (src && room.state === "connected") {
+        applyLocalTrackStatesBeforePublish(src);
+        for (const t of src.getTracks()) {
+          if (!isActiveSid(sid)) break;
+          try { await (room.localParticipant as any).publishTrack(t); } catch {}
+        }
+      }
 
       try {
         const muted = !!lastMediaStateRef.current.remoteMuted;
@@ -491,6 +645,7 @@ export default function ChatClient() {
       setPhase("connected");
       broadcastMediaState();
     } catch (e) {
+      console.warn("joinViaRedisMatch failed", e);
       setPhase("searching");
     } finally {
       joiningRef.current = false;
@@ -499,10 +654,8 @@ export default function ChatClient() {
   }
 
   async function tryPrevReconnect(): Promise<boolean> {
-    const ticket = lastTicketRef.current || "";
-    if (!ticket) return false;
-    const roomName = await prevReq(ticket);
-    if (!roomName) return false;
+    const ticket = lastTicketRef.current || ""; if (!ticket) return false;
+    const roomName = await prevReq(ticket); if (!roomName) return false;
 
     const sid = newSid();
     const room = new Room({ adaptiveStream: true, dynacast: true });
@@ -528,7 +681,11 @@ export default function ChatClient() {
     dcAttach(room);
     await requestPeerMetaTwice(room);
 
-    await maybePublishLocal(room, localRef.current || null);
+    const src = currentPublishSource() || getLocalStream();
+    if (src) {
+      applyLocalTrackStatesBeforePublish(src);
+      for (const t of src.getTracks()) { try { await (room.localParticipant as any).publishTrack(t); } catch {} }
+    }
     setPhase("connected");
     broadcastMediaState();
     return true;
@@ -548,9 +705,9 @@ export default function ChatClient() {
     (async () => {
       setPhase("boot");
       try {
-        const s0 = await initLocalMedia().catch(async () => getLocalStream() ?? null);
+        const s0 = await ensureLocalAliveLocal();
         if (localRef.current && s0) {
-          if ((localRef.current as any).srcObject !== s0) (localRef.current as any).srcObject = s0;
+          if ((localRef.current as any).srcObject !== s0) { (localRef.current as any).srcObject = s0; }
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
@@ -567,15 +724,14 @@ export default function ChatClient() {
     })().catch(() => {});
 
     const offs: Array<() => void> = [];
+    // media
     offs.push(on("ui:toggleMic", () => { toggleMic(); broadcastMediaState(); }));
     offs.push(on("ui:toggleCam", () => toggleCam()));
     offs.push(on("ui:switchCamera", async () => {
       const ok = await switchCameraCycle(roomRef.current, localRef.current || undefined);
-      if (ok) {
-        // refresh effects source without flicker
-        if (effectsActive()) await maybePublishLocal(roomRef.current, localRef.current);
-        broadcastMediaState();
-      } else toast("Camera switch failed");
+      if (!ok) toast("Camera switch failed"); else broadcastMediaState();
+      // rebuild effects to re-bind tracks after device change
+      rebuildEffectsAndSwap().catch(() => {});
     }));
     offs.push(on("ui:openSettings", () => { try { window.location.href = "/settings"; } catch {} }));
     offs.push(on("ui:toggleTorch", async () => { const ok = await toggleTorch(); toast(ok ? "Flash toggled" : "Flash not supported"); broadcastMediaState(); }));
@@ -585,38 +741,36 @@ export default function ChatClient() {
       const room = roomRef.current;
       if (!room || room.state !== "connected") { toast("No active connection for like"); return; }
       const newLike = !like; setLike(newLike);
-      try { const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike })); await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" }); } catch {}
+      try {
+        const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
+        await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+      } catch {}
       toast(`Like ${newLike ? "❤️" : "💔"}`);
     }));
 
-    offs.push(on("ui:report", () => toast("Report sent. Moving on")));
-
-    // Effects events
-    offs.push(on("ui:toggleBeauty", async (d: any) => {
-      const enabled = !!d?.enabled;
-      effectsSetBeauty(enabled);
-      await maybePublishLocal(roomRef.current, localRef.current);
+    // Beauty effects
+    offs.push(on("ui:beauty:toggle" as any, async () => {
+      beautyOnRef.current = !beautyOnRef.current;
+      await rebuildEffectsAndSwap();
+      toast(beautyOnRef.current ? "Beauty on" : "Beauty off");
     }));
-    offs.push(on("effects:setMask", async (d: any) => {
-      const kind = String(d?.kind || "none");
-      effectsSetMask(kind as any);
-      await maybePublishLocal(roomRef.current, localRef.current);
-    }));
+    offs.push(on("ui:beauty:on" as any, async () => { beautyOnRef.current = true; await rebuildEffectsAndSwap(); }));
+    offs.push(on("ui:beauty:off" as any, async () => { beautyOnRef.current = false; await rebuildEffectsAndSwap(); }));
 
-    // remote audio toggle
-    offs.push(on("ui:toggleRemoteAudio" as any, () => {
-      const a = remoteAudioRef.current;
-      const v = remoteVideoRef.current;
-      const target: any = a ?? v;
-      if (target) {
-        target.muted = !target.muted;
-        lastMediaStateRef.current.remoteMuted = target.muted;
-        broadcastMediaState();
-        toast(target.muted ? "Remote muted" : "Remote unmuted");
-      }
+    // Masks
+    offs.push(on("ui:mask:apply" as any, async (d: any) => {
+      const emoji = typeof d === "string" ? d : d?.emoji;
+      maskEmojiRef.current = emoji || "😎";
+      await rebuildEffectsAndSwap();
+      toast("Mask applied");
+    }));
+    offs.push(on("ui:mask:clear" as any, async () => {
+      maskEmojiRef.current = null;
+      await rebuildEffectsAndSwap();
+      toast("Mask cleared");
     }));
 
-    // NEXT
+    // next
     offs.push(on("ui:next", async () => {
       const now = Date.now();
       if (joiningRef.current || leavingRef.current || isConnectingRef.current || roomRef.current?.state === "connecting") return;
@@ -628,12 +782,13 @@ export default function ChatClient() {
       await leaveRoom();
       await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
 
-      // keep preview showing current effect/raw without flicker
-      await maybePublishLocal(null, localRef.current);
+      // ensure preview stays up
+      await updateLocalPreviewToCurrent();
+
       await joinViaRedisMatch(sid);
     }));
 
-    // PREV
+    // prev
     offs.push(on("ui:prev", async () => {
       if (!filters.isVip && !ffa) { toast("🔒 Going back is VIP only"); emit("ui:upsell", "prev"); return; }
       const now = Date.now();
@@ -652,13 +807,25 @@ export default function ChatClient() {
 
       if (!ok) {
         const sid = newSid();
-        await maybePublishLocal(null, localRef.current);
+        await updateLocalPreviewToCurrent();
         await joinViaRedisMatch(sid);
       }
     }));
 
+    // messaging & audio toggle
     offs.push(on("ui:openMessaging" as any, () => setShowMessaging(true)));
     offs.push(on("ui:closeMessaging" as any, () => setShowMessaging(false)));
+    offs.push(on("ui:toggleRemoteAudio" as any, () => {
+      const a = remoteAudioRef.current; const v = remoteVideoRef.current; const target: any = a ?? v;
+      if (target) { target.muted = !target.muted; lastMediaStateRef.current.remoteMuted = target.muted; toast(target.muted ? "Remote muted" : "Remote unmuted"); }
+    }));
+
+    // mirror
+    offs.push(on("ui:toggleMirror", () => {
+      setIsMirrored((prev) => { const s = !prev; toast(s ? "Mirror on" : "Mirror off"); return s; });
+    }));
+    // upsell
+    offs.push(on("ui:upsell", (d: any) => { if (ffa) return; router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`); }));
 
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe(() => {});
@@ -667,7 +834,7 @@ export default function ChatClient() {
       for (const off of offs) try { off(); } catch {}
       unsubMob();
       abortPolling();
-      effectsStop();
+      stopEffects();
       leaveRoom().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -682,19 +849,35 @@ export default function ChatClient() {
             <FilterBar />
             <MessageHud />
             <PeerOverlay />
-            <div className="absolute bottom-4 right-4 z-30"><LikeSystem /></div>
+            <div className="absolute bottom-4 right-4 z-30">
+              <LikeSystem />
+            </div>
+
             <video ref={remoteVideoRef} id="remoteVideo" data-role="remote" className="w-full h-full object-cover" playsInline autoPlay />
             <audio ref={remoteAudioRef} id="remoteAudio" autoPlay playsInline hidden />
+
             {rtcPhase === "searching" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">{searchMsg}</div>
-                <button onClick={() => toast("🛑 Search cancelled")} className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto">Cancel</button>
+                <button
+                  onClick={() => toast("🛑 Search cancelled")}
+                  className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
+                >
+                  Cancel
+                </button>
               </div>
             )}
           </section>
 
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
-            <video ref={localRef} data-local-video className={`w-full h-full object-cover ${isMirrored ? "scale-x-[-1]" : ""}`} playsInline muted autoPlay />
+            <video
+              ref={localRef}
+              data-local-video
+              className={`w-full h-full object-cover ${isMirrored ? "scale-x-[-1]" : ""}`}
+              playsInline
+              muted
+              autoPlay
+            />
             {!ready && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 text-sm text-center px-4">
                 {cameraPermissionHint ? (
@@ -708,10 +891,11 @@ export default function ChatClient() {
                           .then(async () => {
                             const s = getLocalStream();
                             if (localRef.current && s) {
-                              if ((localRef.current as any).srcObject !== s) (localRef.current as any).srcObject = s;
+                              if ((localRef.current as any).srcObject !== s) { (localRef.current as any).srcObject = s; }
                               localRef.current.muted = true;
                               await safePlay(localRef.current);
                               setReady(true);
+                              broadcastMediaState();
                               const sid = newSid();
                               joinViaRedisMatch(sid).catch(() => {});
                             }
@@ -727,9 +911,12 @@ export default function ChatClient() {
                       Retry
                     </button>
                   </>
-                ) : (<div>Requesting camera/mic…</div>)}
+                ) : (
+                  <div>Requesting camera/mic…</div>
+                )}
               </div>
             )}
+
             <MyControls />
             <div id="gesture-layer" className="absolute inset-0 -z-10" />
           </section>
@@ -737,7 +924,6 @@ export default function ChatClient() {
           <ChatToolbar />
           <UpsellModal open={showUpsell} onClose={() => setShowUpsell(false)} />
           <ChatMessagingBar />
-          <MaskPicker />
         </div>
       </div>
     </>
