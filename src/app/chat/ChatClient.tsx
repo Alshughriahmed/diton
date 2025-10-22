@@ -59,7 +59,7 @@ type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 800;
-const SWITCH_PAUSE_MS = 220; // يمنع الوميض عند next/prev
+const SWITCH_PAUSE_MS = 220; // يقلل الوميض عند next/prev
 
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -94,7 +94,7 @@ export default function ChatClient() {
   // Effects state
   const effectsOnRef = useRef(false);
   const effectsMaskOnRef = useRef(false);
-  const processedStreamRef = useRef<MediaStream | null>(null); // ما يتم عرضه محليًا ونشره عند التجميل/الماسك
+  const processedStreamRef = useRef<MediaStream | null>(null); // stream المعالج عند التجميل/الماسكات
 
   // RTC room orchestration
   const roomRef = useRef<Room | null>(null);
@@ -388,7 +388,7 @@ export default function ChatClient() {
       (window as any).__pairId = undefined;
     } catch {}
 
-    // لا تلمس المعاينة المحلية لتفادي الوميض
+    // لا تلمس المعاينة المحلية
     detachRemoteAll();
 
     if (room) {
@@ -837,7 +837,6 @@ export default function ChatClient() {
         const ok = await switchCameraCycle(roomRef.current, localRef.current || undefined);
         if (!ok) toast("Camera switch failed");
         else {
-          // إذا كانت المؤثرات فعّالة أعد بنائها على المصدر الجديد
           if (effectsOnRef.current) {
             await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
           }
@@ -904,7 +903,6 @@ export default function ChatClient() {
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
-        // إذا المؤثرات ON أبقِ نفس المسار المعالج في المعاينة وسيُعاد نشره بعد الاتصال
         if (effectsOnRef.current) {
           await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
         }
@@ -991,7 +989,6 @@ export default function ChatClient() {
         } else {
           effectsMaskOnRef.current = false;
           await setMask(null as any).catch(() => {});
-          // إذا لا Beauty فعال أيضًا أطفئ بالكامل
           if (!effectsOnRef.current) await disableEffectsPipeline().catch(() => {});
         }
       }),
