@@ -172,7 +172,6 @@ function loop() {
     (async () => {
       if (faceDetector && frameCount % 6 === 0) {
         try {
-          // ensure awaited value is array or null
           const faces = await awaitMaybe<any[]>(faceDetector.detect(videoEl));
           if (faces && faces.length > 0) {
             const f = (faces[0] as any).boundingBox || (faces[0] as any).box || faces[0];
@@ -205,10 +204,26 @@ function loop() {
 
 function normalizeBox(b: any, w: number, h: number): FaceBox | null {
   if (!b) return null;
-  let x = Number(b.x ?? b.left ?? 0);
-  let y = Number(b.y ?? b.top ?? 0);
-  let width = Number(b.width ?? (b.right ? Number(b.right) - x : 0) ?? 0);
-  let height = Number(b.height ?? (b.bottom ? Number(b.bottom) - y : 0) ?? 0);
+
+  let x = Number(b.x !== undefined ? b.x : b.left !== undefined ? b.left : 0);
+  let y = Number(b.y !== undefined ? b.y : b.top !== undefined ? b.top : 0);
+
+  // avoid nullish on non-nullish expressions to satisfy TS rule
+  let width = Number(
+    b.width !== undefined
+      ? b.width
+      : b.right !== undefined
+      ? Number(b.right) - x
+      : 0
+  );
+
+  let height = Number(
+    b.height !== undefined
+      ? b.height
+      : b.bottom !== undefined
+      ? Number(b.bottom) - y
+      : 0
+  );
 
   if (!isFinite(x) || !isFinite(y) || !isFinite(width) || !isFinite(height) || width <= 0 || height <= 0) return null;
 
@@ -236,7 +251,10 @@ function maskRect(w: number, h: number, face: FaceBox | null) {
 }
 
 function clampRect(x: number, y: number, w: number, h: number, bw: number, bh: number) {
-  let dx = x, dy = y, dw = w, dh = h;
+  let dx = x,
+    dy = y,
+    dw = w,
+    dh = h;
   if (dx < -dw) dx = -dw;
   if (dy < -dh) dy = -dh;
   if (dx > bw) dx = bw;
