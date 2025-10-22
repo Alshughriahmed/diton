@@ -175,10 +175,17 @@ export async function startEffects(src: MediaStream): Promise<MediaStream> {
     try { await videoEl!.play(); } catch {}
   }
 
-  // create output stream
-  outStream = outCanvas!.captureStream
-    ? outCanvas!.captureStream(FPS)
-    : (src as MediaStream); // fallback should never be used on modern browsers
+    // create output stream
+  try {
+    const cap = (outCanvas as any).captureStream;
+    if (typeof cap === "function") {
+      outStream = cap.call(outCanvas, FPS) as MediaStream;
+    } else {
+      outStream = src as MediaStream; // fallback
+    }
+  } catch {
+    outStream = src as MediaStream; // fallback
+  }
 
   // add audio from src
   try {
