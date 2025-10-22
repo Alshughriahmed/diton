@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs><filter id="s" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="6"/>
+  </filter></defs>
+  <rect width="1024" height="1024" fill="none"/>
+  <path d="M128,640 Q256,256 512,256 Q768,256 896,640 Q768,576 640,608 Q512,640 384,608 Q256,576 128,640Z"
+        fill="black" opacity="0.78"/>
+  <ellipse cx="380" cy="540" rx="120" ry="95" fill="white" filter="url(#s)"/>
+  <ellipse cx="644" cy="540" rx="120" ry="95" fill="white" filter="url(#s)"/>
+  <circle cx="380" cy="540" r="48" fill="#111"/>
+  <circle cx="644" cy="540" r="48" fill="#111"/>
+  <path d="M480,610 Q512,590 544,610" stroke="#ff4d4f" stroke-width="18" fill="none" stroke-linecap="round"/>
+</svg>
