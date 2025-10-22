@@ -43,7 +43,7 @@ import {
 } from "livekit-client";
 
 // مؤثرات الفيديو: تجميل + ماسكات
-import { startEffects, stopEffects, setMask } from "@/lib/effects/core";
+import { startEffects, stopEffects, setMask, setBeautyEnabled } from "@/lib/effects/core";
 
 import LikeSystem from "@/components/chat/LikeSystem";
 import MyControls from "@/components/chat/MyControls";
@@ -92,9 +92,10 @@ export default function ChatClient() {
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
 
   // حالة المؤثرات
-  const effectsOnRef = useRef<boolean>(false);
-  const effectsMaskOnRef = useRef<boolean>(false);
-  const processedStreamRef = useRef<MediaStream | null>(null); // المجرى المعالَج إن وُجد
+  const effectsOnRef = useRef<boolean>(false);         // هل خط المعالجة يعمل
+  const effectsMaskOnRef = useRef<boolean>(false);     // هل هناك ماسك مفعّل
+  const beautyOnRef = useRef<boolean>(false);          // حالة التجميل فقط
+  const processedStreamRef = useRef<MediaStream | null>(null); // المسار المُعالَج
 
   // إدارة الغرفة
   const roomRef = useRef<Room | null>(null);
@@ -598,41 +599,71 @@ export default function ChatClient() {
     } catch {}
   }
 
-  async function enableEffectsPipeline(keepMask: boolean) {
+  async function ensureEffectsRunning() {
+    if (effectsOnRef.current) return;
     const src = getLocalStream();
     if (!src) return;
-
-    if (keepMask && effectsMaskOnRef.current) {
-      // mask already selected via setMask
-    }
-
     const processed = await startEffects(src).catch(() => null);
-    if (processed) {
-      processedStreamRef.current = processed;
-      effectsOnRef.current = true;
-      applyLocalTrackStatesBeforePublish(processed);
-      await replaceLocalVideoTrack(processed);
-      try {
-        localStorage.setItem("ditona_beauty_on", "1");
-      } catch {}
-      toast("Beauty/Masks ON");
+    if (!processed) return;
+    processedStreamRef.current = processed;
+    effectsOnRef.current = true;
+    applyLocalTrackStatesBeforePublish(processed);
+    await replaceLocalVideoTrack(processed);
+  }
+
+  async function enableBeauty(on: boolean) {
+    beautyOnRef.current = on;
+    setBeautyEnabled(on);
+    try {
+      localStorage.setItem("ditona_beauty_on", on ? "1" : "0");
+    } catch {}
+    if (on) {
+      await ensureEffectsRunning();
+      toast("Beauty ON");
+    } else {
+      // إذا لا ماسك مفعّل أوقف الخط بالكامل لتوفير الموارد
+      if (!effectsMaskOnRef.current) {
+        await disableAllEffects();
+      } else {
+        toast("Beauty OFF");
+      }
     }
   }
 
-  async function disableEffectsPipeline() {
+  async function enableMask(name: string | null) {
+    if (name) {
+      await setMask(name).catch(() => {});
+      effectsMaskOnRef.current = true;
+      await ensureEffectsRunning();
+      toast(`Mask: ${name}`);
+      try {
+        localStorage.setItem("ditona_mask", name);
+      } catch {}
+    } else {
+      await setMask(null as any).catch(() => {});
+      effectsMaskOnRef.current = false;
+      try {
+        localStorage.removeItem("ditona_mask");
+      } catch {}
+      if (!beautyOnRef.current) {
+        await disableAllEffects();
+      } else {
+        toast("Mask OFF");
+      }
+    }
+  }
+
+  async function disableAllEffects() {
     const raw = getLocalStream();
     const restored = await stopEffects(raw ?? (processedStreamRef.current as any)).catch(() => raw);
     processedStreamRef.current = null;
     effectsOnRef.current = false;
-    effectsMaskOnRef.current = false;
+    // لا تغيّر beautyOnRef هنا؛ فقط أطفئ الخط كله
     if (restored) {
       applyLocalTrackStatesBeforePublish(restored);
       await replaceLocalVideoTrack(restored);
-      try {
-        localStorage.setItem("ditona_beauty_on", "0");
-      } catch {}
-      toast("Beauty/Masks OFF");
     }
+    toast("Effects OFF");
   }
 
   // --------- الانضمام/الرجوع ----------
@@ -817,6 +848,20 @@ export default function ChatClient() {
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
+        // استرجاع تفضيلات المؤثرات
+        try {
+          beautyOnRef.current = localStorage.getItem("ditona_beauty_on") === "1";
+          const savedMask = localStorage.getItem("ditona_mask");
+          if (savedMask) {
+            await setMask(savedMask).catch(() => {});
+            effectsMaskOnRef.current = true;
+          }
+          setBeautyEnabled(!!beautyOnRef.current);
+          if (beautyOnRef.current || effectsMaskOnRef.current) {
+            await ensureEffectsRunning();
+          }
+        } catch {}
+
         setReady(true);
         broadcastMediaState();
         const sid = newSid();
@@ -848,7 +893,7 @@ export default function ChatClient() {
         if (!ok) toast("Camera switch failed");
         else {
           if (effectsOnRef.current) {
-            await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
+            await ensureEffectsRunning().catch(() => {});
           }
           broadcastMediaState();
         }
@@ -914,7 +959,7 @@ export default function ChatClient() {
           await safePlay(localRef.current);
         }
         if (effectsOnRef.current) {
-          await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
+          await ensureEffectsRunning().catch(() => {});
         }
         await joinViaRedisMatch(sid);
       }),
@@ -954,7 +999,7 @@ export default function ChatClient() {
             await safePlay(localRef.current);
           }
           if (effectsOnRef.current) {
-            await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
+            await ensureEffectsRunning().catch(() => {});
           }
           await joinViaRedisMatch(sid);
         }
@@ -979,47 +1024,28 @@ export default function ChatClient() {
       }),
     );
 
-    // Beauty ON/OFF
+    // Beauty ON/OFF — منفصل عن الماسكات
     offs.push(
       on("ui:toggleBeauty", async (d: any) => {
         const onB = !!d?.enabled;
-        try {
-          localStorage.setItem("ditona_beauty_on", onB ? "1" : "0");
-        } catch {}
-        if (onB) await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
-        else await disableEffectsPipeline().catch(() => {});
+        await enableBeauty(onB).catch(() => {});
       }),
     );
 
-    // Masks toggle
+    // Masks toggle سريع
     offs.push(
       on("ui:toggleMasks", async () => {
         const next = !effectsMaskOnRef.current;
-        if (next) {
-          await setMask("cat").catch(() => {});
-          effectsMaskOnRef.current = true;
-          if (!effectsOnRef.current) await enableEffectsPipeline(true).catch(() => {});
-        } else {
-          effectsMaskOnRef.current = false;
-          await setMask(null as any).catch(() => {});
-          if (!effectsOnRef.current) await disableEffectsPipeline().catch(() => {});
-        }
+        if (next) await enableMask("cat");
+        else await enableMask(null);
       }),
     );
 
-    // Pick specific mask
+    // اختيار ماسك محدد
     offs.push(
       on("ui:setMask", async (d: any) => {
         const name = d?.name || null;
-        if (!name) {
-          effectsMaskOnRef.current = false;
-          await setMask(null as any).catch(() => {});
-          if (!effectsOnRef.current) await disableEffectsPipeline().catch(() => {});
-        } else {
-          await setMask(name).catch(() => {});
-          effectsMaskOnRef.current = true;
-          if (!effectsOnRef.current) await enableEffectsPipeline(true).catch(() => {});
-        }
+        await enableMask(name);
       }),
     );
 
@@ -1049,8 +1075,7 @@ export default function ChatClient() {
       for (const off of offs) try { off(); } catch {}
       unsubMob();
       abortPolling();
-      try { localStorage.setItem("ditona_beauty_on", "0"); } catch {}
-      disableEffectsPipeline().catch(() => {});
+      disableAllEffects().catch(() => {});
       leaveRoom().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
