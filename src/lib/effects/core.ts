@@ -1,150 +1,220 @@
-/* Canvas Effects Pipeline — Beauty + Masks (safe, no external deps) */
-type MaskName = string | null;
+// src/lib/effects/core.ts
+// Canvas-based pipeline: beauty + optional PNG mask overlay.
+// No external deps. Keeps audio, never stops camera.
 
-let vEl: HTMLVideoElement | null = null;
-let cEl: HTMLCanvasElement | null = null;
-let ctx: CanvasRenderingContext2D | null = null;
-let raf = 0;
-let outStream: MediaStream | null = null;
-let maskImg: HTMLImageElement | null = null;
-let maskObjURL: string | null = null;
 let running = false;
+let rafId: number | null = null;
 
-/* Helpers */
-function readBeautyFlag(): boolean {
-  try { return localStorage.getItem("ditona_beauty_on") === "1"; } catch { return false; }
-}
-function supportsCapture(): boolean {
-  const c = document.createElement("canvas");
-  return typeof (c as any).captureStream === "function";
-}
-function emojiDataUrl(emoji: string, size = 128): string {
-  const c = document.createElement("canvas"); c.width = size; c.height = size;
-  const x = c.getContext("2d")!;
-  x.textAlign = "center"; x.textBaseline = "middle";
-  x.font = `${Math.floor(size * 0.82)}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif`;
-  x.fillText(emoji, size / 2, size / 2);
-  return c.toDataURL("image/png");
-}
-const FALLBACK_EMOJI: Record<string, string> = {
-  cat: "🐱", bunny: "🐰", sunglasses: "🕶️", pixel: "🟪", star: "⭐", blurface: "🟨", guyfawkes: "🎭",
-};
-async function loadMaskImage(name: string): Promise<{ img: HTMLImageElement; url?: string } | null> {
-  const url = `/masks/${encodeURIComponent(name)}.png`;
-  try {
-    const r = await fetch(url, { cache: "force-cache" });
-    if (r.ok) {
-      const blob = await r.blob();
-      const u = URL.createObjectURL(blob);
-      const img = new Image();
-      return await new Promise((resolve) => {
-        img.onload = () => resolve({ img, url: u });
-        img.onerror = () => { URL.revokeObjectURL(u); resolve(null); };
-        img.src = u;
-      });
-    }
-  } catch {}
-  const data = emojiDataUrl(FALLBACK_EMOJI[name] || "🎭");
-  const img = new Image();
-  return await new Promise((resolve) => {
-    img.onload = () => resolve({ img });
-    img.onerror = () => resolve(null);
-    img.src = data;
-  });
-}
-function cleanupNode(n?: HTMLElement | null) {
-  try { if (n && n.parentNode) n.parentNode.removeChild(n); } catch {}
-}
-function stopOutStream() {
-  try { outStream?.getTracks?.().forEach((t) => { try { t.stop(); } catch {} }); } catch {}
-  outStream = null;
-}
+let srcStream: MediaStream | null = null;
+let outStream: MediaStream | null = null;
 
-/* Public API */
-export async function setMask(name: MaskName): Promise<boolean> {
-  if (!name) {
-    if (maskObjURL) { try { URL.revokeObjectURL(maskObjURL); } catch {} maskObjURL = null; }
-    maskImg = null;
-    try { localStorage.setItem("ditona_mask", "none"); } catch {}
-    return true;
+let videoEl: HTMLVideoElement | null = null;
+let drawCanvas: HTMLCanvasElement | null = null;   // work canvas (processing)
+let outCanvas: HTMLCanvasElement | null = null;    // canvas used for captureStream()
+
+let maskImg: HTMLImageElement | null = null;
+let maskName: string | null = null;
+
+let faceDetector: any = null;
+let detectPending = false;
+let lastBox: { x: number; y: number; width: number; height: number } | null = null;
+let lastDetectTs = 0;
+
+const MASK_BASE = "/masks";
+const FPS = 30;
+const DETECT_EVERY_MS = 160; // ~6 fps face detect
+const SMOOTH = 0.25;         // bbox smoothing
+
+function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
+
+function ensureElems(w: number, h: number) {
+  if (!drawCanvas) {
+    drawCanvas = document.createElement("canvas");
   }
-  const res = await loadMaskImage(name);
-  if (!res) return false;
-  if (maskObjURL) { try { URL.revokeObjectURL(maskObjURL); } catch {} maskObjURL = null; }
-  maskImg = res.img; maskObjURL = res.url || null;
-  try { localStorage.setItem("ditona_mask", name); } catch {}
-  return true;
+  if (!outCanvas) {
+    outCanvas = document.createElement("canvas");
+  }
+  if (!videoEl) {
+    videoEl = document.createElement("video");
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+  }
+  // normalize sizes
+  if (drawCanvas.width !== w || drawCanvas.height !== h) {
+    drawCanvas.width = w; drawCanvas.height = h;
+  }
+  if (outCanvas.width !== w || outCanvas.height !== h) {
+    outCanvas.width = w; outCanvas.height = h;
+  }
+}
+
+async function maybeInitFaceDetector() {
+  try {
+    if (!faceDetector && typeof window !== "undefined" && (window as any).FaceDetector) {
+      // @ts-ignore - FaceDetector is not in TS DOM by default on all targets
+      faceDetector = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+    }
+  } catch {
+    faceDetector = null;
+  }
+}
+
+function drawFrame() {
+  if (!running || !videoEl || !drawCanvas || !outCanvas) return;
+
+  const ctx = drawCanvas.getContext("2d");
+  const ctxOut = outCanvas.getContext("2d");
+  if (!ctx || !ctxOut) { rafId = requestAnimationFrame(drawFrame); return; }
+
+  // Beauty pass
+  try {
+    ctx.filter = "contrast(1.08) saturate(1.08) brightness(1.03) blur(0.4px)";
+    ctx.drawImage(videoEl, 0, 0, drawCanvas.width, drawCanvas.height);
+  } catch {}
+
+  // Kick async face-detect at a limited rate
+  const now = performance.now();
+  if (faceDetector && !detectPending && now - lastDetectTs > DETECT_EVERY_MS) {
+    detectPending = true;
+    lastDetectTs = now;
+    faceDetector.detect(videoEl)
+      .then((faces: any[]) => {
+        const f = faces && faces[0];
+        if (f?.boundingBox) {
+          const b = f.boundingBox as DOMRectReadOnly;
+          if (lastBox) {
+            lastBox = {
+              x: lerp(lastBox.x, b.x, SMOOTH),
+              y: lerp(lastBox.y, b.y, SMOOTH),
+              width: lerp(lastBox.width, b.width, SMOOTH),
+              height: lerp(lastBox.height, b.height, SMOOTH),
+            };
+          } else {
+            lastBox = { x: b.x, y: b.y, width: b.width, height: b.height };
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => { detectPending = false; });
+  }
+
+  // Mask overlay
+  if (maskImg) {
+    const W = drawCanvas.width, H = drawCanvas.height;
+    let x = W * 0.5, y = H * 0.5, mw = Math.min(W, H) * 0.6, mh = mw;
+
+    if (lastBox) {
+      const s = 1.45; // enlarge a bit beyond face
+      mw = lastBox.width * s;
+      mh = mw;
+      x = lastBox.x + lastBox.width / 2;
+      y = lastBox.y + lastBox.height * 0.45; // shift slightly upward relative to center
+      x -= mw / 2;
+      y -= mh / 2;
+    } else {
+      // fallback: center overlay if detector not available
+      x -= mw / 2; y -= mh / 2;
+    }
+
+    try {
+      ctx.drawImage(maskImg, x, y, mw, mh);
+    } catch {}
+  }
+
+  // Copy to out-canvas (separate canvas yields stable captureStream on all browsers)
+  try {
+    ctxOut.clearRect(0, 0, outCanvas.width, outCanvas.height);
+    ctxOut.drawImage(drawCanvas, 0, 0);
+  } catch {}
+
+  rafId = requestAnimationFrame(drawFrame);
+}
+
+export async function setMask(name: string | null): Promise<void> {
+  maskName = name || null;
+  maskImg = null;
+  if (!maskName) return;
+
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.decoding = "async";
+  img.loading = "eager";
+  img.src = `${MASK_BASE}/${encodeURIComponent(maskName)}.png`;
+
+  await new Promise<void>((resolve) => {
+    const done = () => resolve();
+    img.addEventListener("load", done, { once: true });
+    img.addEventListener("error", done, { once: true });
+  });
+
+  // If failed to load, keep mask off silently
+  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+    maskImg = img;
+  } else {
+    maskName = null;
+    maskImg = null;
+  }
 }
 
 export async function startEffects(src: MediaStream): Promise<MediaStream> {
-  // If already running, stop and restart on the new source.
-  await stopEffects(src).catch(() => {});
+  if (running && outStream) return outStream;
 
-  if (!supportsCapture()) return src;
+  await maybeInitFaceDetector();
 
-  // Build hidden <video> from src
-  vEl = document.createElement("video");
-  vEl.muted = true; vEl.playsInline = true; vEl.autoplay = true; vEl.style.display = "none";
-  (vEl as any).srcObject = src;
-  try { await vEl.play(); } catch {}
+  srcStream = src || null;
+  const vt = src.getVideoTracks?.()[0];
+  const set = vt?.getSettings?.() || {};
+  const w = (set.width as number) || 640;
+  const h = (set.height as number) || 480;
 
-  // Canvas
-  const w = Math.max(320, vEl.videoWidth || 0 || 640);
-  const h = Math.max(240, vEl.videoHeight || 0 || 480);
-  cEl = document.createElement("canvas"); cEl.width = w; cEl.height = h; cEl.style.display = "none";
-  document.body.appendChild(cEl);
-  document.body.appendChild(vEl);
-  ctx = cEl.getContext("2d", { alpha: true })!;
-  const beauty = () => (readBeautyFlag()
-    ? `brightness(1.05) contrast(1.05) saturate(1.07) blur(0.5px)`
-    : "none");
+  ensureElems(w, h);
+
+  // hook source to hidden video
+  if (videoEl) {
+    try { (videoEl as any).srcObject = src; } catch {}
+    try { await videoEl!.play(); } catch {}
+  }
+
+  // create output stream
+  outStream = outCanvas!.captureStream
+    ? outCanvas!.captureStream(FPS)
+    : (src as MediaStream); // fallback should never be used on modern browsers
+
+  // add audio from src
+  try {
+    const at = src.getAudioTracks?.()[0];
+    if (at && outStream && !outStream.getAudioTracks().length) outStream.addTrack(at);
+  } catch {}
 
   running = true;
-  const tick = () => {
-    if (!running || !ctx || !cEl || !vEl) return;
-    try {
-      ctx.clearRect(0, 0, cEl.width, cEl.height);
-      ctx.filter = beauty();
-      ctx.drawImage(vEl, 0, 0, cEl.width, cEl.height);
-      if (maskImg) {
-        const mw = cEl.width * 0.42;
-        const mh = mw;
-        const mx = (cEl.width - mw) / 2;
-        const my = cEl.height * 0.18;
-        ctx.filter = "none";
-        if ((localStorage.getItem("ditona_mask") || "").toLowerCase() === "pixel") {
-          // simple pixelation block in face region
-          const s = 20;
-          const t = document.createElement("canvas"); t.width = Math.max(1, Math.floor(mw / s)); t.height = Math.max(1, Math.floor(mh / s));
-          const tx = t.getContext("2d")!;
-          tx.drawImage(cEl, mx, my, mw, mh, 0, 0, t.width, t.height);
-          ctx.imageSmoothingEnabled = false;
-          ctx.drawImage(t, 0, 0, t.width, t.height, mx, my, mw, mh);
-          ctx.imageSmoothingEnabled = true;
-        } else {
-          ctx.drawImage(maskImg, mx, my, mw, mh);
-        }
-      }
-    } catch {}
-    raf = requestAnimationFrame(tick);
-  };
-  raf = requestAnimationFrame(tick);
-
-  const cs = (cEl as any).captureStream?.(30);
-  if (!cs || !cs.getVideoTracks || !cs.getVideoTracks()[0]) {
-    // Fallback: no processed track
-    await stopEffects(src);
-    return src;
-  }
-  outStream = cs as MediaStream;
-  return outStream;
+  rafId = requestAnimationFrame(drawFrame);
+  return outStream!;
 }
 
-export async function stopEffects(fallbackSrc: MediaStream | null): Promise<MediaStream> {
+export async function stopEffects(fallback?: MediaStream | null): Promise<MediaStream> {
   running = false;
-  if (raf) cancelAnimationFrame(raf), raf = 0;
-  stopOutStream();
-  cleanupNode(vEl); cleanupNode(cEl);
-  vEl = null; cEl = null; ctx = null;
-  return fallbackSrc as MediaStream;
+  if (rafId != null) cancelAnimationFrame(rafId);
+  rafId = null;
+
+  // Do not stop camera tracks. We only release our canvas stream.
+  try {
+    outStream?.getVideoTracks?.().forEach((t) => {
+      try { t.stop(); } catch {}
+    });
+  } catch {}
+  outStream = null;
+
+  // Keep elements for quick re-entry but clear face box so mask repositions
+  lastBox = null;
+
+  // Return original source if given, else the last source, else empty stream
+  if (fallback) return fallback;
+  if (srcStream) return srcStream;
+  try {
+    return new MediaStream();
+  } catch {
+    // Safari old fallback
+    // @ts-ignore
+    return (undefined as any);
+  }
 }
