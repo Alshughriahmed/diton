@@ -1,227 +1,202 @@
 // src/lib/effects/core.ts
-// Canvas-based pipeline: beauty + optional PNG mask overlay.
-// No external deps. Keeps audio, never stops camera.
+// تأثيرات فيديو محلية: تنعيم + ماسكات (SVG/PNG) مع FaceDetector اختياري
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 let running = false;
 let rafId: number | null = null;
 
-let srcStream: MediaStream | null = null;
+let videoEl: HTMLVideoElement | null = null;
+let outCanvas: HTMLCanvasElement | null = null;
+let outCtx: CanvasRenderingContext2D | null = null;
 let outStream: MediaStream | null = null;
 
-let videoEl: HTMLVideoElement | null = null;
-let drawCanvas: HTMLCanvasElement | null = null;   // work canvas (processing)
-let outCanvas: HTMLCanvasElement | null = null;    // canvas used for captureStream()
+let curMask: HTMLImageElement | null = null;
+let curMaskName: string | null = null;
 
-let maskImg: HTMLImageElement | null = null;
-let maskName: string | null = null;
-
-let faceDetector: any = null;
-let detectPending = false;
-let lastBox: { x: number; y: number; width: number; height: number } | null = null;
-let lastDetectTs = 0;
-
-const MASK_BASE = "/masks";
 const FPS = 30;
-const DETECT_EVERY_MS = 160; // ~6 fps face detect
-const SMOOTH = 0.25;         // bbox smoothing
 
-function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
+// يفضّل SVG ثم PNG
+const MASK_URLS = (name: string) => [
+  `/masks/${encodeURIComponent(name)}.svg`,
+  `/masks/${encodeURIComponent(name)}.png`,
+];
 
-function ensureElems(w: number, h: number) {
-  if (!drawCanvas) {
-    drawCanvas = document.createElement("canvas");
+function hasWindow(): boolean {
+  return typeof window !== "undefined";
+}
+
+function ensureCanvas(w: number, h: number): void {
+  if (!hasWindow()) return;
+  if (!outCanvas) outCanvas = document.createElement("canvas");
+  if (!outCtx) outCtx = outCanvas.getContext("2d");
+  if (!outCtx) throw new Error("2d ctx not available");
+  if (outCanvas.width !== w || outCanvas.height !== h) {
+    outCanvas.width = w;
+    outCanvas.height = h;
   }
-  if (!outCanvas) {
-    outCanvas = document.createElement("canvas");
+}
+
+function getTrackSize(src: MediaStream): { w: number; h: number } {
+  const vt = src.getVideoTracks?.()[0];
+  const s = vt?.getSettings?.() || {};
+  const w = (s.width as number) || 640;
+  const h = (s.height as number) || 480;
+  return { w, h };
+}
+
+async function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+// FaceDetector اختياري
+async function detectFaceBox(v: HTMLVideoElement): Promise<{ x: number; y: number; w: number; h: number } | null> {
+  try {
+    const FD: any = (window as any).FaceDetector;
+    if (!FD) return null;
+    const fd = new FD({ fastMode: true, maxDetectedFaces: 1 });
+    const faces = await fd.detect(v);
+    const f = faces?.[0]?.boundingBox;
+    if (!f) return null;
+    return { x: f.x, y: f.y, w: f.width, h: f.height };
+  } catch {
+    return null;
   }
+}
+
+function drawMaskAt(
+  ctx: CanvasRenderingContext2D,
+  mask: HTMLImageElement,
+  box: { x: number; y: number; w: number; h: number },
+  canvasW: number,
+  canvasH: number,
+) {
+  const scale = 1.25; // يغطي كامل الوجه
+  const mw = box.w * scale;
+  const mh = box.h * scale;
+  const mx = box.x + box.w / 2 - mw / 2;
+  const my = box.y + box.h / 2 - mh / 2;
+  // حدود آمنة
+  const x = Math.max(-mw * 0.2, Math.min(mx, canvasW));
+  const y = Math.max(-mh * 0.2, Math.min(my, canvasH));
+  ctx.drawImage(mask, x, y, mw, mh);
+}
+
+// قوة التنعيم الأساسية
+function applyBeauty(ctx: CanvasRenderingContext2D) {
+  // مزيج بسيط: blur + contrast + saturate
+  // يمكن رفع القيم لاحقًا
+  ctx.filter = "blur(1.2px) contrast(1.06) saturate(1.05) brightness(1.02)";
+}
+
+export async function setMask(name: string | null): Promise<void> {
+  curMask = null;
+  curMaskName = null;
+  if (!name) return;
+
+  for (const u of MASK_URLS(name)) {
+    try {
+      const img = await loadImage(u);
+      curMask = img;
+      curMaskName = name;
+      break;
+    } catch {
+      /* try next */
+    }
+  }
+}
+
+function stopLoop() {
+  running = false;
+  if (rafId != null) cancelAnimationFrame(rafId);
+  rafId = null;
+}
+
+export async function startEffects(src: MediaStream): Promise<MediaStream> {
+  if (!hasWindow()) return src;
+
+  // تجهير فيديو الإدخال
   if (!videoEl) {
     videoEl = document.createElement("video");
     videoEl.muted = true;
     videoEl.playsInline = true;
   }
-  // normalize sizes
-  if (drawCanvas.width !== w || drawCanvas.height !== h) {
-    drawCanvas.width = w; drawCanvas.height = h;
-  }
-  if (outCanvas.width !== w || outCanvas.height !== h) {
-    outCanvas.width = w; outCanvas.height = h;
-  }
-}
 
-async function maybeInitFaceDetector() {
   try {
-    if (!faceDetector && typeof window !== "undefined" && (window as any).FaceDetector) {
-      // @ts-ignore - FaceDetector is not in TS DOM by default on all targets
-      faceDetector = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
-    }
-  } catch {
-    faceDetector = null;
-  }
-}
-
-function drawFrame() {
-  if (!running || !videoEl || !drawCanvas || !outCanvas) return;
-
-  const ctx = drawCanvas.getContext("2d");
-  const ctxOut = outCanvas.getContext("2d");
-  if (!ctx || !ctxOut) { rafId = requestAnimationFrame(drawFrame); return; }
-
-  // Beauty pass
-  try {
-    ctx.filter = "contrast(1.08) saturate(1.08) brightness(1.03) blur(0.4px)";
-    ctx.drawImage(videoEl, 0, 0, drawCanvas.width, drawCanvas.height);
+    // @ts-ignore srcObject مدعوم في المتصفحات الحديثة
+    videoEl.srcObject = src;
+    await videoEl.play().catch(() => {});
   } catch {}
 
-  // Kick async face-detect at a limited rate
-  const now = performance.now();
-  if (faceDetector && !detectPending && now - lastDetectTs > DETECT_EVERY_MS) {
-    detectPending = true;
-    lastDetectTs = now;
-    faceDetector.detect(videoEl)
-      .then((faces: any[]) => {
-        const f = faces && faces[0];
-        if (f?.boundingBox) {
-          const b = f.boundingBox as DOMRectReadOnly;
-          if (lastBox) {
-            lastBox = {
-              x: lerp(lastBox.x, b.x, SMOOTH),
-              y: lerp(lastBox.y, b.y, SMOOTH),
-              width: lerp(lastBox.width, b.width, SMOOTH),
-              height: lerp(lastBox.height, b.height, SMOOTH),
-            };
-          } else {
-            lastBox = { x: b.x, y: b.y, width: b.width, height: b.height };
-          }
-        }
-      })
-      .catch(() => {})
-      .finally(() => { detectPending = false; });
-  }
+  const { w, h } = getTrackSize(src);
+  ensureCanvas(w, h);
 
-  // Mask overlay
-  if (maskImg) {
-    const W = drawCanvas.width, H = drawCanvas.height;
-    let x = W * 0.5, y = H * 0.5, mw = Math.min(W, H) * 0.6, mh = mw;
+  // outStream عبر captureStream
+  if (!outCanvas) throw new Error("canvas missing");
+  outStream =
+    "captureStream" in (outCanvas as any)
+      ? (outCanvas as any).captureStream(FPS)
+      : (src as MediaStream);
 
-    if (lastBox) {
-      const s = 1.45; // enlarge a bit beyond face
-      mw = lastBox.width * s;
-      mh = mw;
-      x = lastBox.x + lastBox.width / 2;
-      y = lastBox.y + lastBox.height * 0.45; // shift slightly upward relative to center
-      x -= mw / 2;
-      y -= mh / 2;
-    } else {
-      // fallback: center overlay if detector not available
-      x -= mw / 2; y -= mh / 2;
-    }
-
-    try {
-      ctx.drawImage(maskImg, x, y, mw, mh);
-    } catch {}
-  }
-
-  // Copy to out-canvas (separate canvas yields stable captureStream on all browsers)
-  try {
-    ctxOut.clearRect(0, 0, outCanvas.width, outCanvas.height);
-    ctxOut.drawImage(drawCanvas, 0, 0);
-  } catch {}
-
-  rafId = requestAnimationFrame(drawFrame);
-}
-
-export async function setMask(name: string | null): Promise<void> {
-  maskName = name || null;
-  maskImg = null;
-  if (!maskName) return;
-
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.decoding = "async";
-  img.loading = "eager";
-  img.src = `${MASK_BASE}/${encodeURIComponent(maskName)}.png`;
-
-  await new Promise<void>((resolve) => {
-    const done = () => resolve();
-    img.addEventListener("load", done, { once: true });
-    img.addEventListener("error", done, { once: true });
-  });
-
-  // If failed to load, keep mask off silently
-  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-    maskImg = img;
-  } else {
-    maskName = null;
-    maskImg = null;
-  }
-}
-
-export async function startEffects(src: MediaStream): Promise<MediaStream> {
-  if (running && outStream) return outStream;
-
-  await maybeInitFaceDetector();
-
-  srcStream = src || null;
-  const vt = src.getVideoTracks?.()[0];
-  const set = vt?.getSettings?.() || {};
-  const w = (set.width as number) || 640;
-  const h = (set.height as number) || 480;
-
-  ensureElems(w, h);
-
-  // hook source to hidden video
-  if (videoEl) {
-    try { (videoEl as any).srcObject = src; } catch {}
-    try { await videoEl!.play(); } catch {}
-  }
-
-    // create output stream
-  try {
-    const cap = (outCanvas as any).captureStream;
-    if (typeof cap === "function") {
-      outStream = cap.call(outCanvas, FPS) as MediaStream;
-    } else {
-      outStream = src as MediaStream; // fallback
-    }
-  } catch {
-    outStream = src as MediaStream; // fallback
-  }
-
-  // add audio from src
+  // الصّوت
   try {
     const at = src.getAudioTracks?.()[0];
-    if (at && outStream && !outStream.getAudioTracks().length) outStream.addTrack(at);
+    if (at && outStream && outStream.getAudioTracks().length === 0) outStream.addTrack(at);
   } catch {}
 
   running = true;
-  rafId = requestAnimationFrame(drawFrame);
-  return outStream!;
+
+  // حلقة الرسم
+  const loop = async () => {
+    if (!running || !outCtx || !outCanvas || !videoEl) return;
+
+    // إطار الفيديو
+    outCtx.save();
+    applyBeauty(outCtx);
+    outCtx.drawImage(videoEl, 0, 0, outCanvas.width, outCanvas.height);
+    outCtx.restore();
+
+    // الماسك
+    if (curMask) {
+      // جرّب FaceDetector ثم اسقط إلى وسط الإطار
+      let box = await detectFaceBox(videoEl).catch(() => null);
+      if (!box) {
+        const cw = outCanvas.width;
+        const ch = outCanvas.height;
+        const s = Math.min(cw, ch) * 0.55;
+        box = { x: cw / 2 - s / 2, y: ch / 2 - s / 2, w: s, h: s };
+      }
+      drawMaskAt(outCtx, curMask, box, outCanvas.width, outCanvas.height);
+    }
+
+    rafId = requestAnimationFrame(loop);
+  };
+
+  stopLoop();
+  rafId = requestAnimationFrame(loop);
+  running = true;
+
+  return outStream || src;
 }
 
 export async function stopEffects(fallback?: MediaStream | null): Promise<MediaStream> {
-  running = false;
-  if (rafId != null) cancelAnimationFrame(rafId);
-  rafId = null;
-
-  // Do not stop camera tracks. We only release our canvas stream.
-  try {
-    outStream?.getVideoTracks?.().forEach((t) => {
-      try { t.stop(); } catch {}
-    });
-  } catch {}
-  outStream = null;
-
-  // Keep elements for quick re-entry but clear face box so mask repositions
-  lastBox = null;
-
-  // Return original source if given, else the last source, else empty stream
-  if (fallback) return fallback;
-  if (srcStream) return srcStream;
-  try {
-    return new MediaStream();
-  } catch {
-    // Safari old fallback
-    // @ts-ignore
-    return (undefined as any);
+  stopLoop();
+  if (videoEl) {
+    try {
+      // @ts-ignore
+      videoEl.srcObject = null;
+    } catch {}
   }
+  outCtx = null;
+  outCanvas = null;
+
+  const out = fallback || null;
+  outStream = null;
+  return out || (new MediaStream() as MediaStream);
 }
