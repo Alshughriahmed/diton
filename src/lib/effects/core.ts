@@ -44,13 +44,11 @@ export async function setMask(name: string | null) {
   img.crossOrigin = "anonymous";
   img.decoding = "async";
   img.referrerPolicy = "no-referrer";
-  // prefer png; user can add svg/webp with same stem if they want to swap here.
   img.src = `/masks/${encodeURIComponent(name)}.png`;
   try {
     await img.decode();
     currentMaskImg = img;
   } catch {
-    // ignore load error; keep mask null
     currentMaskImg = null;
   }
 }
@@ -152,7 +150,7 @@ export async function stopEffects(src?: MediaStream): Promise<MediaStream> {
 
   // keep currentMaskName; only image is dropped on GC when replaced
 
-  return src || (inputStream as any) || (new MediaStream());
+  return src || new MediaStream();
 }
 
 // ---------- internal ----------
@@ -171,19 +169,21 @@ function loop() {
     ctx.restore();
 
     // try to update a face box every few frames
-    if (faceDetector && (frameCount % 6 === 0)) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-        const faces: any[] = awaitMaybe(faceDetector.detect(videoEl));
-        if (faces && faces.length > 0) {
-          const f = faces[0].boundingBox || faces[0].box || faces[0];
-          const box = normalizeBox(f, w, h);
-          if (box) lastFace = box;
+    (async () => {
+      if (faceDetector && frameCount % 6 === 0) {
+        try {
+          // ensure awaited value is array or null
+          const faces = await awaitMaybe<any[]>(faceDetector.detect(videoEl));
+          if (faces && faces.length > 0) {
+            const f = (faces[0] as any).boundingBox || (faces[0] as any).box || faces[0];
+            const box = normalizeBox(f, w, h);
+            if (box) lastFace = box;
+          }
+        } catch {
+          /* ignore detection errors */
         }
-      } catch {
-        /* ignore detection errors */
       }
-    }
+    })();
 
     // overlay mask if any
     if (currentMaskImg) {
@@ -223,14 +223,12 @@ function normalizeBox(b: any, w: number, h: number): FaceBox | null {
 
 function maskRect(w: number, h: number, face: FaceBox | null) {
   if (face) {
-    // scale mask relative to face
     const dw = face.width * 1.35;
-    const dh = dw; // square mask
+    const dh = dw;
     const dx = face.x + face.width / 2 - dw / 2;
-    const dy = face.y - dh * 0.15; // a bit above center to cover eyes/upper face
+    const dy = face.y - dh * 0.15;
     return clampRect(dx, dy, dw, dh, w, h);
   }
-  // fallback: center
   const s = Math.min(w, h) * 0.6;
   const dx = (w - s) / 2;
   const dy = (h - s) / 2;
@@ -243,7 +241,6 @@ function clampRect(x: number, y: number, w: number, h: number, bw: number, bh: n
   if (dy < -dh) dy = -dh;
   if (dx > bw) dx = bw;
   if (dy > bh) dy = bh;
-  // no need to clamp size strongly; let it overflow slightly if needed
   return { dx, dy, dw, dh };
 }
 
