@@ -1,3 +1,4 @@
+// src/app/chat/ChatClient.tsx
 "use client";
 
 import "@/app/chat/dcShim.client";
@@ -41,6 +42,9 @@ import {
   ConnectionState,
 } from "livekit-client";
 
+// Effects pipeline (beauty + masks)
+import { startEffects, stopEffects, setMask } from "@/lib/effects/core";
+
 import LikeSystem from "@/components/chat/LikeSystem";
 import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
@@ -55,7 +59,7 @@ type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 800;
-const SWITCH_PAUSE_MS = 100;
+const SWITCH_PAUSE_MS = 220; // يمنع الوميض عند next/prev
 
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -71,12 +75,14 @@ export default function ChatClient() {
   const filters = useFilters();
   const { profile } = useProfile();
 
+  // Local/remote elements + tracks
   const localRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null);
 
+  // UI state
   const [ready, setReady] = useState(false);
   const [like, setLike] = useState(false);
   const [rtcPhase, setRtcPhase] = useState<Phase>("idle");
@@ -85,18 +91,26 @@ export default function ChatClient() {
   const [isMirrored, setIsMirrored] = useState(true);
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
 
+  // Effects state
+  const effectsOnRef = useRef(false);
+  const effectsMaskOnRef = useRef(false);
+  const processedStreamRef = useRef<MediaStream | null>(null); // ما يتم عرضه محليًا ونشره عند التجميل/الماسك
+
+  // RTC room orchestration
   const roomRef = useRef<Room | null>(null);
   const roomUnsubsRef = useRef<(() => void)[]>([]);
   const joiningRef = useRef(false);
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
 
+  // Last toggles
   const lastMediaStateRef = useRef<{ micOn: boolean; camOn: boolean; remoteMuted: boolean }>({
     micOn: true,
     camOn: true,
     remoteMuted: false,
   });
 
+  // Matching control
   const sidRef = useRef(0);
   const lastNextTsRef = useRef(0);
   const pollAbortRef = useRef<AbortController | null>(null);
@@ -104,6 +118,7 @@ export default function ChatClient() {
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
   const lastTicketRef = useRef<string>("");
 
+  // ---------- helpers ----------
   function newSid(): number {
     sidRef.current += 1;
     return sidRef.current;
@@ -344,7 +359,7 @@ export default function ChatClient() {
       try {
         rn = await nextReq(ticket, wait, ctrl.signal);
       } catch (e: any) {
-        if (e?.name === "AbortError") return null; // sid سيتغيّر في next/prev
+        if (e?.name === "AbortError") return null;
       } finally {
         if (pollAbortRef.current === ctrl) pollAbortRef.current = null;
       }
@@ -546,6 +561,71 @@ export default function ChatClient() {
     });
   }
 
+  // --------- Effects helpers ----------
+  async function replaceLocalVideoTrack(stream: MediaStream | null) {
+    if (!stream) return;
+
+    // preview
+    if (localRef.current && (localRef.current as any).srcObject !== stream) {
+      (localRef.current as any).srcObject = stream;
+      localRef.current.muted = true;
+      await safePlay(localRef.current);
+    }
+
+    // publish if connected
+    const room = roomRef.current;
+    const vt = stream.getVideoTracks?.()[0];
+    if (!room || room.state !== "connected" || !vt) return;
+
+    try {
+      const lp: any = room.localParticipant;
+      const pubs =
+        typeof lp.getTrackPublications === "function"
+          ? lp.getTrackPublications()
+          : Array.from(lp.trackPublications?.values?.() ?? []);
+
+      for (const pub of pubs) {
+        if (pub.kind === Track.Kind.Video && pub.track) {
+          await lp.unpublishTrack(pub.track, { stop: false });
+        }
+      }
+      await room.localParticipant.publishTrack(vt);
+    } catch {}
+  }
+
+  async function enableEffectsPipeline(defaultMaskIfAny = false) {
+    const src = getLocalStream();
+    if (!src) return;
+
+    if (defaultMaskIfAny && !effectsMaskOnRef.current) {
+      await setMask("cat").catch(() => {});
+      effectsMaskOnRef.current = true;
+    }
+
+    const processed = await startEffects(src).catch(() => null);
+    if (processed) {
+      processedStreamRef.current = processed;
+      effectsOnRef.current = true;
+      applyLocalTrackStatesBeforePublish(processed);
+      await replaceLocalVideoTrack(processed);
+      toast("Beauty/Masks ON");
+    }
+  }
+
+  async function disableEffectsPipeline() {
+    const src = getLocalStream();
+    const restored = await stopEffects(src ?? (processedStreamRef.current as any)).catch(() => src);
+    processedStreamRef.current = null;
+    effectsOnRef.current = false;
+    effectsMaskOnRef.current = false;
+    if (restored) {
+      applyLocalTrackStatesBeforePublish(restored);
+      await replaceLocalVideoTrack(restored);
+      toast("Beauty/Masks OFF");
+    }
+  }
+
+  // --------- matching flows ----------
   async function joinViaRedisMatch(sid: number): Promise<void> {
     if (!isActiveSid(sid) || joiningRef.current || leavingRef.current || isConnectingRef.current) return;
     if (roomRef.current?.state === "connecting") return;
@@ -584,13 +664,13 @@ export default function ChatClient() {
       lastTicketRef.current = ticket;
       if (!isActiveSid(sid)) return;
 
-      // حلقة انتظار: لا نتوقف حتى تصل غرفة أو يتغير sid
+      // keep polling until a room is ready or sid changes
       let roomName: string | null = null;
       while (isActiveSid(sid) && !roomName) {
         roomName = await waitRoomLoop(ticket, sid);
         if (!isActiveSid(sid)) return;
         if (!roomName) {
-          setPhase("searching"); // استمر في البحث
+          setPhase("searching");
           continue;
         }
       }
@@ -628,10 +708,11 @@ export default function ChatClient() {
 
       await requestPeerMetaTwice(room);
 
-      const src = getLocalStream() || null;
-      if (src && room.state === "connected") {
-        applyLocalTrackStatesBeforePublish(src);
-        for (const t of src.getTracks()) {
+      // publish current local track (effects if ON else raw)
+      const publishSrc = processedStreamRef.current ?? getLocalStream() ?? null;
+      if (publishSrc && room.state === "connected") {
+        applyLocalTrackStatesBeforePublish(publishSrc);
+        for (const t of publishSrc.getTracks()) {
           if (!isActiveSid(sid)) break;
           try {
             await room.localParticipant.publishTrack(t);
@@ -648,7 +729,7 @@ export default function ChatClient() {
       broadcastMediaState();
     } catch (e) {
       console.warn("joinViaRedisMatch failed", e);
-      setPhase("searching"); // ابقِ المؤشر في حالة البحث عند الفشل
+      setPhase("searching");
     } finally {
       joiningRef.current = false;
       isConnectingRef.current = false;
@@ -688,10 +769,10 @@ export default function ChatClient() {
     dcAttach(room);
     await requestPeerMetaTwice(room);
 
-    const src = getLocalStream() || null;
-    if (src) {
-      applyLocalTrackStatesBeforePublish(src);
-      for (const t of src.getTracks()) {
+    const publishSrc = processedStreamRef.current ?? getLocalStream() ?? null;
+    if (publishSrc) {
+      applyLocalTrackStatesBeforePublish(publishSrc);
+      for (const t of publishSrc.getTracks()) {
         try {
           await room.localParticipant.publishTrack(t);
         } catch {}
@@ -702,6 +783,7 @@ export default function ChatClient() {
     return true;
   }
 
+  // --------- timers ----------
   useEffect(() => {
     if (rtcPhase !== "searching") return;
     const iv = setInterval(() => {
@@ -712,6 +794,7 @@ export default function ChatClient() {
     return () => clearInterval(iv);
   }, [rtcPhase]);
 
+  // --------- boot + event wiring ----------
   useEffect(() => {
     (async () => {
       setPhase("boot");
@@ -738,6 +821,8 @@ export default function ChatClient() {
     })().catch(() => {});
 
     const offs: Array<() => void> = [];
+
+    // mic/cam
     offs.push(
       on("ui:toggleMic", () => {
         toggleMic();
@@ -746,14 +831,22 @@ export default function ChatClient() {
     );
     offs.push(on("ui:toggleCam", () => toggleCam()));
 
+    // camera switch
     offs.push(
       on("ui:switchCamera", async () => {
         const ok = await switchCameraCycle(roomRef.current, localRef.current || undefined);
         if (!ok) toast("Camera switch failed");
-        else broadcastMediaState();
+        else {
+          // إذا كانت المؤثرات فعّالة أعد بنائها على المصدر الجديد
+          if (effectsOnRef.current) {
+            await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
+          }
+          broadcastMediaState();
+        }
       }),
     );
 
+    // settings
     offs.push(
       on("ui:openSettings", () => {
         try {
@@ -762,6 +855,7 @@ export default function ChatClient() {
       }),
     );
 
+    // torch
     offs.push(
       on("ui:toggleTorch", async () => {
         const ok = await toggleTorch();
@@ -770,6 +864,7 @@ export default function ChatClient() {
       }),
     );
 
+    // like
     offs.push(
       on("ui:like", async () => {
         const room = roomRef.current;
@@ -787,6 +882,7 @@ export default function ChatClient() {
       }),
     );
 
+    // report
     offs.push(on("ui:report", () => toast("Report sent. Moving on")));
 
     // NEXT
@@ -808,11 +904,15 @@ export default function ChatClient() {
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
+        // إذا المؤثرات ON أبقِ نفس المسار المعالج في المعاينة وسيُعاد نشره بعد الاتصال
+        if (effectsOnRef.current) {
+          await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
+        }
         await joinViaRedisMatch(sid);
       }),
     );
 
-    // PREV
+    // PREV (VIP unless FFA)
     offs.push(
       on("ui:prev", async () => {
         if (!filters.isVip && !ffa) {
@@ -845,14 +945,19 @@ export default function ChatClient() {
             localRef.current.muted = true;
             await safePlay(localRef.current);
           }
+          if (effectsOnRef.current) {
+            await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
+          }
           await joinViaRedisMatch(sid);
         }
       }),
     );
 
+    // messaging
     offs.push(on("ui:openMessaging" as any, () => setShowMessaging(true)));
     offs.push(on("ui:closeMessaging" as any, () => setShowMessaging(false)));
 
+    // remote audio toggle
     offs.push(
       on("ui:toggleRemoteAudio" as any, () => {
         const a = remoteAudioRef.current;
@@ -866,16 +971,49 @@ export default function ChatClient() {
       }),
     );
 
-    offs.push(on("ui:toggleMasks", () => toast("Enable/disable masks")));
+    // Beauty ON/OFF
     offs.push(
-      on("ui:toggleMirror", () => {
-        setIsMirrored((prev) => {
-          const s = !prev;
-          toast(s ? "Mirror on" : "Mirror off");
-          return s;
-        });
+      on("ui:toggleBeauty", async (d: any) => {
+        const on = !!d?.enabled;
+        if (on) await enableEffectsPipeline(effectsMaskOnRef.current).catch(() => {});
+        else await disableEffectsPipeline().catch(() => {});
       }),
     );
+
+    // Masks toggle
+    offs.push(
+      on("ui:toggleMasks", async () => {
+        const next = !effectsMaskOnRef.current;
+        if (next) {
+          await setMask("cat").catch(() => {});
+          effectsMaskOnRef.current = true;
+          if (!effectsOnRef.current) await enableEffectsPipeline(true).catch(() => {});
+        } else {
+          effectsMaskOnRef.current = false;
+          await setMask(null as any).catch(() => {});
+          // إذا لا Beauty فعال أيضًا أطفئ بالكامل
+          if (!effectsOnRef.current) await disableEffectsPipeline().catch(() => {});
+        }
+      }),
+    );
+
+    // Pick specific mask
+    offs.push(
+      on("ui:setMask", async (d: any) => {
+        const name = d?.name || null;
+        if (!name) {
+          effectsMaskOnRef.current = false;
+          await setMask(null as any).catch(() => {});
+          if (!effectsOnRef.current) await disableEffectsPipeline().catch(() => {});
+        } else {
+          await setMask(name).catch(() => {});
+          effectsMaskOnRef.current = true;
+          if (!effectsOnRef.current) await enableEffectsPipeline(true).catch(() => {});
+        }
+      }),
+    );
+
+    // upsell
     offs.push(
       on("ui:upsell", (d: any) => {
         if (ffa) return;
@@ -888,16 +1026,16 @@ export default function ChatClient() {
 
     return () => {
       for (const off of offs) try { off(); } catch {}
-      try {
-        window.removeEventListener("rtc:peer-like", () => {});
-      } catch {}
       unsubMob();
       abortPolling();
+      // أعد المسار الخام قبل المغادرة
+      disableEffectsPipeline().catch(() => {});
       leaveRoom().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
+  // ---------- UI ----------
   return (
     <>
       <LikeHud />
