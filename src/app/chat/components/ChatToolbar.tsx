@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { emit, on } from "@/utils/events";
 import { useFFA } from "@/lib/useFFA";
-import MaskTray from "@/components/chat/MaskTray";
+import MaskTray from "./MaskTray";
 
 function isMobileUA() {
   if (typeof navigator === "undefined" || typeof window === "undefined") return false;
