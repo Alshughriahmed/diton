@@ -40,6 +40,8 @@ import {
   RemoteTrack,
   Track,
   ConnectionState,
+  LocalTrackPublication,
+  LocalVideoTrack,
 } from "livekit-client";
 
 // مؤثرات الفيديو: تجميل + ماسكات
@@ -327,6 +329,33 @@ export default function ChatClient() {
     } catch {}
   }
 
+  // انتظر أول إطار مرئي من عنصر الفيديو البعيد لتفادي شاشة سوداء
+  function waitFirstRemoteFrame(video: HTMLVideoElement): Promise<void> {
+    if (!video) return Promise.resolve();
+    const hasFrame = () => video.videoWidth > 0 && video.videoHeight > 0;
+    if (hasFrame()) return Promise.resolve();
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try {
+          video.removeEventListener("loadeddata", finish);
+          video.removeEventListener("resize", finish as any);
+          video.removeEventListener("loadedmetadata", finish);
+        } catch {}
+        resolve();
+      };
+      video.addEventListener("loadeddata", finish, { once: true });
+      video.addEventListener("loadedmetadata", finish, { once: true });
+      video.addEventListener("resize", finish as any, { once: true });
+      // حارس زمني
+      setTimeout(() => {
+        if (hasFrame()) finish();
+      }, 1200);
+    });
+  }
+
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
     const el = kind === "video" ? remoteVideoRef.current : remoteAudioRef.current;
     if (!el || !track) return;
@@ -338,6 +367,12 @@ export default function ChatClient() {
     if (kind === "video") remoteVideoTrackRef.current = track;
     if (kind === "audio") remoteAudioTrackRef.current = track;
     emitRemoteTrackStarted();
+    // تأكيد الإطار الأول للفيديو البعيد
+    if (kind === "video" && el instanceof HTMLVideoElement) {
+      waitFirstRemoteFrame(el).then(() => {
+        if (isActiveSid(sidRef.current)) setPhase("connected");
+      });
+    }
   }
   function detachRemoteAll() {
     try {
@@ -620,19 +655,19 @@ export default function ChatClient() {
 
     try {
       const lp: any = room.localParticipant;
-      const pubs =
+      const pubs: LocalTrackPublication[] =
         typeof lp.getTrackPublications === "function"
           ? lp.getTrackPublications()
           : Array.from(lp.trackPublications?.values?.() ?? []);
 
       // حاول الاستبدال على نفس الـpublication لتفادي إعادة التفاوض
-      const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track);
-      const pubTrack: any = vidPub?.track;
+      const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track) as LocalTrackPublication | undefined;
+      const pubTrack = vidPub?.track as LocalVideoTrack | undefined;
 
-      if (pubTrack && typeof pubTrack.replaceTrack === "function") {
-        await pubTrack.replaceTrack(vt);
+      if (pubTrack && typeof (pubTrack as any).replaceTrack === "function") {
+        await (pubTrack as any).replaceTrack(vt);
       } else {
-        // fallback آمن عند غياب replaceTrack
+        // fallback آمن
         for (const pub of pubs) {
           if (pub.kind === Track.Kind.Video && pub.track) {
             await lp.unpublishTrack(pub.track, { stop: false });
