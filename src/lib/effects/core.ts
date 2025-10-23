@@ -1,10 +1,18 @@
 // src/lib/effects/core.ts
-// Lightweight Canvas-2D effects: Beauty + 2D Masks.
-// لا يعتمد على WebGL أو مكتبات خارجية. يعمل في المتصفح فقط.
+// تأثيرات 2D خفيفة: Beauty + Masks على Canvas.
+// متصفح فقط. لا WebGL ولا تبعيات خارجية.
 
-const FPS = 30;
+let TARGET_FPS = 30;
 
-// ---------- module state ----------
+// سقف المعالجة للأجهزة الضعيفة
+const LOW_END =
+  typeof navigator !== "undefined" &&
+  (navigator.hardwareConcurrency ? navigator.hardwareConcurrency <= 4 : false);
+
+let MAX_WIDTH = LOW_END ? 720 : 960;   // سقف العرض
+let MIN_HEIGHT = 480;                  // لا نهبط أقل من 480p
+
+// ---------- حالة الموديول ----------
 let running = false;
 
 let beautyOn = false;
@@ -23,53 +31,66 @@ let rafId: number | null = null;
 let currentMaskName: string | null = null;
 let currentMaskImg: HTMLImageElement | null = null;
 
-// face detect (optional)
+// FaceDetector اختياري
 type FaceBox = { x: number; y: number; width: number; height: number };
 let faceDetector: any = null;
 let lastFace: FaceBox | null = null;
 let frameCount = 0;
 
-// rVFC fallback
-const rVFC: (cb: FrameRequestCallback) => number =
-  (typeof (globalThis as any).requestVideoFrameCallback === "function"
-    ? (globalThis as any).requestVideoFrameCallback.bind(globalThis)
-    : (cb: FrameRequestCallback) => requestAnimationFrame(cb)) as any;
-
-// ---------- persisted defaults (browser only) ----------
+// ---------- افتراضات محفوظة ----------
 try {
   if (typeof window !== "undefined") {
     const lv = Number(localStorage.getItem("ditona_beauty_level") || "40");
     if (Number.isFinite(lv)) beautyLevel = clamp(0, 100, Math.round(lv));
     beautyOn = localStorage.getItem("ditona_beauty_on") === "1";
   }
-} catch {
-  /* ignore */
-}
+} catch {}
 
-// ---------- public API ----------
+// ---------- API عام ----------
 
-/** Enable/disable beauty filter globally. */
+/** تفعيل/تعطيل التجميل. */
 export function setBeautyEnabled(on: boolean) {
   beautyOn = !!on;
 }
 
-/** Optional: update beauty strength 0..100 and persist. */
+/** قوة التجميل 0..100 مع حفظ. */
 export function setBeautyLevel(level: number) {
   beautyLevel = clamp(0, 100, Math.round(level));
   try {
     localStorage.setItem("ditona_beauty_level", String(beautyLevel));
-  } catch {
-    /* ignore */
+  } catch {}
+}
+
+/** سقف المعالجة اختياريًا. يعاد تطبيقه عند بدء بايبلاين جديدة. */
+export function setProcessingCap(opts: { maxWidth?: number; minHeight?: number; fps?: number } = {}) {
+  if (Number.isFinite(opts.maxWidth as number) && (opts.maxWidth as number) > 0) {
+    MAX_WIDTH = Math.max(320, Math.round(opts.maxWidth as number));
+  }
+  if (Number.isFinite(opts.minHeight as number) && (opts.minHeight as number) > 0) {
+    MIN_HEIGHT = Math.max(240, Math.round(opts.minHeight as number));
+  }
+  if (Number.isFinite(opts.fps as number) && (opts.fps as number) > 8) {
+    TARGET_FPS = Math.min(60, Math.round(opts.fps as number));
   }
 }
 
-/** Load or clear current overlay mask. Use filenames in /public/masks, pass name without extension. */
+/** إرجاع الستريم المعالَج الحالي إن وُجد. */
+export function getProcessedStream(): MediaStream | null {
+  return processedStream || null;
+}
+
+/** هل البايبلاين تعمل. */
+export function isEffectsRunning(): boolean {
+  return running && !!processedStream;
+}
+
+/** تحميل أو مسح القناع. الاسم دون الامتداد. */
 export async function setMask(name: string | null) {
   currentMaskName = name;
   currentMaskImg = null;
   if (!name || typeof window === "undefined") return;
 
-  // جرّب الامتدادات المتاحة لتفادي 404
+  // جرّب الامتدادات الشائعة لتفادي 404
   for (const ext of ["png", "webp", "svg"]) {
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -82,34 +103,31 @@ export async function setMask(name: string | null) {
       currentMaskImg = img;
       break;
     } catch {
-      /* جرّب الامتداد التالي */
+      /* جرّب التالي */
     }
   }
 }
 
 /**
- * Start or rebuild the effects pipeline for the given raw stream.
- * Returns a MediaStream that mirrors the input with beauty/mask applied.
- * لا يوقف getUserMedia ولا يطلب صلاحيات جديدة.
+ * بدء أو إعادة بناء بايبلاين التأثيرات.
+ * يعيد MediaStream يطابق المصدر مع التجميل/القناع.
  */
 export async function startEffects(src: MediaStream): Promise<MediaStream> {
   if (typeof window === "undefined") return src;
 
-  // نفس المصدر وقيد التشغيل
   if (running && inputStream === src && processedStream) return processedStream;
 
-  // مصدر مختلف: أوقف القديمة ثم أبنِ من جديد
   if (running && inputStream && inputStream !== src) {
     await stopEffects(inputStream).catch(() => {});
   }
 
   inputStream = src;
 
-  // أبعاد أولية من إعدادات المسار
+  // أبعاد أولية
   const vTrack = src.getVideoTracks?.()[0] || null;
   const settings = (vTrack && vTrack.getSettings && vTrack.getSettings()) || {};
-  let width = numberOr(settings.width, 640);
-  let height = numberOr(settings.height, 480);
+  let width = numberOr((settings as any).width, 640);
+  let height = numberOr((settings as any).height, 480);
 
   // عنصر فيديو لقراءة الإطارات
   videoEl = document.createElement("video");
@@ -118,15 +136,18 @@ export async function startEffects(src: MediaStream): Promise<MediaStream> {
   (videoEl as any).srcObject = src;
   try {
     await videoEl.play();
-  } catch {
-    /* قد يبدأ بعد قليل */
-  }
+  } catch {}
 
-  // إن توفرت أبعاد ميتاداتا استخدمها
-  if (videoEl.videoWidth && videoEl.videoHeight) {
+  // استخدم أبعاد الفيديو الفعلية إن توفرت
+  if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
     width = videoEl.videoWidth;
     height = videoEl.videoHeight;
   }
+
+  // طبّق سقف المعالجة مع الحفاظ على النسبة
+  const capped = capDimensions(width, height, MAX_WIDTH, MIN_HEIGHT);
+  width = capped.w;
+  height = capped.h;
 
   // Canvas للرسم والالتقاط
   canvasEl = document.createElement("canvas");
@@ -142,38 +163,36 @@ export async function startEffects(src: MediaStream): Promise<MediaStream> {
     faceDetector = null;
   }
 
-  // مسار ناتج من captureStream
+  // captureStream مع FPS مضبوط
   let cap: MediaStream | null = null;
   try {
-    cap = (canvasEl as any).captureStream ? (canvasEl as any).captureStream(FPS) : null;
+    const capAny = (canvasEl as any).captureStream;
+    cap = capAny ? capAny(TARGET_FPS) : null;
   } catch {
     cap = null;
   }
   processedStream = (cap || src) as MediaStream;
 
-  // انقل الصوت كما هو
+  // مرّر الصوت مرة واحدة
   try {
     const a = src.getAudioTracks?.()[0];
-    if (cap && a && !processedStream.getAudioTracks().length) processedStream.addTrack(a);
-  } catch {
-    /* ignore */
-  }
+    if (cap && a && processedStream.getAudioTracks().length === 0) {
+      processedStream.addTrack(a);
+    }
+  } catch {}
 
   running = true;
   frameCount = 0;
 
-  // أوقف/استأنف على visibility
   try {
     document.addEventListener("visibilitychange", onVisibility, { passive: true });
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 
   loop();
   return processedStream!;
 }
 
-/** Stop effects and release internal resources. Returns a stream to continue using (usually the raw `src`). */
+/** إيقاف التأثيرات وتحرير الموارد. يعيد ستريم للاستمرار. */
 export async function stopEffects(src?: MediaStream): Promise<MediaStream> {
   running = false;
 
@@ -184,19 +203,14 @@ export async function stopEffects(src?: MediaStream): Promise<MediaStream> {
 
   try {
     document.removeEventListener("visibilitychange", onVisibility as any);
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 
-  // لا نوقف Tracks للمستخدم
   try {
     if (videoEl) {
       (videoEl as any).srcObject = null;
       videoEl.pause?.();
     }
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 
   videoEl = null;
   ctx = null;
@@ -205,15 +219,13 @@ export async function stopEffects(src?: MediaStream): Promise<MediaStream> {
   processedStream = null;
   inputStream = null;
 
-  // نحافظ على currentMaskName؛ الصورة تتخلّص منها GC عند الاستبدال
   return src || new MediaStream();
 }
 
-// ---------- internal helpers ----------
+// ---------- داخلي ----------
 
 function onVisibility() {
-  // لا نغيّر حالة التشغيل. فقط نخفّض عبء الكشف عند الإخفاء.
-  // حل بسيط: أعد ضبط عدّاد الإطارات ليُبطئ الكشف فور العودة.
+  // فقط نخفّض عبء الكشف بعد العودة
   frameCount = 0;
 }
 
@@ -221,59 +233,64 @@ function loop() {
   if (!running || !ctx || !canvasEl || !videoEl) return;
 
   try {
-    const w = canvasEl.width;
-    const h = canvasEl.height;
+    // اضبط الأبعاد إذا تغيرت فجأة
+    if (videoEl.videoWidth && videoEl.videoHeight) {
+      const needResize =
+        videoEl.videoWidth !== canvasEl.width || videoEl.videoHeight !== canvasEl.height;
 
-    // قد تتغير أبعاد الفيديو بعد بدء التشغيل
-    if (videoEl.videoWidth && videoEl.videoHeight && (videoEl.videoWidth !== w || videoEl.videoHeight !== h)) {
-      canvasEl.width = videoEl.videoWidth;
-      canvasEl.height = videoEl.videoHeight;
+      if (needResize) {
+        const capped = capDimensions(
+          videoEl.videoWidth,
+          videoEl.videoHeight,
+          MAX_WIDTH,
+          MIN_HEIGHT
+        );
+        canvasEl.width = capped.w;
+        canvasEl.height = capped.h;
+      }
     }
 
-    // ارسم الإطار الأساسي مع فلتر التجميل إن كان مفعّلًا
+    // إطار الأساس + التجميل
     ctx.save();
     ctx.filter = beautyOn ? cssFilterFromLevel(beautyLevel) : "none";
     ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
     ctx.restore();
 
-    // كشف وجه كل 6 إطارات إن توفر FD
-    if (faceDetector && (frameCount % 6 === 0)) {
+    // كشف وجه كل 6 إطارات إذا توفر FD
+    if (faceDetector && frameCount % 6 === 0) {
       (async () => {
         const faces = await awaitMaybe<any[]>(faceDetector.detect(videoEl!));
         if (faces && faces.length > 0) {
           const f = (faces[0] as any).boundingBox || (faces[0] as any).box || faces[0];
           const box = normalizeBox(f, canvasEl!.width, canvasEl!.height);
-          if (box) lastFace = lerpBox(lastFace, box, 0.35); // تنعيم بسيط
+          if (box) lastFace = lerpBox(lastFace, box, 0.35);
         }
       })();
     }
 
-    // قناع إن وُجد
+    // قناع
     if (currentMaskImg) {
       const { dx, dy, dw, dh } = maskRect(canvasEl.width, canvasEl.height, lastFace);
       try {
         ctx.drawImage(currentMaskImg, dx, dy, dw, dh);
-      } catch {
-        /* ignore */
-      }
+      } catch {}
     }
 
     frameCount += 1;
-  } catch {
-    /* frame error ignore */
-  }
+  } catch {}
 
   rafId = requestAnimationFrame(loop);
 }
 
 function cssFilterFromLevel(level: number): string {
-  // خريطة خطية بسيطة. مستوى 40% تقريبًا افتراضي.
   const t = clamp(0, 100, level) / 100;
-  const contrast = 1 + 0.08 * t;     // حتى +8%
-  const saturate = 1 + 0.12 * t;     // حتى +12%
-  const brightness = 1 + 0.06 * t;   // حتى +6%
-  const blurPx = 0.5 * t;            // حتى 0.5px
-  return `contrast(${to3(contrast)}) saturate(${to3(saturate)}) brightness(${to3(brightness)}) blur(${to3(blurPx)}px)`;
+  const contrast = 1 + 0.08 * t;
+  const saturate = 1 + 0.12 * t;
+  const brightness = 1 + 0.06 * t;
+  const blurPx = 0.5 * t;
+  return `contrast(${to3(contrast)}) saturate(${to3(saturate)}) brightness(${to3(brightness)}) blur(${to3(
+    blurPx
+  )}px)`;
 }
 
 function normalizeBox(b: any, w: number, h: number): FaceBox | null {
@@ -282,21 +299,8 @@ function normalizeBox(b: any, w: number, h: number): FaceBox | null {
   let x = Number(b.x !== undefined ? b.x : b.left !== undefined ? b.left : 0);
   let y = Number(b.y !== undefined ? b.y : b.top !== undefined ? b.top : 0);
 
-  let width = Number(
-    b.width !== undefined
-      ? b.width
-      : b.right !== undefined
-      ? Number(b.right) - x
-      : 0
-  );
-
-  let height = Number(
-    b.height !== undefined
-      ? b.height
-      : b.bottom !== undefined
-      ? Number(b.bottom) - y
-      : 0
-  );
+  let width = Number(b.width !== undefined ? b.width : b.right !== undefined ? Number(b.right) - x : 0);
+  let height = Number(b.height !== undefined ? b.height : b.bottom !== undefined ? Number(b.bottom) - y : 0);
 
   if (!isFinite(x) || !isFinite(y) || !isFinite(width) || !isFinite(height) || width <= 0 || height <= 0) return null;
 
@@ -321,7 +325,6 @@ function lerpBox(a: FaceBox | null, b: FaceBox, k: number): FaceBox {
 
 function maskRect(w: number, h: number, face: FaceBox | null) {
   if (face) {
-    // مقياس بسيط فوق الوجه
     const dw = face.width * 1.35;
     const dh = dw;
     const dx = face.x + face.width / 2 - dw / 2;
@@ -335,12 +338,36 @@ function maskRect(w: number, h: number, face: FaceBox | null) {
 }
 
 function clampRect(x: number, y: number, w: number, h: number, bw: number, bh: number) {
-  let dx = x, dy = y, dw = w, dh = h;
+  let dx = x,
+    dy = y,
+    dw = w,
+    dh = h;
   if (dx < -dw) dx = -dw;
   if (dy < -dh) dy = -dh;
   if (dx > bw) dx = bw;
   if (dy > bh) dy = bh;
   return { dx, dy, dw, dh };
+}
+
+function capDimensions(w: number, h: number, maxW: number, minH: number): { w: number; h: number } {
+  // حافظ على النسبة. نخفض إذا تعدّى العرض السقف أو إذا الارتفاع أعلى من minH ونريد تقليله للأداء.
+  const ratio = w / Math.max(1, h);
+
+  let targetW = w;
+  let targetH = h;
+
+  if (w > maxW) {
+    targetW = maxW;
+    targetH = Math.round(maxW / ratio);
+  }
+
+  // على الأجهزة الضعيفة أو عند ارتفاع كبير، اجعل الارتفاع نحو 480p كحد تقريبي
+  if (LOW_END && targetH > minH) {
+    targetH = minH;
+    targetW = Math.round(minH * ratio);
+  }
+
+  return { w: Math.max(1, targetW), h: Math.max(1, targetH) };
 }
 
 async function awaitMaybe<T = any>(p: Promise<T>): Promise<T | null> {
