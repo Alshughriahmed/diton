@@ -1,12 +1,14 @@
 // src/lib/effects/core.ts
-// Lightweight effects pipeline for beauty filter + 2D masks.
-// No external deps. Browser-only. Safe to import from client components.
+// Lightweight Canvas-2D effects: Beauty + 2D Masks.
+// لا يعتمد على WebGL أو مكتبات خارجية. يعمل في المتصفح فقط.
 
 const FPS = 30;
 
 // ---------- module state ----------
 let running = false;
+
 let beautyOn = false;
+let beautyLevel = 40; // 0..100
 
 let inputStream: MediaStream | null = null;
 let processedStream: MediaStream | null = null;
@@ -27,6 +29,23 @@ let faceDetector: any = null;
 let lastFace: FaceBox | null = null;
 let frameCount = 0;
 
+// rVFC fallback
+const rVFC: (cb: FrameRequestCallback) => number =
+  (typeof (globalThis as any).requestVideoFrameCallback === "function"
+    ? (globalThis as any).requestVideoFrameCallback.bind(globalThis)
+    : (cb: FrameRequestCallback) => requestAnimationFrame(cb)) as any;
+
+// ---------- persisted defaults (browser only) ----------
+try {
+  if (typeof window !== "undefined") {
+    const lv = Number(localStorage.getItem("ditona_beauty_level") || "40");
+    if (Number.isFinite(lv)) beautyLevel = clamp(0, 100, Math.round(lv));
+    beautyOn = localStorage.getItem("ditona_beauty_on") === "1";
+  }
+} catch {
+  /* ignore */
+}
+
 // ---------- public API ----------
 
 /** Enable/disable beauty filter globally. */
@@ -34,49 +53,65 @@ export function setBeautyEnabled(on: boolean) {
   beautyOn = !!on;
 }
 
+/** Optional: update beauty strength 0..100 and persist. */
+export function setBeautyLevel(level: number) {
+  beautyLevel = clamp(0, 100, Math.round(level));
+  try {
+    localStorage.setItem("ditona_beauty_level", String(beautyLevel));
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Load or clear current overlay mask. Use filenames in /public/masks, pass name without extension. */
 export async function setMask(name: string | null) {
-currentMaskImg = null;
-if (!name || typeof window === "undefined") return;
+  currentMaskName = name;
+  currentMaskImg = null;
+  if (!name || typeof window === "undefined") return;
 
-for (const ext of ["png", "webp", "svg"]) {
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.decoding = "async";
-  img.referrerPolicy = "no-referrer";
-  img.src = `/masks/${encodeURIComponent(name)}.${ext}`;
-  try {
-    await img.decode();
-    currentMaskImg = img;
-    break;
-  } catch {
-    /* جرّب الامتداد التالي */
+  // جرّب الامتدادات المتاحة لتفادي 404
+  for (const ext of ["png", "webp", "svg"]) {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.loading = "eager";
+    img.src = `/masks/${encodeURIComponent(name)}.${ext}`;
+    try {
+      await img.decode();
+      currentMaskImg = img;
+      break;
+    } catch {
+      /* جرّب الامتداد التالي */
+    }
   }
-}  
+}
 
 /**
  * Start or rebuild the effects pipeline for the given raw stream.
  * Returns a MediaStream that mirrors the input with beauty/mask applied.
+ * لا يوقف getUserMedia ولا يطلب صلاحيات جديدة.
  */
 export async function startEffects(src: MediaStream): Promise<MediaStream> {
   if (typeof window === "undefined") return src;
 
-  // if already running on the same input stream, reuse
+  // نفس المصدر وقيد التشغيل
   if (running && inputStream === src && processedStream) return processedStream;
 
-  // if running on a different input stream, stop then rebuild
-  if (running && inputStream !== src) {
-    await stopEffects(src).catch(() => {});
+  // مصدر مختلف: أوقف القديمة ثم أبنِ من جديد
+  if (running && inputStream && inputStream !== src) {
+    await stopEffects(inputStream).catch(() => {});
   }
 
   inputStream = src;
 
+  // أبعاد أولية من إعدادات المسار
   const vTrack = src.getVideoTracks?.()[0] || null;
   const settings = (vTrack && vTrack.getSettings && vTrack.getSettings()) || {};
-  const width = (settings as any).width || 640;
-  const height = (settings as any).height || 480;
+  let width = numberOr(settings.width, 640);
+  let height = numberOr(settings.height, 480);
 
-  // video element to read frames
+  // عنصر فيديو لقراءة الإطارات
   videoEl = document.createElement("video");
   videoEl.muted = true;
   videoEl.playsInline = true;
@@ -84,41 +119,56 @@ export async function startEffects(src: MediaStream): Promise<MediaStream> {
   try {
     await videoEl.play();
   } catch {
-    // continue; frames may start later
+    /* قد يبدأ بعد قليل */
   }
 
-  // canvas to draw + capture
+  // إن توفرت أبعاد ميتاداتا استخدمها
+  if (videoEl.videoWidth && videoEl.videoHeight) {
+    width = videoEl.videoWidth;
+    height = videoEl.videoHeight;
+  }
+
+  // Canvas للرسم والالتقاط
   canvasEl = document.createElement("canvas");
   canvasEl.width = width;
   canvasEl.height = height;
   ctx = canvasEl.getContext("2d", { willReadFrequently: false });
 
-  // optional face detector
+  // FaceDetector اختياري
   try {
     const FD: any = (globalThis as any).FaceDetector;
-    if (FD) {
-      faceDetector = new FD({ fastMode: true, maxDetectedFaces: 1 });
-    } else {
-      faceDetector = null;
-    }
+    faceDetector = FD ? new FD({ fastMode: true, maxDetectedFaces: 1 }) : null;
   } catch {
     faceDetector = null;
   }
 
-  // capture output stream
-  const cap = (canvasEl as any).captureStream ? (canvasEl as any).captureStream(FPS) : null;
+  // مسار ناتج من captureStream
+  let cap: MediaStream | null = null;
+  try {
+    cap = (canvasEl as any).captureStream ? (canvasEl as any).captureStream(FPS) : null;
+  } catch {
+    cap = null;
+  }
   processedStream = (cap || src) as MediaStream;
 
-  // carry audio track through
+  // انقل الصوت كما هو
   try {
     const a = src.getAudioTracks?.()[0];
-    if (cap && a) processedStream.addTrack(a);
+    if (cap && a && !processedStream.getAudioTracks().length) processedStream.addTrack(a);
   } catch {
     /* ignore */
   }
 
   running = true;
   frameCount = 0;
+
+  // أوقف/استأنف على visibility
+  try {
+    document.addEventListener("visibilitychange", onVisibility, { passive: true });
+  } catch {
+    /* ignore */
+  }
+
   loop();
   return processedStream!;
 }
@@ -132,7 +182,13 @@ export async function stopEffects(src?: MediaStream): Promise<MediaStream> {
     rafId = null;
   }
 
-  // do not stop user's tracks; only clear our internals
+  try {
+    document.removeEventListener("visibilitychange", onVisibility as any);
+  } catch {
+    /* ignore */
+  }
+
+  // لا نوقف Tracks للمستخدم
   try {
     if (videoEl) {
       (videoEl as any).srcObject = null;
@@ -149,12 +205,17 @@ export async function stopEffects(src?: MediaStream): Promise<MediaStream> {
   processedStream = null;
   inputStream = null;
 
-  // keep currentMaskName; only image is dropped on GC when replaced
-
+  // نحافظ على currentMaskName؛ الصورة تتخلّص منها GC عند الاستبدال
   return src || new MediaStream();
 }
 
-// ---------- internal ----------
+// ---------- internal helpers ----------
+
+function onVisibility() {
+  // لا نغيّر حالة التشغيل. فقط نخفّض عبء الكشف عند الإخفاء.
+  // حل بسيط: أعد ضبط عدّاد الإطارات ليُبطئ الكشف فور العودة.
+  frameCount = 0;
+}
 
 function loop() {
   if (!running || !ctx || !canvasEl || !videoEl) return;
@@ -163,44 +224,56 @@ function loop() {
     const w = canvasEl.width;
     const h = canvasEl.height;
 
-    // draw base frame
+    // قد تتغير أبعاد الفيديو بعد بدء التشغيل
+    if (videoEl.videoWidth && videoEl.videoHeight && (videoEl.videoWidth !== w || videoEl.videoHeight !== h)) {
+      canvasEl.width = videoEl.videoWidth;
+      canvasEl.height = videoEl.videoHeight;
+    }
+
+    // ارسم الإطار الأساسي مع فلتر التجميل إن كان مفعّلًا
     ctx.save();
-    ctx.filter = beautyOn ? "contrast(1.06) saturate(1.08) brightness(1.02) blur(0.5px)" : "none";
-    ctx.drawImage(videoEl, 0, 0, w, h);
+    ctx.filter = beautyOn ? cssFilterFromLevel(beautyLevel) : "none";
+    ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
     ctx.restore();
 
-    // try to update a face box every few frames
-    (async () => {
-      if (faceDetector && frameCount % 6 === 0) {
-        try {
-          const faces = await awaitMaybe<any[]>(faceDetector.detect(videoEl));
-          if (faces && faces.length > 0) {
-            const f = (faces[0] as any).boundingBox || (faces[0] as any).box || faces[0];
-            const box = normalizeBox(f, w, h);
-            if (box) lastFace = box;
-          }
-        } catch {
-          /* ignore detection errors */
+    // كشف وجه كل 6 إطارات إن توفر FD
+    if (faceDetector && (frameCount % 6 === 0)) {
+      (async () => {
+        const faces = await awaitMaybe<any[]>(faceDetector.detect(videoEl!));
+        if (faces && faces.length > 0) {
+          const f = (faces[0] as any).boundingBox || (faces[0] as any).box || faces[0];
+          const box = normalizeBox(f, canvasEl!.width, canvasEl!.height);
+          if (box) lastFace = lerpBox(lastFace, box, 0.35); // تنعيم بسيط
         }
-      }
-    })();
+      })();
+    }
 
-    // overlay mask if any
+    // قناع إن وُجد
     if (currentMaskImg) {
-      const { dx, dy, dw, dh } = maskRect(w, h, lastFace);
+      const { dx, dy, dw, dh } = maskRect(canvasEl.width, canvasEl.height, lastFace);
       try {
         ctx.drawImage(currentMaskImg, dx, dy, dw, dh);
       } catch {
-        /* draw error ignore */
+        /* ignore */
       }
     }
 
     frameCount += 1;
   } catch {
-    /* ignore frame error */
+    /* frame error ignore */
   }
 
   rafId = requestAnimationFrame(loop);
+}
+
+function cssFilterFromLevel(level: number): string {
+  // خريطة خطية بسيطة. مستوى 40% تقريبًا افتراضي.
+  const t = clamp(0, 100, level) / 100;
+  const contrast = 1 + 0.08 * t;     // حتى +8%
+  const saturate = 1 + 0.12 * t;     // حتى +12%
+  const brightness = 1 + 0.06 * t;   // حتى +6%
+  const blurPx = 0.5 * t;            // حتى 0.5px
+  return `contrast(${to3(contrast)}) saturate(${to3(saturate)}) brightness(${to3(brightness)}) blur(${to3(blurPx)}px)`;
 }
 
 function normalizeBox(b: any, w: number, h: number): FaceBox | null {
@@ -209,7 +282,6 @@ function normalizeBox(b: any, w: number, h: number): FaceBox | null {
   let x = Number(b.x !== undefined ? b.x : b.left !== undefined ? b.left : 0);
   let y = Number(b.y !== undefined ? b.y : b.top !== undefined ? b.top : 0);
 
-  // avoid nullish on non-nullish expressions to satisfy TS rule
   let width = Number(
     b.width !== undefined
       ? b.width
@@ -237,8 +309,19 @@ function normalizeBox(b: any, w: number, h: number): FaceBox | null {
   return { x, y, width, height };
 }
 
+function lerpBox(a: FaceBox | null, b: FaceBox, k: number): FaceBox {
+  if (!a) return b;
+  return {
+    x: a.x + (b.x - a.x) * k,
+    y: a.y + (b.y - a.y) * k,
+    width: a.width + (b.width - a.width) * k,
+    height: a.height + (b.height - a.height) * k,
+  };
+}
+
 function maskRect(w: number, h: number, face: FaceBox | null) {
   if (face) {
+    // مقياس بسيط فوق الوجه
     const dw = face.width * 1.35;
     const dh = dw;
     const dx = face.x + face.width / 2 - dw / 2;
@@ -252,10 +335,7 @@ function maskRect(w: number, h: number, face: FaceBox | null) {
 }
 
 function clampRect(x: number, y: number, w: number, h: number, bw: number, bh: number) {
-  let dx = x,
-    dy = y,
-    dw = w,
-    dh = h;
+  let dx = x, dy = y, dw = w, dh = h;
   if (dx < -dw) dx = -dw;
   if (dy < -dh) dy = -dh;
   if (dx > bw) dx = bw;
@@ -269,4 +349,17 @@ async function awaitMaybe<T = any>(p: Promise<T>): Promise<T | null> {
   } catch {
     return null as any;
   }
+}
+
+function clamp(min: number, max: number, v: number) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function numberOr(v: any, def: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+function to3(n: number) {
+  return Math.round(n * 1000) / 1000;
 }
