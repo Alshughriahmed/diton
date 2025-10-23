@@ -54,6 +54,7 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
+import MaskTray from "@/components/chat/MaskTray";
 
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
@@ -101,6 +102,9 @@ export default function ChatClient() {
   const [showUpsell, setShowUpsell] = useState(false);
   const [isMirrored, setIsMirrored] = useState(true);
   const [cameraPermissionHint, setCameraPermissionHint] = useState<string>("");
+
+  // درج الماسكات
+  const [maskOpen, setMaskOpen] = useState(false);
 
   // مؤثرات
   const effectsOnRef = useRef<boolean>(false);
@@ -640,6 +644,7 @@ export default function ChatClient() {
     effectsOnRef.current = true;
     applyLocalTrackStatesBeforePublish(processed);
     await replaceLocalVideoTrack(processed);
+    broadcastMediaState();
   }
 
   async function enableBeauty(on: boolean) {
@@ -694,6 +699,7 @@ export default function ChatClient() {
       applyLocalTrackStatesBeforePublish(restored);
       await replaceLocalVideoTrack(restored);
     }
+    broadcastMediaState();
     toast("Effects OFF");
   }
 
@@ -1125,6 +1131,11 @@ export default function ChatClient() {
       }),
     );
 
+    // إدارة درج الماسكات
+    offs.push(on("ui:openMaskTray", () => setMaskOpen(true)));
+    offs.push(on("ui:closeMaskTray", () => setMaskOpen(false)));
+    offs.push(on("ui:toggleMaskTray", () => setMaskOpen((v) => !v)));
+
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe(() => {});
 
@@ -1138,6 +1149,11 @@ export default function ChatClient() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
+
+  // بث حالة درج الماسكات عند التغيير
+  useEffect(() => {
+    emit(maskOpen ? "ui:maskTrayOpen" : "ui:maskTrayClose");
+  }, [maskOpen]);
 
   // ---------- UI ----------
   return (
@@ -1230,6 +1246,9 @@ export default function ChatClient() {
           <ChatMessagingBar />
         </div>
       </div>
+
+      {/* درج الماسكات أسفل الصفحة */}
+      <MaskTray open={maskOpen} onClose={() => setMaskOpen(false)} />
     </>
   );
 }
