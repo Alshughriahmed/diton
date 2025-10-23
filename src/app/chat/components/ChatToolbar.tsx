@@ -4,7 +4,6 @@
 import { useEffect, useState } from "react";
 import { emit, on } from "@/utils/events";
 import { useFFA } from "@/lib/useFFA";
-import MaskTray from "./MaskTray";
 
 function isMobileUA() {
   if (typeof navigator === "undefined" || typeof window === "undefined") return false;
@@ -27,9 +26,6 @@ export default function ChatToolbar() {
   const [micOn, setMicOn] = useState<boolean>(true);
   const [remoteMuted, setRemoteMuted] = useState<boolean>(false);
 
-  // درج الماسكات
-  const [maskOpen, setMaskOpen] = useState(false);
-
   // استماع لحالة الاتصال والوسائط
   useEffect(() => {
     const offPair = on("rtc:pair", (d: any) => setPairId(d?.pairId || null));
@@ -41,24 +37,9 @@ export default function ChatToolbar() {
       if (typeof d?.remoteMuted === "boolean") setRemoteMuted(!!d.remoteMuted);
     });
 
-    // أغلق درج الماسكات عند تغيير الطور أو عند الضغط على السابق/التالي
-    const offPhase = on("rtc:phase", (d: any) => {
-      const p = d?.phase;
-      if (p !== "connected") setMaskOpen(false);
-    });
-    const offNext = on("ui:next", () => setMaskOpen(false));
-    const offPrev = on("ui:prev", () => setMaskOpen(false));
-
-    // مزامنة تبديل كتم الصوت البعيد
-    const offRemoteToggle = on("ui:toggleRemoteAudio", () => setRemoteMuted((v) => !v));
-
     return () => {
       offPair();
       offMedia();
-      offPhase();
-      offNext();
-      offPrev();
-      offRemoteToggle();
     };
   }, []);
 
@@ -71,11 +52,6 @@ export default function ChatToolbar() {
       offClose();
     };
   }, []);
-
-  // بث حالة درج الماسكات لعزل الإيماءات خارجيًا
-  useEffect(() => {
-    emit(maskOpen ? "ui:maskTrayOpen" : "ui:maskTrayClose");
-  }, [maskOpen]);
 
   const canPrev = ffa || (dc?.readyState === "open" && !!pairId);
   const onMobile = isMobileUA();
@@ -140,7 +116,10 @@ export default function ChatToolbar() {
           {/* صوت الطرف الآخر */}
           <button
             data-ui="btn-remote-audio"
-            onClick={() => emit("ui:toggleRemoteAudio")}
+            onClick={() => {
+              setRemoteMuted((v) => !v);
+              emit("ui:toggleRemoteAudio");
+            }}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10"
             title={remoteMuted ? "Remote muted" : "Remote unmuted"}
           >
@@ -150,7 +129,10 @@ export default function ChatToolbar() {
           {/* الميكروفون */}
           <button
             data-ui="btn-mic"
-            onClick={() => emit("ui:toggleMic")}
+            onClick={() => {
+              setMicOn((v) => !v);
+              emit("ui:toggleMic");
+            }}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${
               micOn ? "bg-green-600/30 border-green-400/40" : "bg-red-600/30 border-red-400/40"
             }`}
@@ -190,11 +172,10 @@ export default function ChatToolbar() {
             ⚙️
           </button>
 
-          {/* الماسكات: فتح/إغلاق الدرج */}
+          {/* الماسكات: يُرسل فقط حدث التبديل */}
           <button
             data-ui="btn-masks"
-            aria-pressed={maskOpen}
-            onClick={() => setMaskOpen((v) => !v)}
+            onClick={() => emit("ui:toggleMaskTray")}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10"
             title="Masks"
           >
@@ -212,9 +193,6 @@ export default function ChatToolbar() {
           </button>
         </div>
       </section>
-
-      {/* درج الماسكات */}
-      <MaskTray open={maskOpen} onClose={() => setMaskOpen(false)} />
     </>
   );
 }
