@@ -1,4 +1,4 @@
-// src/components/chat/MaskTray.tsx
+// src/app/chat/components/MaskTray.tsx
 "use client";
 
 import { memo, useEffect } from "react";
