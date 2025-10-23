@@ -36,22 +36,23 @@ export function setBeautyEnabled(on: boolean) {
 
 /** Load or clear current overlay mask. Use filenames in /public/masks, pass name without extension. */
 export async function setMask(name: string | null) {
-  currentMaskName = name;
-  currentMaskImg = null;
-  if (!name || typeof window === "undefined") return;
+currentMaskImg = null;
+if (!name || typeof window === "undefined") return;
 
+for (const ext of ["png", "webp", "svg"]) {
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.decoding = "async";
   img.referrerPolicy = "no-referrer";
-  img.src = `/masks/${encodeURIComponent(name)}.png`;
+  img.src = `/masks/${encodeURIComponent(name)}.${ext}`;
   try {
     await img.decode();
     currentMaskImg = img;
+    break;
   } catch {
-    currentMaskImg = null;
+    /* جرّب الامتداد التالي */
   }
-}
+}  
 
 /**
  * Start or rebuild the effects pipeline for the given raw stream.
