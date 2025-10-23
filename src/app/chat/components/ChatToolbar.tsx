@@ -63,6 +63,11 @@ export default function ChatToolbar() {
     };
   }, []);
 
+  // بث حالة الدرج لتمكين عزل الإيماءات خارجياً
+  useEffect(() => {
+    emit(maskOpen ? "ui:maskTrayOpen" : "ui:maskTrayClose");
+  }, [maskOpen]);
+
   const canPrev = ffa || (dc?.readyState === "open" && pairId);
   const onMobile = isMobileUA();
   const flashEnabled = torchSupported && facing === "environment";
@@ -132,7 +137,7 @@ export default function ChatToolbar() {
             {remoteMuted ? "🔇" : "🔊"}
           </button>
 
-          {/* Mic: 🎤 / 🎤🚫 — مرتبط بالمسار الفعلي */}
+          {/* Mic: 🎤 / 🎤🚫 */}
           <button
             data-ui="btn-mic"
             onClick={() => emit("ui:toggleMic")}
