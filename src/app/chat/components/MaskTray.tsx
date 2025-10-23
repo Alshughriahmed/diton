@@ -1,72 +1,80 @@
 // src/components/chat/MaskTray.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { on, emit } from "@/utils/events";
+import { memo, useEffect } from "react";
+import { emit, on } from "@/utils/events";
 
-const MASKS = ["none","bunny","cat","sunglasses","hearts","half","venetian"]; // حسب الموجود في /public/masks
+type MaskTrayProps = {
+  open: boolean;
+  onClose: () => void;
+};
 
-export default function MaskTray() {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
+function MaskTray({ open, onClose }: MaskTrayProps) {
+  // إغلاق بزر ESC أو حدث خارجي
   useEffect(() => {
-    const offs = [
-      on("ui:masks:open",    () => setOpen(true)),
-      on("ui:masks:close",   () => setOpen(false)),
-      on("ui:masks:toggle",  () => setOpen(v => !v)),
-      // توافق قديم
-      on("ui:toggleMasks",   () => setOpen(v => !v)),
-      // عند فتح درج آخر أغلق هذا
-      on("ui:beauty:open",   () => setOpen(false)),
-    ];
-    return () => offs.forEach(off => { try { off(); } catch {} });
-  }, []);
+    const offEsc = (e: KeyboardEvent) => {
+      if (!open) return;
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", offEsc);
+    const off = on("ui:closeMasks", onClose);
+    return () => {
+      window.removeEventListener("keydown", offEsc);
+      off();
+    };
+  }, [open, onClose]);
 
-  // منع تمرير الصفحة عند السحب على الدرج
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => { if (open) e.stopPropagation(); };
-    el.addEventListener("wheel", onWheel, { passive: true });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [open]);
-
-  if (!open) return null;
-
+  // سماكة الشريط + تموضع زر الإغلاق بوسط الشريط
   return (
-    <div ref={wrapRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-40">
-      <div className="mx-auto mb-2 grid place-items-center">
-        <button
-          onClick={() => setOpen(false)}
-          className="pointer-events-auto px-4 py-2 rounded-xl bg-white/15 text-white text-sm backdrop-blur border border-white/20"
-        >
-          Close
-        </button>
-      </div>
+    <div
+      aria-hidden={!open}
+      className={`pointer-events-none fixed inset-x-0 bottom-0 z-40 transition-transform duration-200 ${
+        open ? "translate-y-0" : "translate-y-full"
+      }`}
+    >
+      <div className="pointer-events-auto mx-auto mb-3 w-[min(900px,96%)] rounded-2xl bg-black/70 backdrop-blur-md border border-white/10 shadow-2xl">
+        <div className="relative h-[92px] px-3">
+          {/* زر إغلاق مركزي */}
+          <div className="absolute -top-8 left-1/2 -translate-x-1/2">
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 rounded-lg bg-white/90 text-black text-sm font-medium shadow"
+            >
+              Close
+            </button>
+          </div>
 
-      <div className="pointer-events-auto mx-2 sm:mx-6 rounded-2xl bg-black/60 backdrop-blur-md border border-white/15 shadow-lg overflow-x-auto">
-        <div className="flex items-stretch gap-2 px-3 py-3 max-h-[28vh] sm:max-h-[24vh]">
-          {MASKS.map((m) => {
-            const isNone = m === "none";
-            return (
+          {/* العناصر */}
+          <div className="flex h-full items-center gap-2 overflow-x-auto scrollbar-none">
+            {["none", "bunny", "venetian", "half", "sunglasses", "cat", "hearts"].map((name) => (
               <button
-                key={m}
-                onClick={() => emit("ui:setMask", { name: isNone ? null : m })}
-                className="min-w-[96px] sm:min-w-[116px] aspect-[4/3] rounded-xl bg-white/5 border border-white/15 overflow-hidden grid place-items-center hover:bg-white/10"
-                aria-label={isNone ? "No mask" : `Mask ${m}`}
+                key={name}
+                onClick={() => emit("ui:setMask", { name: name === "none" ? null : name })}
+                className="flex w-[84px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/5 p-2 hover:bg-white/10"
               >
-                {isNone ? (
-                  <span className="text-white/70 text-sm">None</span>
+                {/* الصورة إن وجدت */}
+                {name === "none" ? (
+                  <div className="grid h-10 w-10 place-items-center text-xs text-white/70">—</div>
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={`/masks/${m}.png`} alt="" className="h-full w-full object-contain" />
+                  <img
+                    src={`/masks/${name}.png`}
+                    alt={name}
+                    className="h-10 w-10 object-contain"
+                    onError={(e) => {
+                      // اخفاء العنصر إذا لم تتوفر الصورة
+                      (e.currentTarget.parentElement as HTMLElement).style.opacity = "0.4";
+                    }}
+                  />
                 )}
+                <span className="text-[11px] text-white/80">{name}</span>
               </button>
-            );
-          })}
+            ))}
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+export default memo(MaskTray);
