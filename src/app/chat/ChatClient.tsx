@@ -9,6 +9,7 @@ import "./dcMetaResponder.client";
 import "./likeSyncClient";
 import "./msgSendClient";
 import "@/app/i18nReset.client";
+import MaskTray from "@/components/chat/MaskTray";
 
 import { useEffect, useRef, useState } from "react";
 import { on, emit } from "@/utils/events";
