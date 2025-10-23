@@ -54,8 +54,7 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
-import MaskTray from "@/components/chat/MaskTray";
-
+import MaskTray from "@/app/chat/components/MaskTray";
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
