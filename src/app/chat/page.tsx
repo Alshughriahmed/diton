@@ -1,8 +1,9 @@
-// server wrapper for chat
+"use client";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-import ChatClient from "./ChatClient"; // ChatClient نفسه عليه "use client"
+import ChatClient from "./ChatClient";
 
 export default function Page() {
   return <ChatClient />;
