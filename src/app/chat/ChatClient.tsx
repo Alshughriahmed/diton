@@ -114,6 +114,7 @@ export default function ChatClient() {
   const joiningRef = useRef(false);
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
+  const rejoinTimerRef = useRef<number | null>(null); // Anti-thrash rejoin
 
   // آخر حالة للمايك/الكام
   const lastMediaStateRef = useRef<{ micOn: boolean; camOn: boolean; remoteMuted: boolean }>({
@@ -567,6 +568,17 @@ export default function ChatClient() {
       dcDetach();
       setPhase("searching");
       broadcastMediaState();
+
+      // إعادة انضمام تلقائي مع قفل anti-thrash
+      try {
+        if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current);
+      } catch {}
+      rejoinTimerRef.current = window.setTimeout(() => {
+        if (!isActiveSid(sid)) return;
+        if (joiningRef.current || leavingRef.current || isConnectingRef.current) return;
+        const ns = newSid();
+        joinViaRedisMatch(ns).catch(() => {});
+      }, 650);
     };
     room.on(RoomEvent.Disconnected, onDisc);
     roomUnsubsRef.current.push(() => {
@@ -612,12 +624,22 @@ export default function ChatClient() {
         typeof lp.getTrackPublications === "function"
           ? lp.getTrackPublications()
           : Array.from(lp.trackPublications?.values?.() ?? []);
-      for (const pub of pubs) {
-        if (pub.kind === Track.Kind.Video && pub.track) {
-          await lp.unpublishTrack(pub.track, { stop: false });
+
+      // حاول الاستبدال على نفس الـpublication لتفادي إعادة التفاوض
+      const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track);
+      const pubTrack: any = vidPub?.track;
+
+      if (pubTrack && typeof pubTrack.replaceTrack === "function") {
+        await pubTrack.replaceTrack(vt);
+      } else {
+        // fallback آمن عند غياب replaceTrack
+        for (const pub of pubs) {
+          if (pub.kind === Track.Kind.Video && pub.track) {
+            await lp.unpublishTrack(pub.track, { stop: false });
+          }
         }
+        await room.localParticipant.publishTrack(vt);
       }
-      await room.localParticipant.publishTrack(vt);
     } catch {}
   }
 
@@ -1080,7 +1102,7 @@ export default function ChatClient() {
       }),
     );
 
-    // Masks toggle سريع
+    // Masks toggle سريع (يبقى للوراء للتوافق، الدرج يدير الاختيار)
     offs.push(
       on("ui:toggleMasks", async () => {
         const next = !effectsMaskOnRef.current;
@@ -1122,6 +1144,7 @@ export default function ChatClient() {
     return () => {
       for (const off of offs) try { off(); } catch {}
       unsubMob();
+      try { if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current); } catch {}
       abortPolling();
       disableAllEffects().catch(() => {});
       leaveRoom().catch(() => {});
