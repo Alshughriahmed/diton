@@ -18,6 +18,10 @@ export default function MyControls() {
   const [beauty, setBeauty] = useState<boolean>(false);
   const [isMirrored, setIsMirrored] = useState<boolean>(true); // MIRROR_DEFAULT=1
 
+  // NEW
+  const [likedByMe, setLikedByMe] = useState<boolean>(false); // NEW
+  const [likePending, setLikePending] = useState<boolean>(false); // NEW
+
   // ✅ اشترك في الأحداث فقط بعد التحميل
   useEffect(() => {
     if (!hydrated) return;
@@ -29,11 +33,20 @@ export default function MyControls() {
     const offMirror = on('ui:toggleMirror', () => {
       setIsMirrored(prev => !prev);
     });
-    
+    const offLikeState = () => { /* no-op */ }; // placeholder
+
+    // NEW: استمع لحالة الإعجاب لتمثيل الزر
+    const offLike = on('like:state', (d: any)=>{
+      if (typeof d?.likedByMe === 'boolean') setLikedByMe(!!d.likedByMe);
+      if (typeof d?.pending === 'boolean') setLikePending(!!d.pending);
+    });
+
     return () => {
       offLikes();
       offBeauty();
       offMirror();
+      offLike();
+      (offLikeState as any)?.();
     };
   }, [hydrated]);
 
@@ -70,6 +83,12 @@ export default function MyControls() {
     emit('ui:switchCamera');
   }, [profile, setProfile]);
 
+  // NEW: زر القلب يبعث حدثًا فقط
+  const onLike = useCallback(() => {
+    if (likePending) return;
+    emit('ui:like');
+  }, [likePending]);
+
   // إظهار المكون فقط بعد التحميل لمنع مشاكل Hydration
   if (!hydrated) return null;
 
@@ -95,9 +114,27 @@ export default function MyControls() {
         }`}
       >
         🪞
-        {/* Mirror ON Indicator */}
         {isMirrored && (
           <div className="absolute -bottom-2 -right-1 bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow-lg">
+            ON
+          </div>
+        )}
+      </button>
+
+      {/* NEW: Like toggle */}
+      <button
+        onClick={onLike}
+        aria-label="Like"
+        disabled={likePending}
+        className={`relative w-12 h-12 rounded-lg transition-colors flex items-center justify-center border shadow-lg ${
+          likedByMe
+            ? 'bg-pink-600/50 border-pink-400 text-pink-100 backdrop-blur-md'
+            : 'bg-black/60 hover:bg-black/80 border-white/20 text-white backdrop-blur-md'
+        } ${likePending ? 'opacity-60 cursor-not-allowed' : ''}`}
+      >
+        ❤
+        {likedByMe && (
+          <div className="absolute -bottom-2 -right-1 bg-pink-600 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow-lg">
             ON
           </div>
         )}
@@ -117,7 +154,6 @@ export default function MyControls() {
         {!(ffa || isVip) && (
           <span className="absolute -top-1 -right-1 text-[10px]">🔒</span>
         )}
-        {/* Beauty ON Indicator */}
         {beauty && (ffa || isVip) && (
           <div className="absolute -bottom-2 -right-1 bg-purple-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow-lg">
             ON
@@ -125,7 +161,7 @@ export default function MyControls() {
         )}
       </button>
       
-      {/* عداد الإعجابات */}
+      {/* عداد الإعجابات (محلي كما كان) */}
       <div className="flex items-center gap-1 px-3 py-2 bg-black/60 backdrop-blur-md rounded-lg border border-white/20 shadow-lg">
         <span className="text-pink-400 text-sm">❤</span>
         <span className="text-white text-sm font-medium min-w-[16px] text-center">{likes}</span>
