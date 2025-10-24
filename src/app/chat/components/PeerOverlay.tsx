@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { normalizeGender, genderLabel } from "@/lib/gender";
 
 type Meta = {
+  did?: string;
   country?: string;
   city?: string;
   gender?: string;
@@ -12,9 +13,9 @@ type Meta = {
   likes?: number;
   displayName?: string;
   vip?: boolean;
-  hideLikes?: boolean; // NEW
-  hideCountry?: boolean; // NEW
-  hideCity?: boolean; // NEW
+  hideLikes?: boolean;
+  hideCountry?: boolean;
+  hideCity?: boolean;
 };
 
 function loadCached(): Meta {
@@ -28,9 +29,24 @@ function loadCached(): Meta {
   }
 }
 
+function shallowEq(a: Meta, b: Meta): boolean {
+  return (
+    a.did === b.did &&
+    a.country === b.country &&
+    a.city === b.city &&
+    a.gender === b.gender &&
+    a.avatarUrl === b.avatarUrl &&
+    a.displayName === b.displayName &&
+    !!a.vip === !!b.vip &&
+    !!a.hideLikes === !!b.hideLikes &&
+    !!a.hideCountry === !!b.hideCountry &&
+    !!a.hideCity === !!b.hideCity
+  );
+}
+
 /** Badge مع تكبير رمز الجنس. */
 function genderBadgeLocal(
-  g: unknown
+  g: unknown,
 ): { symbol: string; label: string; labelCls: string; symbolCls: string } | null {
   const n = normalizeGender(g);
   if (n === "u") return null;
@@ -66,21 +82,37 @@ export default function PeerOverlay() {
 
     const onMeta = (ev: any) => {
       const d = ev?.detail || {};
-      const merged: Meta = {
+      const next: Meta = {
+        did: d.did || d.peerDid || d.id || d.identity || meta.did,
         country: d.country ?? meta.country,
         city: d.city ?? meta.city,
         gender: d.gender ?? meta.gender,
         avatarUrl: d.avatarUrl ?? d.avatar ?? meta.avatarUrl,
+        // likes يفضل أن تأتي عبر like:sync. إن وصلت هنا نأخذها مرة واحدة فقط
         likes: typeof d.likes === "number" ? d.likes : likes,
         displayName: d.displayName ?? d.name ?? meta.displayName,
         vip: !!(d.vip ?? d.isVip ?? d.premium ?? d.pro ?? meta.vip),
-        hideLikes: !!(d.hideLikes ?? meta.hideLikes), // NEW
-        hideCountry: !!(d.hideCountry ?? meta.hideCountry), // NEW
-        hideCity: !!(d.hideCity ?? meta.hideCity), // NEW
+        hideLikes: !!(d.hideLikes ?? meta.hideLikes),
+        hideCountry: !!(d.hideCountry ?? meta.hideCountry),
+        hideCity: !!(d.hideCity ?? meta.hideCity),
       };
-      setMeta(merged);
-      if (typeof merged.likes === "number") setLikes(merged.likes);
-      save(merged);
+
+      // حدّث الـ DID العالمي لاستخدامه من ChatClient عند إرسال الإعجاب
+      try {
+        const w: any = globalThis as any;
+        if (next.did) {
+          w.__peerDid = next.did;
+          w.__ditonaPeerDid = next.did;
+        }
+      } catch {}
+
+      // امنع “اهتزاز” البطاقة: لا تحدّث الحالة إذا لم تتغير فعليًا
+      if (!shallowEq(meta, next)) {
+        setMeta(next);
+        save(next);
+      }
+
+      if (typeof next.likes === "number") setLikes(Math.max(0, Number(next.likes) || 0));
     };
 
     const onLikeSync = (ev: any) => {
@@ -91,32 +123,28 @@ export default function PeerOverlay() {
       else if (typeof d.likes === "number") setLikes(Math.max(0, Number(d.likes) || 0));
     };
 
-    const onPhase = (ev: any) => {
-      const ph = ev?.detail?.phase;
-      if (ph === "searching" || ph === "matched" || ph === "stopped") {
-        setMeta({});
-        setLikes(0);
-        try {
-          sessionStorage.removeItem("ditona:last_peer_meta");
-          (globalThis as any).__ditonaLastPeerMeta = {};
-        } catch {}
-      }
-    };
-
-    const onPair = () => {
+    const resetAll = () => {
       setMeta({});
       setLikes(0);
       try {
+        const w: any = globalThis as any;
+        delete w.__peerDid;
+        delete w.__ditonaPeerDid;
         sessionStorage.removeItem("ditona:last_peer_meta");
-        (globalThis as any).__ditonaLastPeerMeta = {};
+        w.__ditonaLastPeerMeta = {};
       } catch {}
+    };
+
+    const onPhase = (ev: any) => {
+      const ph = ev?.detail?.phase;
+      if (ph === "searching" || ph === "matched" || ph === "stopped") resetAll();
     };
 
     window.addEventListener("ditona:peer-meta", onMeta as any);
     window.addEventListener("rtc:peer-meta", onMeta as any);
-    window.addEventListener("like:sync", onLikeSync as any); // NEW
+    window.addEventListener("like:sync", onLikeSync as any);
     window.addEventListener("rtc:phase", onPhase as any);
-    window.addEventListener("rtc:pair", onPair as any);
+    window.addEventListener("rtc:pair", resetAll as any);
 
     // طلب meta:init مرة إذا لم تصل بيانات
     const t = setTimeout(() => {
@@ -133,20 +161,20 @@ export default function PeerOverlay() {
       clearTimeout(t);
       window.removeEventListener("ditona:peer-meta", onMeta as any);
       window.removeEventListener("rtc:peer-meta", onMeta as any);
-      window.removeEventListener("like:sync", onLikeSync as any); // NEW
+      window.removeEventListener("like:sync", onLikeSync as any);
       window.removeEventListener("rtc:phase", onPhase as any);
-      window.removeEventListener("rtc:pair", onPair as any);
+      window.removeEventListener("rtc:pair", resetAll as any);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const g = genderBadgeLocal(meta.gender);
-  const showLoc = !(meta.hideCountry || meta.hideCity); // NEW
-  const showLikes = !meta.hideLikes; // NEW
+  const showLoc = !(meta.hideCountry || meta.hideCity);
+  const showLikes = !meta.hideLikes;
 
   return (
     <>
-      {/* أعلى اليسار: عنصر واحد فقط [avatar][name][VIP][♥][count] */}
+      {/* أعلى اليسار: [avatar][name][VIP][❤][count] */}
       <div className="absolute top-2 left-2 z-30 flex items-center gap-2 select-none pointer-events-none">
         <div className="h-8 w-8 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
           {meta.avatarUrl ? (
@@ -175,7 +203,7 @@ export default function PeerOverlay() {
         </div>
       </div>
 
-      {/* أسفل اليسار: Country–City + Badge الجنس مع رمز أكبر */}
+      {/* أسفل اليسار: Country–City + Badge الجنس */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         {showLoc && (
           <span className="text-white/95">
