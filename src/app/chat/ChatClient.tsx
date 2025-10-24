@@ -60,12 +60,7 @@ type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 800;
-const SWITCH_PAUSE_MS = 220;
-
-// Long-poll + مراقب بحث
-const LONGPOLL_BASE_MS = 8000;
-const LONGPOLL_MAX_MS = 20000;
-const SEARCH_WATCHDOG_MS = 45000; // بعد هذا يعاد enqueue تلقائيًا
+const SWITCH_PAUSE_MS = 220; // استقرار انتقال next/prev
 
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -86,7 +81,6 @@ function readLSBool(key: string, defVal: boolean): boolean {
 export default function ChatClient() {
   const ffa = useFFA();
   const router = useRouter();
-
   useKeyboardShortcuts();
   useGestures();
 
@@ -112,6 +106,25 @@ export default function ChatClient() {
   // درج الماسكات
   const [maskOpen, setMaskOpen] = useState(false);
 
+  // نبضة مرئية + بديل للاهتزاز
+  const [bumpKey, setBumpKey] = useState(0);
+  useEffect(() => {
+    if (!bumpKey) return;
+    const t = setTimeout(() => setBumpKey(0), 140);
+    return () => clearTimeout(t);
+  }, [bumpKey]);
+
+  function startSearchFeedback() {
+    try {
+      (navigator as any).vibrate?.([12]);
+    } catch {}
+    setBumpKey((k) => k + 1);
+    searchStartRef.current = Date.now();
+    setSearchMsg("Searching for a match…");
+    setPhase("searching");
+    lastTicketRef.current = "";
+  }
+
   // حالة المؤثرات
   const effectsOnRef = useRef<boolean>(false);
   const effectsMaskOnRef = useRef<boolean>(false);
@@ -124,7 +137,9 @@ export default function ChatClient() {
   const joiningRef = useRef(false);
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
-  const rejoinTimerRef = useRef<number | null>(null);
+  const rejoinTimerRef = useRef<number | null>(null); // Anti-thrash rejoin
+
+  // قفل لإيقاف إعادة الانضمام التلقائي أثناء next/prev
   const manualSwitchRef = useRef(false);
 
   // آخر حالة للمايك/الكام
@@ -141,8 +156,6 @@ export default function ChatClient() {
   const searchStartRef = useRef(0);
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
   const lastTicketRef = useRef<string>("");
-  const lastEnqueuePayloadRef = useRef<any>(null);
-  const searchCancelledRef = useRef(false);
 
   // ---------- helpers ----------
   function newSid(): number {
@@ -158,19 +171,12 @@ export default function ChatClient() {
     pollAbortRef.current = null;
   }
 
-  function vibrate(ms = 14) {
-    try {
-      (navigator as any).vibrate?.(ms);
-    } catch {}
-  }
-
   function setPhase(p: Phase) {
     setRtcPhase(p);
     try {
       window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
     } catch {}
     if (p === "searching") {
-      searchCancelledRef.current = false;
       searchStartRef.current = Date.now();
       setSearchMsg("Searching for a match…");
       try {
@@ -219,7 +225,6 @@ export default function ChatClient() {
       return "did-" + Math.random().toString(36).slice(2, 10);
     }
   }
-
   function identity(): string {
     const base = String(profile?.displayName || "anon").trim() || "anon";
     const did = String(stableDid());
@@ -239,7 +244,6 @@ export default function ChatClient() {
     const j = await r.json();
     return String(j.ticket || "");
   }
-
   async function nextReq(ticket: string, waitMs = 8000, signal?: AbortSignal): Promise<string | null> {
     const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`, {
       method: "GET",
@@ -258,7 +262,6 @@ export default function ChatClient() {
     }
     return null;
   }
-
   async function prevReq(ticket: string): Promise<string | null> {
     if (!ticket) return null;
     const r = await fetch(`/api/match/prev?ticket=${encodeURIComponent(ticket)}`, {
@@ -271,7 +274,6 @@ export default function ChatClient() {
     const j = await r.json().catch(() => ({}));
     return typeof j?.room === "string" ? j.room : null;
   }
-
   async function tokenReq(room: string, id: string): Promise<string> {
     const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
       method: "GET",
@@ -291,7 +293,6 @@ export default function ChatClient() {
       window.dispatchEvent(new CustomEvent("dc:attached"));
     } catch {}
   }
-
   function dcDetach() {
     const dc: any = (globalThis as any).__ditonaDataChannel;
     try {
@@ -340,7 +341,6 @@ export default function ChatClient() {
     const remoteMuted = !!(remoteAudioRef.current?.muted ?? remoteVideoRef.current?.muted);
     lastMediaStateRef.current = { micOn, camOn, remoteMuted };
   }
-
   function applyLocalTrackStatesBeforePublish(src: MediaStream) {
     const { micOn, camOn } = lastMediaStateRef.current;
     try {
@@ -365,7 +365,6 @@ export default function ChatClient() {
     if (kind === "audio") remoteAudioTrackRef.current = track;
     emitRemoteTrackStarted();
   }
-
   function detachRemoteAll() {
     try {
       if (remoteVideoTrackRef.current && remoteVideoRef.current) {
@@ -399,26 +398,11 @@ export default function ChatClient() {
     } catch {}
   }
 
-  // حلقة انتظار الغرفة مع مراقب بحث وإعادة enqueue
-  async function waitRoomLoop(initialTicket: string, sid: number): Promise<string | null> {
-    let wait = LONGPOLL_BASE_MS;
-    let ticket = initialTicket;
-    while (isActiveSid(sid) && !searchCancelledRef.current) {
+  async function waitRoomLoop(ticket: string, sid: number): Promise<string | null> {
+    let wait = 8000;
+    while (isActiveSid(sid)) {
       const ctrl = new AbortController();
       pollAbortRef.current = ctrl;
-
-      // Watchdog: إن طال الانتظار أعد إنشاء تذكرة جديدة
-      const elapsed = Date.now() - searchStartRef.current;
-      if (elapsed > SEARCH_WATCHDOG_MS && !searchCancelledRef.current) {
-        try {
-          ticket = await enqueueReq(lastEnqueuePayloadRef.current);
-          lastTicketRef.current = ticket;
-          searchStartRef.current = Date.now();
-          setSearchMsg("Searching for a match…");
-          wait = LONGPOLL_BASE_MS;
-        } catch {}
-      }
-
       let rn: string | null = null;
       try {
         rn = await nextReq(ticket, wait, ctrl.signal);
@@ -427,10 +411,9 @@ export default function ChatClient() {
       } finally {
         if (pollAbortRef.current === ctrl) pollAbortRef.current = null;
       }
-      if (!isActiveSid(sid) || searchCancelledRef.current) return null;
+      if (!isActiveSid(sid)) return null;
       if (rn) return rn;
-
-      wait = Math.min(LONGPOLL_MAX_MS, Math.round(wait * 1.25));
+      wait = Math.min(20000, Math.round(wait * 1.25));
     }
     return null;
   }
@@ -441,6 +424,7 @@ export default function ChatClient() {
     manualSwitchRef.current = !!opts?.bySwitch;
 
     snapshotMediaState();
+
     abortPolling();
 
     const room = roomRef.current;
@@ -454,7 +438,7 @@ export default function ChatClient() {
       (window as any).__pairId = undefined;
     } catch {}
 
-    // لا تلمس المعاينة المحلية
+    // لا تلمس المعاينة المحلية لتفادي وميض
     detachRemoteAll();
 
     if (room) {
@@ -534,6 +518,7 @@ export default function ChatClient() {
         try {
           window.dispatchEvent(new CustomEvent("lk:attached"));
         } catch {}
+        // طبّق حالة كتم الصوت البعيد المحفوظة
         try {
           const muted = !!lastMediaStateRef.current.remoteMuted;
           if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
@@ -596,8 +581,10 @@ export default function ChatClient() {
       setPhase("searching");
       broadcastMediaState();
 
+      // لا تعاود الانضمام إذا كان الخروج متعمداً بسبب next/prev
       if (manualSwitchRef.current) return;
 
+      // إعادة انضمام تلقائي مع قفل anti-thrash
       try {
         if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current);
       } catch {}
@@ -653,12 +640,14 @@ export default function ChatClient() {
           ? lp.getTrackPublications()
           : Array.from(lp.trackPublications?.values?.() ?? []);
 
+      // حاول الاستبدال على نفس الـpublication لتفادي إعادة التفاوض
       const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track);
       const pubTrack: any = vidPub?.track;
 
       if (pubTrack && typeof pubTrack.replaceTrack === "function") {
         await pubTrack.replaceTrack(vt);
       } else {
+        // fallback آمن عند غياب replaceTrack
         for (const pub of pubs) {
           if (pub.kind === Track.Kind.Video && pub.track) {
             await lp.unpublishTrack(pub.track, { stop: false });
@@ -708,7 +697,7 @@ export default function ChatClient() {
       toast(`Mask: ${name}`);
       try {
         localStorage.setItem("ditona_mask_name", name);
-        localStorage.setItem("ditona_mask", name);
+        localStorage.setItem("ditona_mask", name); // توافق خلفي
       } catch {}
     } else {
       await setMask(null as any).catch(() => {});
@@ -765,8 +754,7 @@ export default function ChatClient() {
               return isEveryoneLike(sel) ? [] : ([sel as any] as ("m" | "f" | "c" | "l")[]);
             })();
 
-      // خزّن الحمولة لاستخدامها مع الـ watchdog
-      const enqueuePayload = {
+      const ticket = await enqueueReq({
         identity: identity(),
         deviceId: stableDid(),
         vip: !!filters.isVip,
@@ -774,23 +762,21 @@ export default function ChatClient() {
         selfCountry,
         filterGenders: filterGendersNorm,
         filterCountries: Array.isArray(filters.countries) ? filters.countries : [],
-      };
-      lastEnqueuePayloadRef.current = enqueuePayload;
-
-      const ticket = await enqueueReq(enqueuePayload);
+      });
       lastTicketRef.current = ticket;
       if (!isActiveSid(sid)) return;
 
+      // انتظر حتى تأتي غرفة
       let roomName: string | null = null;
-      while (isActiveSid(sid) && !roomName && !searchCancelledRef.current) {
-        roomName = await waitRoomLoop(lastTicketRef.current, sid);
-        if (!isActiveSid(sid) || searchCancelledRef.current) return;
+      while (isActiveSid(sid) && !roomName) {
+        roomName = await waitRoomLoop(ticket, sid);
+        if (!isActiveSid(sid)) return;
         if (!roomName) {
           setPhase("searching");
           continue;
         }
       }
-      if (!roomName || !isActiveSid(sid) || searchCancelledRef.current) return;
+      if (!roomName || !isActiveSid(sid)) return;
 
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
@@ -824,6 +810,7 @@ export default function ChatClient() {
 
       await requestPeerMetaTwice(room);
 
+      // انشر المسار الحالي: مؤثرات إن كانت فعالة وإلا الخام
       const publishSrc = processedStreamRef.current ?? getLocalStream() ?? null;
       if (publishSrc && room.state === "connected") {
         applyLocalTrackStatesBeforePublish(publishSrc);
@@ -911,6 +898,21 @@ export default function ChatClient() {
       else if (e > 8000) setSearchMsg("Widening the search. Hang tight…");
     }, 500);
     return () => clearInterval(iv);
+  }, [rtcPhase]);
+
+  // Watchdog لإعادة إنعاش البحث الطويل
+  useEffect(() => {
+    if (rtcPhase !== "searching") return;
+    const t = setTimeout(() => {
+      if (rtcPhase === "searching" && !joiningRef.current && !isConnectingRef.current) {
+        abortPolling();
+        const sid = newSid();
+        searchStartRef.current = Date.now();
+        setSearchMsg("Refreshing search…");
+        joinViaRedisMatch(sid).catch(() => {});
+      }
+    }, 30000);
+    return () => clearTimeout(t);
   }, [rtcPhase]);
 
   // --------- boot + wiring ----------
@@ -1042,9 +1044,7 @@ export default function ChatClient() {
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        vibrate();
-        setPhase("searching"); // feedback فوري
-
+        startSearchFeedback();
         abortPolling();
         const sid = newSid();
         await leaveRoom({ bySwitch: true });
@@ -1078,9 +1078,7 @@ export default function ChatClient() {
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        vibrate();
-        setPhase("searching"); // feedback فوري
-
+        startSearchFeedback();
         abortPolling();
         await leaveRoom({ bySwitch: true });
         await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
@@ -1133,7 +1131,7 @@ export default function ChatClient() {
       }),
     );
 
-    // Beauty ON/OFF
+    // Beauty ON/OFF — منفصل عن الماسكات
     offs.push(
       on("ui:toggleBeauty", async (d: any) => {
         const onB = !!d?.enabled;
@@ -1141,7 +1139,7 @@ export default function ChatClient() {
       }),
     );
 
-    // Masks toggle
+    // Masks toggle سريع
     offs.push(
       on("ui:toggleMasks", async () => {
         const next = !effectsMaskOnRef.current;
@@ -1150,7 +1148,7 @@ export default function ChatClient() {
       }),
     );
 
-    // اختيار ماسك
+    // اختيار ماسك محدد
     offs.push(
       on("ui:setMask", async (d: any) => {
         const name = d?.name ?? null;
@@ -1158,7 +1156,7 @@ export default function ChatClient() {
       }),
     );
 
-    // mirror
+    // mirror toggle
     offs.push(
       on("ui:toggleMirror", () => {
         setIsMirrored((prev) => {
@@ -1188,7 +1186,9 @@ export default function ChatClient() {
     return () => {
       for (const off of offs) try { off(); } catch {}
       unsubMob();
-      try { if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current); } catch {}
+      try {
+        if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current);
+      } catch {}
       abortPolling();
       disableAllEffects().catch(() => {});
       leaveRoom().catch(() => {});
@@ -1196,19 +1196,10 @@ export default function ChatClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
-  // بث حالة درج الماسكات
+  // بث حالة درج الماسكات عند التغيير لتمكين عزل الإيماءات خارجيًا
   useEffect(() => {
     emit(maskOpen ? "ui:maskTrayOpen" : "ui:maskTrayClose");
   }, [maskOpen]);
-
-  // إلغاء البحث يدويًا
-  function cancelSearch() {
-    searchCancelledRef.current = true;
-    abortPolling();
-    lastTicketRef.current = "";
-    setPhase("idle");
-    toast("🛑 Search cancelled");
-  }
 
   // ---------- UI ----------
   return (
@@ -1216,7 +1207,11 @@ export default function ChatClient() {
       <LikeHud />
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
-          <section className="relative rounded-2xl bg-black/30 overflow-hidden">
+          <section
+            className={`relative rounded-2xl bg-black/30 overflow-hidden transition-transform duration-150 ${
+              bumpKey ? "scale-[.995]" : ""
+            }`}
+          >
             <FilterBar />
             <MessageHud />
             <PeerOverlay />
@@ -1231,7 +1226,11 @@ export default function ChatClient() {
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">{searchMsg}</div>
                 <button
-                  onClick={cancelSearch}
+                  onClick={() => {
+                    abortPolling();
+                    setPhase("idle");
+                    toast("🛑 Search cancelled");
+                  }}
                   className="px-4 py-2 bg-red-500/80 hover:bg-red-600/80 rounded-lg text-white font-medium transition-colors duration-200 pointer-events-auto"
                 >
                   Cancel
