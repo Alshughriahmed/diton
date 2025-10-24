@@ -1,10 +1,14 @@
+// src/app/chat/peerMetaUi.client.ts
 /**
  * Idempotent DOM updater for peer metadata badges.
  * Listens to:
  *   - "ditona:peer-meta"   -> apply meta immediately
  *   - "rtc:phase"          -> reset on searching|matched|stopped
  *   - "rtc:pair"           -> reset on new pair
+ *   - "lk:attached"        -> send my meta on connect            // NEW
+ *   - "ditona:meta:init"   -> send my meta when requested        // NEW
  */
+
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   (window as any).__peerMetaUiMounted = 1;
 
@@ -18,9 +22,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       const name = q('[data-ui="peer-name"]');
       const likes = q('[data-ui="peer-likes"]');
       const vip = q('[data-ui="peer-vip"]');
-      const avatar = document.querySelector(
-        '[data-ui="peer-avatar"]'
-      ) as HTMLImageElement | HTMLElement | null;
+      const avatar = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | HTMLElement | null;
 
       if (g) g.textContent = "—";
       if (ctry) ctry.textContent = "—";
@@ -43,17 +45,14 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       const name = q('[data-ui="peer-name"]');
       const likes = q('[data-ui="peer-likes"]');
       const vip = q('[data-ui="peer-vip"]');
-      const avatar = document.querySelector(
-        '[data-ui="peer-avatar"]'
-      ) as HTMLImageElement | HTMLElement | null;
+      const avatar = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | HTMLElement | null;
 
       if (g) g.textContent = meta?.gender ? String(meta.gender) : "—";
       if (ctry) ctry.textContent = meta?.country ? String(meta.country) : "—";
       if (cty) cty.textContent = meta?.city ? String(meta.city) : "";
       if (name) name.textContent = meta?.displayName ? String(meta.displayName) : "";
       if (likes) {
-        const n =
-          typeof meta?.likes === "number" ? meta.likes : parseInt(meta?.likes ?? "0", 10) || 0;
+        const n = typeof meta?.likes === "number" ? meta.likes : parseInt(meta?.likes ?? "0", 10) || 0;
         likes.textContent = String(n);
       }
       if (vip) {
@@ -68,6 +67,85 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     } catch {}
   }
 
+  // NEW: إرسال ميتا الطرف المحلي عند الطلب/الاتصال
+  function stableDid(): string {
+    try {
+      const k = "ditona_did";
+      const v = localStorage.getItem(k);
+      if (v) return v;
+      const gen = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
+      localStorage.setItem(k, gen);
+      return gen;
+    } catch {
+      return "did-" + Math.random().toString(36).slice(2, 9);
+    }
+  }
+
+  function readGeo() {
+    try {
+      const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+      return { country: g?.country ?? null, city: g?.city ?? null };
+    } catch {
+      return { country: null, city: null };
+    }
+  }
+
+  function readProfile() {
+    // قد لا تتوفر مفاتيح الحالة؛ وفّر افتراضات آمنة
+    let displayName = "";
+    let gender = "";
+    let avatarUrl = "";
+    let vip = false;
+    let hideCountry = false;
+    let hideCity = false;
+    let hideLikes = false;
+    try {
+      // إذا كان المتجر يحفظ في localStorage بمفتاح معروف
+      const raw = localStorage.getItem("ditona_profile") || localStorage.getItem("profile");
+      if (raw) {
+        const p = JSON.parse(raw);
+        displayName = p?.state?.displayName ?? p?.displayName ?? "";
+        gender = p?.state?.gender ?? p?.gender ?? "";
+        avatarUrl = p?.state?.avatarDataUrl ?? p?.avatarDataUrl ?? "";
+        vip = !!(p?.state?.vip ?? p?.vip);
+        hideCountry = !!(p?.state?.privacy?.hideCountry ?? p?.privacy?.hideCountry);
+        hideCity = !!(p?.state?.privacy?.hideCity ?? p?.privacy?.hideCity);
+        // showCount=true => hideLikes=false
+        const showCount = !!(p?.state?.likes?.showCount ?? p?.likes?.showCount ?? true);
+        hideLikes = !showCount;
+      }
+    } catch {}
+    return { displayName, gender, avatarUrl, vip, hideCountry, hideCity, hideLikes };
+  }
+
+  function composeMyMeta() {
+    const { country, city } = readGeo();
+    const prof = readProfile();
+    return {
+      did: stableDid(),
+      country,
+      city,
+      gender: prof.gender,
+      avatarUrl: prof.avatarUrl,
+      displayName: prof.displayName,
+      vip: prof.vip,
+      likes: 0,
+      hideCountry: !!prof.hideCountry,
+      hideCity: !!prof.hideCity,
+      hideLikes: !!prof.hideLikes,
+    };
+  }
+
+  async function sendMyMeta() {
+    try {
+      const room: any = (globalThis as any).__lkRoom;
+      if (!room?.localParticipant?.publishData) return;
+      const payload = { t: "peer-meta", payload: composeMyMeta() };
+      const bin = new TextEncoder().encode(JSON.stringify(payload));
+      await room.localParticipant.publishData(bin, { reliable: true, topic: "meta" });
+    } catch {}
+  }
+
   const onPeerMeta = (e: Event) => apply((e as CustomEvent).detail);
   const onPhase = (e: Event) => {
     const ph = (e as CustomEvent)?.detail?.phase;
@@ -78,6 +156,9 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   window.addEventListener("ditona:peer-meta", onPeerMeta as any);
   window.addEventListener("rtc:phase", onPhase as any);
   window.addEventListener("rtc:pair", onPair as any);
+
+  window.addEventListener("lk:attached", () => { sendMyMeta(); }, { passive: true } as any); // NEW
+  window.addEventListener("ditona:meta:init", () => { sendMyMeta(); }, { passive: true } as any); // NEW
 
   window.addEventListener(
     "pagehide",
