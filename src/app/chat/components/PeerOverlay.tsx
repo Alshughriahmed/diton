@@ -12,6 +12,9 @@ type Meta = {
   likes?: number;
   displayName?: string;
   vip?: boolean;
+  hideLikes?: boolean; // NEW
+  hideCountry?: boolean; // NEW
+  hideCity?: boolean; // NEW
 };
 
 function loadCached(): Meta {
@@ -71,27 +74,23 @@ export default function PeerOverlay() {
         likes: typeof d.likes === "number" ? d.likes : likes,
         displayName: d.displayName ?? d.name ?? meta.displayName,
         vip: !!(d.vip ?? d.isVip ?? d.premium ?? d.pro ?? meta.vip),
+        hideLikes: !!(d.hideLikes ?? meta.hideLikes), // NEW
+        hideCountry: !!(d.hideCountry ?? meta.hideCountry), // NEW
+        hideCity: !!(d.hideCity ?? meta.hideCity), // NEW
       };
       setMeta(merged);
       if (typeof merged.likes === "number") setLikes(merged.likes);
       save(merged);
     };
 
-  const onLike = (ev: any) => {
-  const d = ev?.detail || {};
-  // تجاهل لايكات لغرفة أخرى
-  const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
-  if (d.pairId && curPair && d.pairId !== curPair) return;
+    const onLikeSync = (ev: any) => {
+      const d = ev?.detail || {};
+      const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
+      if (d.pairId && curPair && d.pairId !== curPair) return;
+      if (typeof d.count === "number") setLikes(Math.max(0, Number(d.count) || 0));
+      else if (typeof d.likes === "number") setLikes(Math.max(0, Number(d.likes) || 0));
+    };
 
-  if (typeof d.likes === "number") {
-    setLikes(d.likes);
-  } else if (typeof d.liked === "boolean") {
-    setLikes((x) => Math.max(0, x + (d.liked ? 1 : -1)));
-  } else if (typeof d.count === "number") {
-    setLikes(d.count);
-  }
-};
-  
     const onPhase = (ev: any) => {
       const ph = ev?.detail?.phase;
       if (ph === "searching" || ph === "matched" || ph === "stopped") {
@@ -115,7 +114,7 @@ export default function PeerOverlay() {
 
     window.addEventListener("ditona:peer-meta", onMeta as any);
     window.addEventListener("rtc:peer-meta", onMeta as any);
-    window.addEventListener("ditona:like:recv", onLike as any);
+    window.addEventListener("like:sync", onLikeSync as any); // NEW
     window.addEventListener("rtc:phase", onPhase as any);
     window.addEventListener("rtc:pair", onPair as any);
 
@@ -134,7 +133,7 @@ export default function PeerOverlay() {
       clearTimeout(t);
       window.removeEventListener("ditona:peer-meta", onMeta as any);
       window.removeEventListener("rtc:peer-meta", onMeta as any);
-      window.removeEventListener("ditona:like:recv", onLike as any);
+      window.removeEventListener("like:sync", onLikeSync as any); // NEW
       window.removeEventListener("rtc:phase", onPhase as any);
       window.removeEventListener("rtc:pair", onPair as any);
     };
@@ -142,10 +141,12 @@ export default function PeerOverlay() {
   }, []);
 
   const g = genderBadgeLocal(meta.gender);
+  const showLoc = !(meta.hideCountry || meta.hideCity); // NEW
+  const showLikes = !meta.hideLikes; // NEW
 
   return (
     <>
-      {/* أعلى اليسار: avatar + الاسم + VIP + الإعجابات */}
+      {/* أعلى اليسار: عنصر واحد فقط [avatar][name][VIP][♥][count] */}
       <div className="absolute top-2 left-2 z-30 flex items-center gap-2 select-none pointer-events-none">
         <div className="h-8 w-8 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
           {meta.avatarUrl ? (
@@ -165,21 +166,25 @@ export default function PeerOverlay() {
         <div className="flex items-center gap-1 text-white/95 drop-shadow">
           {meta.displayName && <span className="text-xs font-medium">{meta.displayName}</span>}
           {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
-          <span className="ml-1 text-sm">❤</span>
-          <span className="text-xs">{likes}</span>
+          {showLikes && (
+            <>
+              <span className="ml-1 text-sm">❤</span>
+              <span className="text-xs">{likes}</span>
+            </>
+          )}
         </div>
       </div>
 
-      {/* أسفل اليسار: البلد/المدينة + Badge الجنس مع رمز أكبر */}
+      {/* أسفل اليسار: Country–City + Badge الجنس مع رمز أكبر */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
-        <span className="text-white/95">
-          {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
-        </span>
+        {showLoc && (
+          <span className="text-white/95">
+            {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
+          </span>
+        )}
         {g && (
-          <span className="ml-2 inline-flex items-center gap-1 align-middle">
-            <span className={g.symbolCls} aria-hidden>
-              {g.symbol}
-            </span>
+          <span className="inline-flex items-center gap-1 ml-2 align-middle">
+            <span className={g.symbolCls}>{g.symbol}</span>
             <span className={g.labelCls}>{g.label}</span>
           </span>
         )}
