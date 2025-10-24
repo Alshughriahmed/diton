@@ -42,7 +42,7 @@ import {
   ConnectionState,
 } from "livekit-client";
 
-// مؤثرات الفيديو
+// مؤثرات الفيديو: تجميل + ماسكات
 import { startEffects, stopEffects, setMask, setBeautyEnabled } from "@/lib/effects/core";
 
 import LikeSystem from "@/components/chat/LikeSystem";
@@ -55,11 +55,12 @@ import FilterBar from "./components/FilterBar";
 import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
 import MaskTray from "@/app/chat/components/MaskTray";
+
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 800;
-const SWITCH_PAUSE_MS = 220;
+const SWITCH_PAUSE_MS = 220; // استقرار انتقال next/prev
 
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -105,7 +106,7 @@ export default function ChatClient() {
   // درج الماسكات
   const [maskOpen, setMaskOpen] = useState(false);
 
-  // مؤثرات
+  // حالة المؤثرات
   const effectsOnRef = useRef<boolean>(false);
   const effectsMaskOnRef = useRef<boolean>(false);
   const beautyOnRef = useRef<boolean>(false);
@@ -117,9 +118,9 @@ export default function ChatClient() {
   const joiningRef = useRef(false);
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
-  const rejoinTimerRef = useRef<number | null>(null);
+  const rejoinTimerRef = useRef<number | null>(null); // Anti-thrash rejoin
 
-  // منع إعادة الانضمام تلقائياً أثناء next/prev
+  // قفل لإيقاف إعادة الانضمام التلقائي أثناء next/prev
   const manualSwitchRef = useRef(false);
 
   // آخر حالة للمايك/الكام
@@ -404,6 +405,7 @@ export default function ChatClient() {
     manualSwitchRef.current = !!opts?.bySwitch;
 
     snapshotMediaState();
+
     abortPolling();
 
     const room = roomRef.current;
@@ -417,7 +419,7 @@ export default function ChatClient() {
       (window as any).__pairId = undefined;
     } catch {}
 
-    // لا تغيّر المعاينة المحلية ولا توقف التراكات
+    // لا تلمس المعاينة المحلية لتفادي وميض
     detachRemoteAll();
 
     if (room) {
@@ -497,6 +499,7 @@ export default function ChatClient() {
         try {
           window.dispatchEvent(new CustomEvent("lk:attached"));
         } catch {}
+        // طبّق حالة كتم الصوت البعيد المحفوظة
         try {
           const muted = !!lastMediaStateRef.current.remoteMuted;
           if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
@@ -562,6 +565,7 @@ export default function ChatClient() {
       // لا تعاود الانضمام إذا كان الخروج متعمداً بسبب next/prev
       if (manualSwitchRef.current) return;
 
+      // إعادة انضمام تلقائي مع قفل anti-thrash
       try {
         if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current);
       } catch {}
@@ -617,12 +621,14 @@ export default function ChatClient() {
           ? lp.getTrackPublications()
           : Array.from(lp.trackPublications?.values?.() ?? []);
 
+      // حاول الاستبدال على نفس الـpublication لتفادي إعادة التفاوض
       const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track);
       const pubTrack: any = vidPub?.track;
 
       if (pubTrack && typeof pubTrack.replaceTrack === "function") {
         await pubTrack.replaceTrack(vt);
       } else {
+        // fallback آمن عند غياب replaceTrack
         for (const pub of pubs) {
           if (pub.kind === Track.Kind.Video && pub.track) {
             await lp.unpublishTrack(pub.track, { stop: false });
@@ -672,7 +678,7 @@ export default function ChatClient() {
       toast(`Mask: ${name}`);
       try {
         localStorage.setItem("ditona_mask_name", name);
-        localStorage.setItem("ditona_mask", name);
+        localStorage.setItem("ditona_mask", name); // توافق خلفي
       } catch {}
     } else {
       await setMask(null as any).catch(() => {});
@@ -741,6 +747,7 @@ export default function ChatClient() {
       lastTicketRef.current = ticket;
       if (!isActiveSid(sid)) return;
 
+      // انتظر حتى تأتي غرفة
       let roomName: string | null = null;
       while (isActiveSid(sid) && !roomName) {
         roomName = await waitRoomLoop(ticket, sid);
@@ -784,6 +791,7 @@ export default function ChatClient() {
 
       await requestPeerMetaTwice(room);
 
+      // انشر المسار الحالي: مؤثرات إن كانت فعالة وإلا الخام
       const publishSrc = processedStreamRef.current ?? getLocalStream() ?? null;
       if (publishSrc && room.state === "connected") {
         applyLocalTrackStatesBeforePublish(publishSrc);
@@ -880,6 +888,7 @@ export default function ChatClient() {
       try {
         const s0 = await ensureLocalAliveLocal();
 
+        // استرجاع وحفظ تفضيلات الصوت
         try {
           const savedMic = readLSBool("ditona_mic_on", true);
           lastMediaStateRef.current.micOn = savedMic;
@@ -897,7 +906,7 @@ export default function ChatClient() {
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
-
+        // استرجاع تفضيلات المؤثرات
         try {
           beautyOnRef.current = localStorage.getItem("ditona_beauty_on") === "1";
           const savedMask = (localStorage.getItem("ditona_mask_name") ?? localStorage.getItem("ditona_mask")) || "";
@@ -1086,7 +1095,7 @@ export default function ChatClient() {
       }),
     );
 
-    // Beauty
+    // Beauty ON/OFF — منفصل عن الماسكات
     offs.push(
       on("ui:toggleBeauty", async (d: any) => {
         const onB = !!d?.enabled;
@@ -1094,7 +1103,7 @@ export default function ChatClient() {
       }),
     );
 
-    // Masks quick toggle
+    // Masks toggle سريع
     offs.push(
       on("ui:toggleMasks", async () => {
         const next = !effectsMaskOnRef.current;
@@ -1103,7 +1112,7 @@ export default function ChatClient() {
       }),
     );
 
-    // Mask selection
+    // اختيار ماسك محدد
     offs.push(
       on("ui:setMask", async (d: any) => {
         const name = d?.name ?? null;
@@ -1111,7 +1120,7 @@ export default function ChatClient() {
       }),
     );
 
-    // mirror
+    // mirror toggle
     offs.push(
       on("ui:toggleMirror", () => {
         setIsMirrored((prev) => {
@@ -1149,7 +1158,7 @@ export default function ChatClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
-  // بث حالة درج الماسكات عند التغيير
+  // بث حالة درج الماسكات عند التغيير لتمكين عزل الإيماءات خارجيًا
   useEffect(() => {
     emit(maskOpen ? "ui:maskTrayOpen" : "ui:maskTrayClose");
   }, [maskOpen]);
