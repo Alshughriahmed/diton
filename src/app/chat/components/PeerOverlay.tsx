@@ -77,12 +77,21 @@ export default function PeerOverlay() {
       save(merged);
     };
 
-    const onLike = (ev: any) => {
-      const n = ev?.detail?.likes ?? ev?.detail?.count;
-      if (typeof n === "number") setLikes(n);
-      else setLikes((x) => x + 1);
-    };
+  const onLike = (ev: any) => {
+  const d = ev?.detail || {};
+  // تجاهل لايكات لغرفة أخرى
+  const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
+  if (d.pairId && curPair && d.pairId !== curPair) return;
 
+  if (typeof d.likes === "number") {
+    setLikes(d.likes);
+  } else if (typeof d.liked === "boolean") {
+    setLikes((x) => Math.max(0, x + (d.liked ? 1 : -1)));
+  } else if (typeof d.count === "number") {
+    setLikes(d.count);
+  }
+};
+  
     const onPhase = (ev: any) => {
       const ph = ev?.detail?.phase;
       if (ph === "searching" || ph === "matched" || ph === "stopped") {
