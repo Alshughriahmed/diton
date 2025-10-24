@@ -1,36 +1,52 @@
-// src/lib/like.ts  // NEW
-export const keyEdge = (likerDid: string, targetDid: string) => `likes:edge:${likerDid}:${targetDid}`;
-export const keyCount = (targetDid: string) => `likes:count:${targetDid}`;
+// src/lib/like.ts
+/**
+ * تبديل إعجاب المستخدم لمطابقة/غرفة معينة وحساب العدد الحالي.
+ * pairKey: اسم الغرفة أو pairId.
+ * likerId: هوية المستخدم المستقرة.
+ * يخزّن الإعجابات في مجموعة Redis: likes:set:{pairKey}
+ * لا تكرار، والضغط مرة ثانية يزيل الإعجاب.
+ */
 
-type RedisLike = {
-  pipeline(cmds: any[][]): Promise<Array<{ result: any }>>;
+type RedisSetOps = {
+  sadd: (key: string, member: string) => Promise<number>;
+  srem: (key: string, member: string) => Promise<number>;
+  scard: (key: string) => Promise<number>;
 };
 
+export const keySet = (pairKey: string) => `likes:set:${pairKey}`;
+
 export async function toggleEdgeAndCount(
-  redis: RedisLike,
-  likerDid: string,
-  targetDid: string,
-  liked: boolean
+  r: RedisSetOps,
+  pairKey: string,
+  likerId: string
 ): Promise<{ liked: boolean; count: number }> {
-  const edgeK = keyEdge(likerDid, targetDid);
-  const cntK = keyCount(targetDid);
+  const setKey = keySet(pairKey);
 
-  // اقرأ الحالة الحالية
-  const r0 = await redis.pipeline([["GET", edgeK], ["GET", cntK]]);
-  const wasEdge = String(r0?.[0]?.result ?? "") === "1";
-  const prevCount = Number(r0?.[1]?.result ?? 0) || 0;
+  let liked = false;
 
-  let newCount = prevCount;
-  if (!wasEdge && liked) {
-    const r = await redis.pipeline([["INCR", cntK], ["SET", edgeK, "1"]]);
-    newCount = Number(r?.[0]?.result ?? prevCount + 1) || prevCount + 1;
-  } else if (wasEdge && !liked) {
-    const r = await redis.pipeline([["DECR", cntK], ["SET", edgeK, "0"]]);
-    newCount = Number(r?.[0]?.result ?? prevCount - 1) || prevCount - 1;
-  } else {
-    newCount = prevCount; // لا تغيير
+  // جرّب إضافة العضو. إن كان موجوداً مُسبقاً فسنقوم بإزالته.
+  try {
+    const added = await r.sadd(setKey, likerId);
+    if (added === 1) {
+      liked = true; // تم تسجيل الإعجاب الآن
+    } else {
+      await r.srem(setKey, likerId);
+      liked = false; // تمت إزالة الإعجاب
+    }
+  } catch {
+    // مسار احتياطي قوي
+    try {
+      const removed = await r.srem(setKey, likerId);
+      if (removed === 1) liked = false;
+      else liked = (await r.sadd(setKey, likerId)) === 1;
+    } catch {}
   }
 
-  if (!Number.isFinite(newCount) || newCount < 0) newCount = 0;
-  return { liked, count: newCount };
+  let count = 0;
+  try {
+    count = await r.scard(setKey);
+  } catch {}
+  if (!Number.isFinite(count) || count < 0) count = 0;
+
+  return { liked, count };
 }
