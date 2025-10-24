@@ -1,3 +1,4 @@
+// src/app/chat/components/PeerOverlay.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -24,28 +25,25 @@ function loadCached(): Meta {
   }
 }
 
-/** Badge data with larger symbol size. Couples symbol overridden to ⚤. */
+/** Badge مع تكبير رمز الجنس. */
 function genderBadgeLocal(
   g: unknown
 ): { symbol: string; label: string; labelCls: string; symbolCls: string } | null {
   const n = normalizeGender(g);
   if (n === "u") return null;
-
   const label = genderLabel(n);
-  const BIG = "text-[1.25rem] sm:text-[1.5rem] leading-none"; // bigger symbol only
-
+  const BIG = "text-[1.25rem] sm:text-[1.5rem] leading-none";
   switch (n) {
     case "m":
       return { symbol: "♂", label, labelCls: "text-blue-500", symbolCls: `text-blue-500 ${BIG}` };
     case "f":
       return { symbol: "♀", label, labelCls: "text-red-500", symbolCls: `text-red-500 ${BIG}` };
     case "c":
-      // override to ⚤, keep couples color
       return { symbol: "⚤", label, labelCls: "text-rose-400", symbolCls: `text-rose-400 ${BIG}` };
-    case "l":
-      // rainbow gradient for both symbol and label
+    case "l": {
       const GRAD = "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
       return { symbol: "🏳️‍🌈", label: "LGBTQ+", labelCls: GRAD, symbolCls: `${GRAD} ${BIG}` };
+    }
     default:
       return null;
   }
@@ -112,7 +110,7 @@ export default function PeerOverlay() {
     window.addEventListener("rtc:phase", onPhase as any);
     window.addEventListener("rtc:pair", onPair as any);
 
-    // ask once if nothing arrived
+    // طلب meta:init مرة إذا لم تصل بيانات
     const t = setTimeout(() => {
       try {
         const room: any = (globalThis as any).__lkRoom;
@@ -138,12 +136,19 @@ export default function PeerOverlay() {
 
   return (
     <>
-      {/* Top-left: avatar + name + VIP + likes */}
+      {/* أعلى اليسار: avatar + الاسم + VIP + الإعجابات */}
       <div className="absolute top-2 left-2 z-30 flex items-center gap-2 select-none pointer-events-none">
-        <div className="h-7 w-7 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
+        <div className="h-8 w-8 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
           {meta.avatarUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={meta.avatarUrl} alt="" className="h-full w-full object-cover" />
+            <img
+              src={meta.avatarUrl}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = "none";
+              }}
+            />
           ) : (
             <div className="h-full w-full grid place-items-center text-[10px] text-white/80 bg-black/30">?</div>
           )}
@@ -151,12 +156,12 @@ export default function PeerOverlay() {
         <div className="flex items-center gap-1 text-white/95 drop-shadow">
           {meta.displayName && <span className="text-xs font-medium">{meta.displayName}</span>}
           {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
-          <span className="ml-1 text-sm">♥</span>
+          <span className="ml-1 text-sm">❤</span>
           <span className="text-xs">{likes}</span>
         </div>
       </div>
 
-      {/* Bottom-left: Country–City + gender badge (bigger symbol only) */}
+      {/* أسفل اليسار: البلد/المدينة + Badge الجنس مع رمز أكبر */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         <span className="text-white/95">
           {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
