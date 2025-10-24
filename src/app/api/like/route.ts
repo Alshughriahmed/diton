@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-import { getRedis } from "@/lib/match/redis"; // NEW
+import { getRedis } from "@/lib/redisClient"; 
 import { toggleEdgeAndCount } from "@/lib/like"; // NEW
 
 function j(body: any, status = 200) {
