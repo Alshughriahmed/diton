@@ -1,52 +1,55 @@
 // src/lib/like.ts
-/**
- * تبديل إعجاب المستخدم لمطابقة/غرفة معينة وحساب العدد الحالي.
- * pairKey: اسم الغرفة أو pairId.
- * likerId: هوية المستخدم المستقرة.
- * يخزّن الإعجابات في مجموعة Redis: likes:set:{pairKey}
- * لا تكرار، والضغط مرة ثانية يزيل الإعجاب.
- */
+export const keyEdge = (likerDid: string, targetDid: string) =>
+  `likes:edge:${likerDid}:${targetDid}`;
+export const keyCount = (targetDid: string) => `likes:count:${targetDid}`;
 
-type RedisSetOps = {
-  sadd: (key: string, member: string) => Promise<number>;
-  srem: (key: string, member: string) => Promise<number>;
-  scard: (key: string) => Promise<number>;
+type RedisLike = {
+  pipeline(cmds: any[][]): Promise<Array<{ result: any }>>;
 };
 
-export const keySet = (pairKey: string) => `likes:set:${pairKey}`;
-
+/**
+ * يضبط حالة الإعجاب كعملية idempotent:
+ * - إذا مررت liked صراحةً تُفرض تلك الحالة.
+ * - إذا تركتها undefined سيتم "التبديل" بناءً على الحالة الحالية.
+ * تُعيد العدد الجديد مع الحالة النهائية.
+ */
 export async function toggleEdgeAndCount(
-  r: RedisSetOps,
-  pairKey: string,
-  likerId: string
+  redis: RedisLike,
+  likerDid: string,
+  targetDid: string,
+  liked?: boolean
 ): Promise<{ liked: boolean; count: number }> {
-  const setKey = keySet(pairKey);
+  const edgeK = keyEdge(likerDid, targetDid);
+  const cntK = keyCount(targetDid);
 
-  let liked = false;
+  // اقرأ الحالة الحالية
+  const r0 = await redis.pipeline([
+    ["GET", edgeK],
+    ["GET", cntK],
+  ]);
+  const wasEdge = String(r0?.[0]?.result ?? "") === "1";
+  const prevCount = Number(r0?.[1]?.result ?? 0) || 0;
 
-  // جرّب إضافة العضو. إن كان موجوداً مُسبقاً فسنقوم بإزالته.
-  try {
-    const added = await r.sadd(setKey, likerId);
-    if (added === 1) {
-      liked = true; // تم تسجيل الإعجاب الآن
-    } else {
-      await r.srem(setKey, likerId);
-      liked = false; // تمت إزالة الإعجاب
-    }
-  } catch {
-    // مسار احتياطي قوي
-    try {
-      const removed = await r.srem(setKey, likerId);
-      if (removed === 1) liked = false;
-      else liked = (await r.sadd(setKey, likerId)) === 1;
-    } catch {}
-  }
+  // الحالة المرغوبة: إمّا ما أُرسل أو العكس إذا لم يُرسل شيء
+  const wantLiked = typeof liked === "boolean" ? liked : !wasEdge;
 
-  let count = 0;
-  try {
-    count = await r.scard(setKey);
-  } catch {}
-  if (!Number.isFinite(count) || count < 0) count = 0;
+  let newCount = prevCount;
 
-  return { liked, count };
+  if (wantLiked && !wasEdge) {
+    const r = await redis.pipeline([
+      ["INCR", cntK],
+      ["SET", edgeK, "1"],
+    ]);
+    newCount = Number(r?.[0]?.result ?? prevCount + 1) || prevCount + 1;
+  } else if (!wantLiked && wasEdge) {
+    const r = await redis.pipeline([
+      ["DECR", cntK],
+      ["SET", edgeK, "0"],
+    ]);
+    newCount = Number(r?.[0]?.result ?? prevCount - 1) || prevCount - 1;
+  } // else لا تغيير
+
+  if (!Number.isFinite(newCount) || newCount < 0) newCount = 0;
+
+  return { liked: wantLiked, count: newCount };
 }
