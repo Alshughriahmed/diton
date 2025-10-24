@@ -52,7 +52,6 @@ import ChatToolbar from "./components/ChatToolbar";
 import ChatMessagingBar from "./components/ChatMessagingBar";
 import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
-import LikeHud from "./LikeHud";
 import PeerOverlay from "./components/PeerOverlay";
 import MaskTray from "@/app/chat/components/MaskTray";
 
@@ -1204,7 +1203,6 @@ export default function ChatClient() {
   // ---------- UI ----------
   return (
     <>
-      <LikeHud />
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
           <section
