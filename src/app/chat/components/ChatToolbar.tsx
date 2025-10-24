@@ -2,77 +2,82 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { emit, on } from "@/utils/events";
+import { emit } from "@/utils/events";
 import { useFFA } from "@/lib/useFFA";
 
 function isMobileUA() {
   if (typeof navigator === "undefined" || typeof window === "undefined") return false;
-  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ("ontouchstart" in window);
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || "ontouchstart" in window;
 }
 
 export default function ChatToolbar() {
   const ffa = useFFA();
-
-  // حالة الرسائل
   const [msgOpen, setMsgOpen] = useState(false);
 
-  // صلاحية الرجوع
+  // prev gating
   const dc = (globalThis as any).__ditonaDataChannel;
   const [pairId, setPairId] = useState<string | null>(null);
 
-  // حالة الوسائط
+  // media state
   const [torchSupported, setTorchSupported] = useState(false);
   const [facing, setFacing] = useState<"user" | "environment">("user");
   const [micOn, setMicOn] = useState<boolean>(true);
   const [remoteMuted, setRemoteMuted] = useState<boolean>(false);
 
-  // استماع لحالة الاتصال والوسائط
   useEffect(() => {
-    const offPair = on("rtc:pair", (d: any) => setPairId(d?.pairId || null));
+    const onPair = (e: any) => setPairId(e?.detail?.pairId || null);
 
-    const offMedia = on("media:state", (d: any) => {
-      if (typeof d?.torchSupported === "boolean") setTorchSupported(!!d.torchSupported);
-      if (d?.facing === "user" || d?.facing === "environment") setFacing(d.facing);
-      if (typeof d?.micOn === "boolean") setMicOn(!!d.micOn);
-      if (typeof d?.remoteMuted === "boolean") setRemoteMuted(!!d.remoteMuted);
-    });
+    const onMediaState = (e: any) => {
+      const d = e?.detail || {};
+      if (typeof d.torchSupported === "boolean") setTorchSupported(!!d.torchSupported);
+      if (d.facing === "user" || d.facing === "environment") setFacing(d.facing);
+      if (typeof d.micOn === "boolean") setMicOn(!!d.micOn);
+      if (typeof d.remoteMuted === "boolean") setRemoteMuted(!!d.remoteMuted);
+    };
+
+    const onToggleRemoteAudio = () => setRemoteMuted((v) => !v);
+
+    window.addEventListener("rtc:pair", onPair as any);
+    window.addEventListener("media:state", onMediaState as any);
+    window.addEventListener("ui:toggleRemoteAudio", onToggleRemoteAudio as any);
 
     return () => {
-      offPair();
-      offMedia();
+      window.removeEventListener("rtc:pair", onPair as any);
+      window.removeEventListener("media:state", onMediaState as any);
+      window.removeEventListener("ui:toggleRemoteAudio", onToggleRemoteAudio as any);
     };
   }, []);
 
-  // مزامنة فتح/إغلاق شريط الرسائل مع الأحداث العمومية
   useEffect(() => {
-    const offOpen = on("ui:openMessaging", () => setMsgOpen(true));
-    const offClose = on("ui:closeMessaging", () => setMsgOpen(false));
+    const onOpen = () => setMsgOpen(true);
+    const onClose = () => setMsgOpen(false);
+    window.addEventListener("ui:openMessaging", onOpen as any);
+    window.addEventListener("ui:closeMessaging", onClose as any);
     return () => {
-      offOpen();
-      offClose();
+      window.removeEventListener("ui:openMessaging", onOpen as any);
+      window.removeEventListener("ui:closeMessaging", onClose as any);
     };
   }, []);
 
-  const canPrev = ffa || (dc?.readyState === "open" && !!pairId);
+  const canPrev = ffa || (dc?.readyState === "open" && pairId);
   const onMobile = isMobileUA();
   const flashEnabled = torchSupported && facing === "environment";
 
   return (
     <>
-      {/* أزرار السابق/التالي الكبيرة */}
+      {/* Prev / Next big touch targets */}
       <button
         onClick={() => {
           if (canPrev) emit("ui:prev");
         }}
         disabled={!canPrev}
-        title={!canPrev ? "متاح أثناء الاتصال أو في FFA" : "Previous match"}
+        title={!canPrev ? "Available during active connection or FFA" : "Previous match"}
         className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${
           !canPrev ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
         }`}
       >
         ⏮️
       </button>
-
       <button
         onClick={() => emit("ui:next")}
         data-ui="btn-next"
@@ -81,14 +86,14 @@ export default function ChatToolbar() {
         ⏭️
       </button>
 
-      {/* شريط الأدوات السفلي */}
+      {/* Bottom toolbar */}
       <section
         data-toolbar
         className="pointer-events-auto fixed inset-x-2 sm:inset-x-4 z-[60]"
         style={{ bottom: "calc(env(safe-area-inset-bottom) + 8px)" }}
       >
         <div className="relative flex flex-row-reverse items-center gap-2 sm:gap-3 justify-center">
-          {/* الرسائل */}
+          {/* Messaging */}
           <button
             onClick={() => {
               const ev = msgOpen ? "ui:closeMessaging" : "ui:openMessaging";
@@ -113,26 +118,20 @@ export default function ChatToolbar() {
             ❤
           </button>
 
-          {/* صوت الطرف الآخر */}
+          {/* Remote audio: 🔊 / 🔇 */}
           <button
             data-ui="btn-remote-audio"
-            onClick={() => {
-              setRemoteMuted((v) => !v);
-              emit("ui:toggleRemoteAudio");
-            }}
+            onClick={() => emit("ui:toggleRemoteAudio")}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-black/20 text-white border border-white/20 hover:bg-white/10"
             title={remoteMuted ? "Remote muted" : "Remote unmuted"}
           >
             {remoteMuted ? "🔇" : "🔊"}
           </button>
 
-          {/* الميكروفون */}
+          {/* Mic: 🎤 / 🎤🚫 */}
           <button
             data-ui="btn-mic"
-            onClick={() => {
-              setMicOn((v) => !v);
-              emit("ui:toggleMic");
-            }}
+            onClick={() => emit("ui:toggleMic")}
             className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg text-white border ${
               micOn ? "bg-green-600/30 border-green-400/40" : "bg-red-600/30 border-red-400/40"
             }`}
@@ -141,7 +140,7 @@ export default function ChatToolbar() {
             {micOn ? "🎤" : "🎤🚫"}
           </button>
 
-          {/* الفلاش للهاتف */}
+          {/* Flash: disabled unless back+torch */}
           {onMobile ? (
             <button
               data-ui="btn-flash"
@@ -158,7 +157,7 @@ export default function ChatToolbar() {
             </button>
           ) : null}
 
-          {/* الإعدادات */}
+          {/* Settings */}
           <button
             data-ui="btn-settings"
             onClick={() => {
@@ -172,7 +171,7 @@ export default function ChatToolbar() {
             ⚙️
           </button>
 
-          {/* الماسكات: يُرسل فقط حدث التبديل */}
+          {/* Masks: ارسل حدث تبديل للدرج المُدار في ChatClient */}
           <button
             data-ui="btn-masks"
             onClick={() => emit("ui:toggleMaskTray")}
@@ -182,7 +181,7 @@ export default function ChatToolbar() {
             🎭
           </button>
 
-          {/* إبلاغ */}
+          {/* Report */}
           <button
             data-ui="btn-report"
             onClick={() => emit("ui:report")}
