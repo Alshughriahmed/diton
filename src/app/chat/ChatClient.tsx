@@ -549,11 +549,11 @@ export default function ChatClient() {
           window.dispatchEvent(new CustomEvent("like:sync", { detail }));
         }
         // توافق خلفي
-        if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
-          const detail = { pairId: roomName, liked: !!j?.liked };
-          window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
-          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
-        }
+       if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
+  const detail = { pairId: roomName, liked: !!j?.liked, count: typeof j?.count === "number" ? j.count : undefined };
+  window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
+  window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
+} 
       } catch {}
     };
     room.on(RoomEvent.DataReceived, onData as any);
@@ -992,53 +992,60 @@ export default function ChatClient() {
     );
 
     // like الموحّد
-    offs.push(
-      on("ui:like", async () => {
-        const room = roomRef.current;
-        if (!room || room.state !== "connected") {
-          toast("No active connection for like");
-          return;
-        }
-        if (!targetDid) {
-          toast("Peer ID missing");
-          return;
-        }
-        if (likePending) return;
-        const next = !likedByMe;
-        setLikePending(true);
-        broadcastLikeState(true);
-        try {
-          const res = await fetch("/api/like", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-did": stableDid(), // NEW
-              "x-idempotency": `lk-${Date.now()}`, // NEW
-            },
-            body: JSON.stringify({ targetDid, liked: next }),
-            cache: "no-store",
-            credentials: "include",
-          });
-          if (!res.ok) throw new Error(`like ${res.status}`);
-          const { liked, count } = await res.json();
-          setLikedByMe(!!liked);
-          setLikePending(false);
-          broadcastLikeState(false);
-          setLike(!!liked); // احتفاظ بتوافق قديم
-          // بث مزامنة موحّدة عبر القناة
-          try {
-            const pairId = (window as any).__pairId || (window as any).__ditonaPairId || "";
-            const payload = new TextEncoder().encode(JSON.stringify({ t: "like:sync", liked: !!liked, count: Number(count) || 0, pairId })); // NEW
-            await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-            window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId, liked: !!liked, count: Number(count) || 0 } })); // NEW
-          } catch {}
-        } catch {
-          setLikePending(false);
-          broadcastLikeState(false);
-          toast("Like failed");
-        }
-      }),
-    );
+   offs.push(
+  on("ui:like", async () => {
+    const room = roomRef.current;
+    if (!room || room.state !== "connected") {
+      toast("No active connection for like");
+      return;
+    }
+
+    // احصل على DID للطرف B من الميتا المخزنة
+    const peerDid =
+      (globalThis as any).__ditonaLastPeerMeta?.did ||
+      (globalThis as any).__ditonaLastPeerMeta?.deviceId ||
+      "";
+
+    if (!peerDid) {
+      toast("Peer ID missing");
+      return;
+    }
+
+    const newLike = !like;
+    setLike(newLike);
+
+    // نداء الـ API ليكون المصدر الوحيد للحقيقة
+    try {
+      const meDid = stableDid();
+      const r = await fetch("/api/like", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-did": meDid,
+        },
+        body: JSON.stringify({ targetDid: peerDid, liked: newLike }),
+        credentials: "include",
+        cache: "no-store",
+      });
+      const j = await r.json().catch(() => ({}));
+
+      // أرسل تحديث واجهة للطرف الآخر يتضمن العدد النهائي
+      try {
+        const payload = new TextEncoder().encode(
+          JSON.stringify({ t: "like", liked: !!j.liked, count: Number(j.count ?? 0) })
+        );
+        await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+      } catch {}
+
+      toast(`Like ${newLike ? "❤️" : "💔"}`);
+    } catch {
+      // فشل الـ API: تراجع في حالة الزر محلياً
+      setLike((x) => !x);
+      toast("Like failed");
+    }
+  }),
+);
+
 
     // report
     offs.push(on("ui:report", () => toast("Report sent. Moving on")));
