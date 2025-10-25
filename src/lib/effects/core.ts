@@ -1,6 +1,5 @@
 // src/lib/effects/core.ts
-// تأثيرات 2D خفيفة: Beauty + Masks على Canvas.
-// متصفح فقط. لا WebGL ولا تبعيات خارجية.
+// تأثيرات 2D خفيفة: Beauty + Masks على Canvas. متصفح فقط.
 
 let TARGET_FPS = 30;
 
@@ -61,7 +60,7 @@ export function setBeautyLevel(level: number) {
   } catch {}
 }
 
-/** سقف المعالجة اختياريًا. يعاد تطبيقه عند بدء بايبلاين جديدة. */
+/** ضبط حدود المعالجة اختياريًا. */
 export function setProcessingCap(opts: { maxWidth?: number; minHeight?: number; fps?: number } = {}) {
   if (Number.isFinite(opts.maxWidth as number) && (opts.maxWidth as number) > 0) {
     MAX_WIDTH = Math.max(320, Math.round(opts.maxWidth as number));
@@ -338,10 +337,7 @@ function maskRect(w: number, h: number, face: FaceBox | null) {
 }
 
 function clampRect(x: number, y: number, w: number, h: number, bw: number, bh: number) {
-  let dx = x,
-    dy = y,
-    dw = w,
-    dh = h;
+  let dx = x, dy = y, dw = w, dh = h;
   if (dx < -dw) dx = -dw;
   if (dy < -dh) dy = -dh;
   if (dx > bw) dx = bw;
@@ -350,7 +346,6 @@ function clampRect(x: number, y: number, w: number, h: number, bw: number, bh: n
 }
 
 function capDimensions(w: number, h: number, maxW: number, minH: number): { w: number; h: number } {
-  // حافظ على النسبة. نخفض إذا تعدّى العرض السقف أو إذا الارتفاع أعلى من minH ونريد تقليله للأداء.
   const ratio = w / Math.max(1, h);
 
   let targetW = w;
@@ -361,7 +356,6 @@ function capDimensions(w: number, h: number, maxW: number, minH: number): { w: n
     targetH = Math.round(maxW / ratio);
   }
 
-  // على الأجهزة الضعيفة أو عند ارتفاع كبير، اجعل الارتفاع نحو 480p كحد تقريبي
   if (LOW_END && targetH > minH) {
     targetH = minH;
     targetW = Math.round(minH * ratio);
