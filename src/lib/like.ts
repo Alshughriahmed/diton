@@ -8,16 +8,16 @@ type RedisLike = {
 };
 
 /**
- * يضبط حالة الإعجاب كعملية idempotent:
- * - إذا مررت liked صراحةً تُفرض تلك الحالة.
- * - إذا تركتها undefined سيتم "التبديل" بناءً على الحالة الحالية.
+ * يضبط حالة الإعجاب كعملية idempotent صريحة بناءً على liked:
+ * - liked=true  => تأكيد وجود الحافة (مع زيادة العدّاد إذا لم تكن موجودة).
+ * - liked=false => إزالة الحافة (مع إنقاص العدّاد إذا كانت موجودة).
  * تُعيد العدد الجديد مع الحالة النهائية.
  */
 export async function toggleEdgeAndCount(
   redis: RedisLike,
   likerDid: string,
   targetDid: string,
-  liked?: boolean
+  liked: boolean
 ): Promise<{ liked: boolean; count: number }> {
   const edgeK = keyEdge(likerDid, targetDid);
   const cntK = keyCount(targetDid);
@@ -30,26 +30,28 @@ export async function toggleEdgeAndCount(
   const wasEdge = String(r0?.[0]?.result ?? "") === "1";
   const prevCount = Number(r0?.[1]?.result ?? 0) || 0;
 
-  // الحالة المرغوبة: إمّا ما أُرسل أو العكس إذا لم يُرسل شيء
-  const wantLiked = typeof liked === "boolean" ? liked : !wasEdge;
+  // إذا لم تتغير الحالة المطلوبة، أعد كما هي
+  if (liked === wasEdge) {
+    return { liked, count: Math.max(0, prevCount) };
+  }
 
   let newCount = prevCount;
 
-  if (wantLiked && !wasEdge) {
+  if (liked && !wasEdge) {
     const r = await redis.pipeline([
       ["INCR", cntK],
       ["SET", edgeK, "1"],
     ]);
     newCount = Number(r?.[0]?.result ?? prevCount + 1) || prevCount + 1;
-  } else if (!wantLiked && wasEdge) {
+  } else if (!liked && wasEdge) {
     const r = await redis.pipeline([
       ["DECR", cntK],
       ["SET", edgeK, "0"],
     ]);
     newCount = Number(r?.[0]?.result ?? prevCount - 1) || prevCount - 1;
-  } // else لا تغيير
+  }
 
   if (!Number.isFinite(newCount) || newCount < 0) newCount = 0;
 
-  return { liked: wantLiked, count: newCount };
+  return { liked, count: newCount };
 }
