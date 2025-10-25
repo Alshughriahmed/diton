@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { emit } from "@/utils/events";
 import { useFFA } from "@/lib/useFFA";
+import { vibrate } from "@/lib/vibrate";
 
 function isMobileUA() {
   if (typeof navigator === "undefined" || typeof window === "undefined") return false;
@@ -68,7 +69,10 @@ export default function ChatToolbar() {
       {/* Prev / Next big touch targets */}
       <button
         onClick={() => {
-          if (canPrev) emit("ui:prev");
+          if (canPrev) {
+            vibrate(25);
+            emit("ui:prev");
+          }
         }}
         disabled={!canPrev}
         title={!canPrev ? "Available during active connection or FFA" : "Previous match"}
@@ -79,7 +83,10 @@ export default function ChatToolbar() {
         ⏮️
       </button>
       <button
-        onClick={() => emit("ui:next")}
+        onClick={() => {
+          vibrate(25);
+          emit("ui:next");
+        }}
         data-ui="btn-next"
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[50] text-3xl sm:text-4xl select-none"
       >
