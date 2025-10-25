@@ -112,15 +112,24 @@ export default function PeerOverlay() {
         save(next);
       }
 
-      if (typeof next.likes === "number") setLikes(Math.max(0, Number(next.likes) || 0));
+      if (typeof next.likes === "number") {
+        const nv = Math.max(0, Number(next.likes) || 0);
+        setLikes((prev) => (nv !== prev ? nv : prev));
+      }
     };
 
     const onLikeSync = (ev: any) => {
       const d = ev?.detail || {};
       const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
       if (d.pairId && curPair && d.pairId !== curPair) return;
-      if (typeof d.count === "number") setLikes(Math.max(0, Number(d.count) || 0));
-      else if (typeof d.likes === "number") setLikes(Math.max(0, Number(d.likes) || 0));
+      if (typeof d.count === "number") {
+        const nv = Math.max(0, Number(d.count) || 0);
+        setLikes((prev) => (nv !== prev ? nv : prev));
+      } else if (typeof d.likes === "number") {
+        const nv = Math.max(0, Number(d.likes) || 0);
+        setLikes((prev) => (nv !== prev ? nv : prev));
+      }
+      // إذا detail.liked فقط: لا نغيّر العداد هنا
     };
 
     const resetAll = () => {
