@@ -45,6 +45,7 @@ import {
 // مؤثرات الفيديو: تجميل + ماسكات
 import { startEffects, stopEffects, setMask, setBeautyEnabled } from "@/lib/effects/core";
 
+// HUDs / عناصر
 import LikeSystem from "@/components/chat/LikeSystem";
 import MyControls from "@/components/chat/MyControls";
 import UpsellModal from "@/components/chat/UpsellModal";
@@ -54,6 +55,8 @@ import MessageHud from "./components/MessageHud";
 import FilterBar from "./components/FilterBar";
 import PeerOverlay from "./components/PeerOverlay";
 import MaskTray from "@/app/chat/components/MaskTray";
+
+import { vibrate } from "@/lib/vibrate";
 
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
@@ -75,13 +78,6 @@ function readLSBool(key: string, defVal: boolean): boolean {
   } catch {
     return defVal;
   }
-}
-
-// اهتزاز آمن
-function vibrate(ms = 25) {
-  try {
-    if (typeof navigator !== "undefined" && "vibrate" in navigator) (navigator as any).vibrate(ms);
-  } catch {}
 }
 
 export default function ChatClient() {
@@ -135,6 +131,9 @@ export default function ChatClient() {
     camOn: true,
     remoteMuted: false,
   });
+
+  // هوية الطرف البعيد لاستخدامها في like API
+  const remoteDidRef = useRef<string>("");
 
   // مطابقة
   const sidRef = useRef(0);
@@ -408,20 +407,16 @@ export default function ChatClient() {
   async function leaveRoom(opts?: { bySwitch?: boolean }): Promise<void> {
     if (leavingRef.current) return;
     leavingRef.current = true;
-
-    // قفل التحويل اليدوي عند الطلب
     manualSwitchRef.current = !!opts?.bySwitch;
 
-    // ألغِ أي إعادة انضمام مجدولة
-    try {
-      if (rejoinTimerRef.current) {
-        clearTimeout(rejoinTimerRef.current);
-        rejoinTimerRef.current = null;
-      }
-    } catch {}
-
     snapshotMediaState();
+
     abortPolling();
+
+    // ألغِ أي rejoin مجدول
+    try {
+      if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current);
+    } catch {}
 
     const room = roomRef.current;
     roomRef.current = null;
@@ -461,12 +456,16 @@ export default function ChatClient() {
     }
 
     (globalThis as any).__lkRoom = null;
+    remoteDidRef.current = ""; // نسيان هوية الطرف السابق
     leavingRef.current = false;
   }
 
   function wireRoomEvents(room: Room, roomName: string, sid: number) {
-    const onTrack = (t: RemoteTrack, pub: RemoteTrackPublication, _p: RemoteParticipant) => {
+    const onTrack = (t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
       if (!isActiveSid(sid)) return;
+      try {
+        remoteDidRef.current = String(p?.identity || "");
+      } catch {}
       try {
         if (pub.kind === Track.Kind.Video && remoteVideoRef.current) attachRemoteTrack("video", t);
         else if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) attachRemoteTrack("audio", t);
@@ -598,8 +597,11 @@ export default function ChatClient() {
       } catch {}
     });
 
-    const onPeerJoined = () => {
+    const onPeerJoined = (p: RemoteParticipant) => {
       if (!isActiveSid(sid)) return;
+      try {
+        remoteDidRef.current = String(p?.identity || "");
+      } catch {}
       requestPeerMetaTwice(room);
       try {
         window.dispatchEvent(new CustomEvent("livekit:participant-connected"));
@@ -830,8 +832,6 @@ export default function ChatClient() {
     } finally {
       joiningRef.current = false;
       isConnectingRef.current = false;
-      // التحويل اليدوي انتهى
-      manualSwitchRef.current = false;
     }
   }
 
@@ -998,7 +998,7 @@ export default function ChatClient() {
       }),
     );
 
-    // like
+    // like: زر واحد في شريط الأدوات
     offs.push(
       on("ui:like", async () => {
         const room = roomRef.current;
@@ -1006,13 +1006,53 @@ export default function ChatClient() {
           toast("No active connection for like");
           return;
         }
+
+        const targetDid = String(remoteDidRef.current || "");
+        if (!targetDid) {
+          toast("peer id missing");
+          return;
+        }
+
         const newLike = !like;
         setLike(newLike);
+
+        // إشعار الطرف الآخر فورًا عبر DC
         try {
           const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
           await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
         } catch {}
-        toast(`Like ${newLike ? "❤️" : "💔"}`);
+
+        // تحديث العداد على الخادم
+        try {
+          const res = await fetch("/api/like", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-did": String(stableDid()),
+            },
+            body: JSON.stringify({ targetDid, liked: newLike }),
+            credentials: "include",
+            cache: "no-store",
+          });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setLike(!newLike);
+            toast("like failed");
+            return;
+          }
+          // بث مزامنة عدديّة محلية
+          try {
+            const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+            window.dispatchEvent(
+              new CustomEvent("like:sync", {
+                detail: { count: j?.count, likedByMe: j?.liked, pairId: curPair },
+              }),
+            );
+          } catch {}
+        } catch {
+          setLike(!newLike);
+          toast("like failed");
+        }
       }),
     );
 
@@ -1022,13 +1062,12 @@ export default function ChatClient() {
     // NEXT
     offs.push(
       on("ui:next", async () => {
-        vibrate(25);
         const now = Date.now();
         if (joiningRef.current || leavingRef.current || isConnectingRef.current || roomRef.current?.state === "connecting") return;
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        // ادخل حالة البحث مبكرًا لتحديث النص
+        vibrate(25);
         setPhase("searching");
 
         abortPolling();
@@ -1046,7 +1085,7 @@ export default function ChatClient() {
           await ensureEffectsRunning().catch(() => {});
         }
 
-        // انتهى التحويل اليدوي عند نجاح joinViaRedisMatch
+        manualSwitchRef.current = false;
         await joinViaRedisMatch(sid);
       }),
     );
@@ -1054,7 +1093,6 @@ export default function ChatClient() {
     // PREV
     offs.push(
       on("ui:prev", async () => {
-        vibrate(25);
         if (!filters.isVip && !ffa) {
           toast("🔒 Going back is VIP only");
           emit("ui:upsell", "prev");
@@ -1065,7 +1103,7 @@ export default function ChatClient() {
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        // ادخل حالة البحث مبكرًا لتحديث النص
+        vibrate(25);
         setPhase("searching");
 
         abortPolling();
@@ -1080,7 +1118,6 @@ export default function ChatClient() {
           })(),
         ]);
 
-        // انتهى التحويل اليدوي في كل الأحوال الآن
         manualSwitchRef.current = false;
 
         if (!ok) {
@@ -1096,21 +1133,6 @@ export default function ChatClient() {
           }
           await joinViaRedisMatch(sid);
         }
-      }),
-    );
-
-    // CANCEL: يلغي الاستطلاع ويعود لـ idle دون قطع الوسائط
-    offs.push(
-      on("ui:cancel", () => {
-        abortPolling();
-        // ألغِ أي إعادة انضمام مجدولة
-        try {
-          if (rejoinTimerRef.current) {
-            clearTimeout(rejoinTimerRef.current);
-            rejoinTimerRef.current = null;
-          }
-        } catch {}
-        setRtcPhase("idle");
       }),
     );
 
@@ -1184,6 +1206,14 @@ export default function ChatClient() {
     offs.push(on("ui:openMaskTray", () => setMaskOpen(true)));
     offs.push(on("ui:closeMaskTray", () => setMaskOpen(false)));
     offs.push(on("ui:toggleMaskTray", () => setMaskOpen((v) => !v)));
+
+    // Cancel البحث
+    offs.push(
+      on("ui:cancel", () => {
+        abortPolling();
+        setPhase("idle");
+      }),
+    );
 
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe(() => {});
