@@ -25,8 +25,10 @@ export async function tryStartGLPipeline(
   try { await video.play(); } catch {}
 
   const canvas = document.createElement("canvas");
-  const gl = (canvas.getContext("webgl") || canvas.getContext("experimental-webgl")) as GL | null;
-  if (!gl) return null;
+  const glMaybe = (canvas.getContext("webgl") || canvas.getContext("experimental-webgl")) as WebGLRenderingContext | null;
+if (!glMaybe) return null;
+const gl: GL = glMaybe; // غير قابل لأن يكون null الآن
+
 
   // أبعاد أولية من الفيديو
   const w = video.videoWidth || 640;
