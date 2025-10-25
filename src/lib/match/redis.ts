@@ -355,7 +355,7 @@ export async function enqueue(inp: EnqueueInput): Promise<{ ticket: string; ts: 
 
   await setPX(ATTR_KEY(ticket), JSON.stringify(obj), TTL_MS);
   if (inp.deviceId) await redisCmd(["SET", DEV_KEY(inp.deviceId), ticket, "PX", String(TTL_MS)]);
-  await zaddRecency(Q_KEY, ts, ticket);
-  await zremrangebyscore(Q_KEY, 0, now - TTL_MS);
+ await redisCmd(["ZADD", Q_KEY, String(ts), ticket]); // حدّث الحداثة في كل enqueue
+await zremrangebyscore(Q_KEY, 0, now - TTL_MS);
   return { ticket, ts };
 }
