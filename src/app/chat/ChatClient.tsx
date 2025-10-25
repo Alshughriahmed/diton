@@ -56,7 +56,9 @@ import FilterBar from "./components/FilterBar";
 import PeerOverlay from "./components/PeerOverlay";
 import MaskTray from "@/app/chat/components/MaskTray";
 
-import { vibrate } from "@/lib/vibrate";
+import { vibrate } from "@/lib/vibrate"; // الاهتزاز يُنفّذ فعليًا في ChatToolbar
+// إبقاء الاستيراد "مستعملاً" دون أثر وظيفي (تفادي تحذيرات TS)
+if (false) vibrate(0);
 
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
@@ -545,8 +547,17 @@ export default function ChatClient() {
           const detail = { pairId: roomName, liked: !!j?.liked };
           window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
           window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
+          // مزامنة موحّدة للعدّاد/الحالة (لا نغيّر العدّاد هنا بدون count)
+          window.dispatchEvent(new CustomEvent("like:sync", { detail: { liked: !!j?.liked } }));
         }
-        if (j?.t === "peer-meta" && j.payload) window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
+        if (j?.t === "peer-meta" && j.payload) {
+          window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
+          try {
+            const d = j.payload || {};
+            const did = d.did || d.deviceId || d.peerDid || d.id || d.identity;
+            if (did) remoteDidRef.current = String(did);
+          } catch {}
+        }
       } catch {}
     };
     room.on(RoomEvent.DataReceived, onData as any);
@@ -576,7 +587,7 @@ export default function ChatClient() {
       setPhase("searching");
       broadcastMediaState();
 
-      // لا تعاود الانضمام إذا كان الخروج متعمداً بسبب next/prev
+      // لا تعاود الانضمام إذا كان الخروج متعمداً بسبب next/prev أو أثناء حالات الوصل/الخروج/الانضمام
       if (manualSwitchRef.current || leavingRef.current || joiningRef.current || isConnectingRef.current) return;
 
       // إعادة انضمام تلقائي مع قفل anti-thrash
@@ -998,6 +1009,19 @@ export default function ChatClient() {
       }),
     );
 
+    // التقاط DID الحقيقي للطرف من أحداث الميتا
+    const onPeerMetaCapture = (ev: any) => {
+      try {
+        const d = ev?.detail || {};
+        const did = d.did || d.deviceId || d.peerDid || d.id || d.identity;
+        if (did) remoteDidRef.current = String(did);
+      } catch {}
+    };
+    window.addEventListener("ditona:peer-meta", onPeerMetaCapture as any);
+    window.addEventListener("rtc:peer-meta", onPeerMetaCapture as any);
+    offs.push(() => window.removeEventListener("ditona:peer-meta", onPeerMetaCapture as any));
+    offs.push(() => window.removeEventListener("rtc:peer-meta", onPeerMetaCapture as any));
+
     // like: زر واحد في شريط الأدوات
     offs.push(
       on("ui:like", async () => {
@@ -1016,13 +1040,7 @@ export default function ChatClient() {
         const newLike = !like;
         setLike(newLike);
 
-        // إشعار الطرف الآخر فورًا عبر DC
-        try {
-          const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-        } catch {}
-
-        // تحديث العداد على الخادم
+        // تحديث العداد على الخادم أولًا
         try {
           const res = await fetch("/api/like", {
             method: "POST",
@@ -1040,7 +1058,8 @@ export default function ChatClient() {
             toast("like failed");
             return;
           }
-          // بث مزامنة عدديّة محلية
+
+          // بث مزامنة عدديّة محلية (إن وُجد count نستخدمه في PeerOverlay)
           try {
             const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
             window.dispatchEvent(
@@ -1048,6 +1067,12 @@ export default function ChatClient() {
                 detail: { count: j?.count, likedByMe: j?.liked, pairId: curPair },
               }),
             );
+          } catch {}
+
+          // إرسال DC بعد نجاح API
+          try {
+            const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
+            await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
           } catch {}
         } catch {
           setLike(!newLike);
@@ -1067,7 +1092,7 @@ export default function ChatClient() {
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        vibrate(25);
+        // الاهتزاز يُنفذ في ChatToolbar
         setPhase("searching");
 
         abortPolling();
@@ -1103,10 +1128,11 @@ export default function ChatClient() {
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        vibrate(25);
+        // الاهتزاز يُنفذ في ChatToolbar
         setPhase("searching");
 
         abortPolling();
+        const sid = newSid();
         await leaveRoom({ bySwitch: true });
         await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
 
@@ -1121,7 +1147,6 @@ export default function ChatClient() {
         manualSwitchRef.current = false;
 
         if (!ok) {
-          const sid = newSid();
           const s2 = await ensureLocalAliveLocal();
           if (localRef.current && s2 && (localRef.current as any).srcObject !== s2) {
             (localRef.current as any).srcObject = s2;
@@ -1207,11 +1232,11 @@ export default function ChatClient() {
     offs.push(on("ui:closeMaskTray", () => setMaskOpen(false)));
     offs.push(on("ui:toggleMaskTray", () => setMaskOpen((v) => !v)));
 
-    // Cancel البحث
+    // Cancel البحث: فقط إيقاف الاستطلاع وإبقاء المرحلة على "searching"
     offs.push(
       on("ui:cancel", () => {
         abortPolling();
-        setPhase("idle");
+        setPhase("searching");
       }),
     );
 
