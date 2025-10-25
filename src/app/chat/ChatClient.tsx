@@ -1,4 +1,5 @@
 // src/app/chat/ChatClient.tsx
+
 "use client";
 
 import "@/app/chat/dcShim.client";
@@ -141,12 +142,19 @@ export default function ChatClient() {
   const sidRef = useRef(0);
   const lastNextTsRef = useRef(0);
   const pollAbortRef = useRef<AbortController | null>(null);
+  const tokenAbortRef = useRef<AbortController | null>(null); // NEW: إلغاء جلب التوكن عند تغيير SID
   const searchStartRef = useRef(0);
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
   const lastTicketRef = useRef<string>("");
 
   // ---------- helpers ----------
   function newSid(): number {
+    // إلغاء أي مهام مرتبطة بالـSID السابق
+    try { pollAbortRef.current?.abort(); } catch {}
+    try { tokenAbortRef.current?.abort(); } catch {}
+    pollAbortRef.current = null;
+    tokenAbortRef.current = null;
+
     sidRef.current += 1;
     return sidRef.current;
   }
@@ -178,6 +186,8 @@ export default function ChatClient() {
       window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
       window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId } }));
     } catch {}
+    // تصفير حالة الإعجاب عند مطابقة جديدة
+    try { setLike(false); } catch {}
   }
 
   function emitRemoteTrackStarted() {
@@ -213,6 +223,7 @@ export default function ChatClient() {
       return "did-" + Math.random().toString(36).slice(2, 10);
     }
   }
+
   function identity(): string {
     const base = String(profile?.displayName || "anon").trim() || "anon";
     const did = String(stableDid());
@@ -232,6 +243,7 @@ export default function ChatClient() {
     const j = await r.json();
     return String(j.ticket || "");
   }
+
   async function nextReq(ticket: string, waitMs = 8000, signal?: AbortSignal): Promise<string | null> {
     const r = await fetch(`/api/match/next?ticket=${encodeURIComponent(ticket)}&wait=${waitMs}`, {
       method: "GET",
@@ -250,6 +262,7 @@ export default function ChatClient() {
     }
     return null;
   }
+
   async function prevReq(ticket: string): Promise<string | null> {
     if (!ticket) return null;
     const r = await fetch(`/api/match/prev?ticket=${encodeURIComponent(ticket)}`, {
@@ -262,11 +275,14 @@ export default function ChatClient() {
     const j = await r.json().catch(() => ({}));
     return typeof j?.room === "string" ? j.room : null;
   }
-  async function tokenReq(room: string, id: string): Promise<string> {
+
+  // تعديل: قبول signal لربط الجلب بالـSID
+  async function tokenReq(room: string, id: string, signal?: AbortSignal): Promise<string> {
     const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
       method: "GET",
       credentials: "include",
       cache: "no-store",
+      signal,
     });
     if (!r.ok) throw new Error("token failed " + r.status);
     const j = await r.json();
@@ -281,6 +297,7 @@ export default function ChatClient() {
       window.dispatchEvent(new CustomEvent("dc:attached"));
     } catch {}
   }
+
   function dcDetach() {
     const dc: any = (globalThis as any).__ditonaDataChannel;
     try {
@@ -329,6 +346,7 @@ export default function ChatClient() {
     const remoteMuted = !!(remoteAudioRef.current?.muted ?? remoteVideoRef.current?.muted);
     lastMediaStateRef.current = { micOn, camOn, remoteMuted };
   }
+
   function applyLocalTrackStatesBeforePublish(src: MediaStream) {
     const { micOn, camOn } = lastMediaStateRef.current;
     try {
@@ -353,6 +371,7 @@ export default function ChatClient() {
     if (kind === "audio") remoteAudioTrackRef.current = track;
     emitRemoteTrackStarted();
   }
+
   function detachRemoteAll() {
     try {
       if (remoteVideoTrackRef.current && remoteVideoRef.current) {
@@ -522,6 +541,9 @@ export default function ChatClient() {
           if (remoteVideoRef.current) remoteVideoRef.current.muted = muted;
         } catch {}
         broadcastMediaState();
+
+        // NEW: فتح قفل التحويل اليدوي فقط بعد اكتمال الاتصال الجديد
+        manualSwitchRef.current = false;
       }
     };
     room.on(RoomEvent.ConnectionStateChanged, onConn);
@@ -539,17 +561,20 @@ export default function ChatClient() {
         const j = JSON.parse(txt);
 
         if (j?.t === "meta:init" || topic === "meta") window.dispatchEvent(new CustomEvent("ditona:meta:init"));
+
         if ((j?.t === "chat" || topic === "chat") && typeof j.text === "string") {
           const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
+
         if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           const detail = { pairId: roomName, liked: !!j?.liked };
           window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
           window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
-          // مزامنة موحّدة للعدّاد/الحالة (لا نغيّر العدّاد هنا بدون count)
-          window.dispatchEvent(new CustomEvent("like:sync", { detail: { liked: !!j?.liked } }));
+          // مزامنة موحّدة للعدّاد/الحالة
+          window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByOther: !!j?.liked, pairId: roomName } }));
         }
+
         if (j?.t === "peer-meta" && j.payload) {
           window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
           try {
@@ -792,7 +817,12 @@ export default function ChatClient() {
       wireRoomEvents(room, roomName, sid);
 
       const id = identity();
-      const token = await tokenReq(roomName, id);
+
+      // NEW: ربط جلب التوكن بالـSID مع إمكانية الإلغاء
+      const tokCtrl = new AbortController();
+      tokenAbortRef.current = tokCtrl;
+      const token = await tokenReq(roomName, id, tokCtrl.signal);
+      tokenAbortRef.current = null;
       if (!isActiveSid(sid)) return;
 
       detachRemoteAll();
@@ -843,6 +873,8 @@ export default function ChatClient() {
     } finally {
       joiningRef.current = false;
       isConnectingRef.current = false;
+      // فتح القفل إن بقي مفعّلاً بعد انتهاء محاولة الانضمام
+      if (manualSwitchRef.current && isActiveSid(sid)) manualSwitchRef.current = false;
     }
   }
 
@@ -858,7 +890,11 @@ export default function ChatClient() {
     wireRoomEvents(room, roomName, sid);
 
     const id = identity();
-    const token = await tokenReq(roomName, id);
+    // NEW: ربط جلب التوكن بالـSID
+    const tokCtrl = new AbortController();
+    tokenAbortRef.current = tokCtrl;
+    const token = await tokenReq(roomName, id, tokCtrl.signal).catch(() => "");
+    tokenAbortRef.current = null;
 
     detachRemoteAll();
     setPhase("matched");
@@ -1040,7 +1076,19 @@ export default function ChatClient() {
         const newLike = !like;
         setLike(newLike);
 
-        // تحديث العداد على الخادم أولًا
+        // بث فوري لحالة الإعجاب محليًا لتحديث UI دون انتظار API
+        try {
+          const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+          window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByMe: newLike, pairId: curPair } }));
+        } catch {}
+
+        // إرسال DC مبكرًا ليصل للطرف الآخر بسرعة؛ سنعكسه لاحقًا إذا فشل الـAPI
+        try {
+          const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
+          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+        } catch {}
+
+        // تحديث العداد على الخادم
         try {
           const res = await fetch("/api/like", {
             method: "POST",
@@ -1054,12 +1102,21 @@ export default function ChatClient() {
           });
           const j = await res.json().catch(() => ({}));
           if (!res.ok) {
+            // تراجع
             setLike(!newLike);
+            try {
+              const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+              window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByMe: !newLike, pairId: curPair } }));
+            } catch {}
+            try {
+              const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
+              await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+            } catch {}
             toast("like failed");
             return;
           }
 
-          // بث مزامنة عدديّة محلية (إن وُجد count نستخدمه في PeerOverlay)
+          // مزامنة عدديّة عند توفر count من الخادم
           try {
             const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
             window.dispatchEvent(
@@ -1068,14 +1125,17 @@ export default function ChatClient() {
               }),
             );
           } catch {}
-
-          // إرسال DC بعد نجاح API
+        } catch {
+          // فشل الشبكة: تراجع وإبلاغ
+          setLike(!newLike);
           try {
-            const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
+            const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+            window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByMe: !newLike, pairId: curPair } }));
+          } catch {}
+          try {
+            const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
             await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
           } catch {}
-        } catch {
-          setLike(!newLike);
           toast("like failed");
         }
       }),
@@ -1110,7 +1170,7 @@ export default function ChatClient() {
           await ensureEffectsRunning().catch(() => {});
         }
 
-        manualSwitchRef.current = false;
+        // ملاحظة: لا نحرر manualSwitchRef هنا. سيُحرَّر بعد اتصال الغرفة الجديدة.
         await joinViaRedisMatch(sid);
       }),
     );
@@ -1144,8 +1204,7 @@ export default function ChatClient() {
           })(),
         ]);
 
-        manualSwitchRef.current = false;
-
+        // لا نحرر manualSwitchRef هنا أيضاً
         if (!ok) {
           const s2 = await ensureLocalAliveLocal();
           if (localRef.current && s2 && (localRef.current as any).srcObject !== s2) {
@@ -1248,6 +1307,7 @@ export default function ChatClient() {
       unsubMob();
       try { if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current); } catch {}
       abortPolling();
+      try { tokenAbortRef.current?.abort(); } catch {}
       disableAllEffects().catch(() => {});
       leaveRoom().catch(() => {});
     };
