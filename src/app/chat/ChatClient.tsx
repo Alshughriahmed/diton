@@ -567,13 +567,27 @@ export default function ChatClient() {
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
 
-        if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
-          const detail = { pairId: roomName, liked: !!j?.liked };
-          window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
-          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
-          // مزامنة موحّدة للعدّاد/الحالة
-          window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByOther: !!j?.liked, pairId: roomName } }));
-        }
+      // مزامنة العدّاد لو وصلت رسالة مزوّدة بالـcount
+if (j?.t === "like:sync") {
+  window.dispatchEvent(
+    new CustomEvent("like:sync", {
+      detail: { count: j?.count, likedByOther: !!j?.liked, pairId: roomName },
+    })
+  );
+  return;
+}
+// الرسالة الخفيفة الفورية
+if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
+  const detail = { pairId: roomName, liked: !!j?.liked };
+  window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
+  window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
+  window.dispatchEvent(
+    new CustomEvent("like:sync", {
+      detail: { likedByOther: !!j?.liked, pairId: roomName },
+    })
+  );
+}
+
 
         if (j?.t === "peer-meta" && j.payload) {
           window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
@@ -1124,6 +1138,14 @@ export default function ChatClient() {
                 detail: { count: j?.count, likedByMe: j?.liked, pairId: curPair },
               }),
             );
+            // أرسل count للطرف الآخر عبر DC بعد نجاح الـAPI
+try {
+  const payload2 = new TextEncoder().encode(
+    JSON.stringify({ t: "like:sync", liked: !!j?.liked, count: j?.count })
+  );
+  await (room.localParticipant as any).publishData(payload2, { reliable: true, topic: "like" });
+} catch {}
+            
           } catch {}
         } catch {
           // فشل الشبكة: تراجع وإبلاغ
