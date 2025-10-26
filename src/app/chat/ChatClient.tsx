@@ -1082,10 +1082,10 @@ export default function ChatClient() {
           window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByMe: newLike, pairId: curPair } }));
         } catch {}
 
-        // إرسال DC مبكرًا ليصل للطرف الآخر بسرعة؛ سنعكسه لاحقًا إذا فشل الـAPI
+        // NEW: إرسال DC مبكرًا وبدون topic لضمان التوافق
         try {
           const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+          await (room.localParticipant as any).publishData(payload, { reliable: true });
         } catch {}
 
         // تحديث العداد على الخادم
@@ -1110,7 +1110,7 @@ export default function ChatClient() {
             } catch {}
             try {
               const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
-              await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+              await (room.localParticipant as any).publishData(payload, { reliable: true }); // بدون topic
             } catch {}
             toast("like failed");
             return;
@@ -1134,7 +1134,7 @@ export default function ChatClient() {
           } catch {}
           try {
             const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
-            await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+            await (room.localParticipant as any).publishData(payload, { reliable: true }); // بدون topic
           } catch {}
           toast("like failed");
         }
