@@ -58,14 +58,13 @@ import PeerOverlay from "./components/PeerOverlay";
 import MaskTray from "@/app/chat/components/MaskTray";
 
 import { vibrate } from "@/lib/vibrate"; // الاهتزاز يُنفّذ فعليًا في ChatToolbar
-// إبقاء الاستيراد "مستعملاً" دون أثر وظيفي (تفادي تحذيرات TS)
 if (false) vibrate(0);
 
 type Phase = "boot" | "idle" | "searching" | "matched" | "connected";
 
 const NEXT_COOLDOWN_MS = 1200;
 const DISCONNECT_TIMEOUT_MS = 800;
-const SWITCH_PAUSE_MS = 220; // استقرار انتقال next/prev
+const SWITCH_PAUSE_MS = 220;
 
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
@@ -123,7 +122,7 @@ export default function ChatClient() {
   const joiningRef = useRef(false);
   const leavingRef = useRef(false);
   const isConnectingRef = useRef(false);
-  const rejoinTimerRef = useRef<number | null>(null); // Anti-thrash rejoin
+  const rejoinTimerRef = useRef<number | null>(null);
 
   // قفل لإيقاف إعادة الانضمام التلقائي أثناء next/prev
   const manualSwitchRef = useRef(false);
@@ -142,42 +141,34 @@ export default function ChatClient() {
   const sidRef = useRef(0);
   const lastNextTsRef = useRef(0);
   const pollAbortRef = useRef<AbortController | null>(null);
-  const tokenAbortRef = useRef<AbortController | null>(null); // NEW: إلغاء جلب التوكن عند تغيير SID
+  const tokenAbortRef = useRef<AbortController | null>(null);
   const searchStartRef = useRef(0);
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
   const lastTicketRef = useRef<string>("");
 
   // ---------- helpers ----------
   function newSid(): number {
-    // إلغاء أي مهام مرتبطة بالـSID السابق
     try { pollAbortRef.current?.abort(); } catch {}
     try { tokenAbortRef.current?.abort(); } catch {}
     pollAbortRef.current = null;
     tokenAbortRef.current = null;
-
     sidRef.current += 1;
     return sidRef.current;
   }
   const isActiveSid = (sid: number) => sid === sidRef.current;
 
   function abortPolling() {
-    try {
-      pollAbortRef.current?.abort();
-    } catch {}
+    try { pollAbortRef.current?.abort(); } catch {}
     pollAbortRef.current = null;
   }
 
   function setPhase(p: Phase) {
     setRtcPhase(p);
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } })); } catch {}
     if (p === "searching") {
       searchStartRef.current = Date.now();
       setSearchMsg("Searching for a match…");
-      try {
-        window.dispatchEvent(new CustomEvent("ui:msg:reset"));
-      } catch {}
+      try { window.dispatchEvent(new CustomEvent("ui:msg:reset")); } catch {}
     }
   }
 
@@ -186,28 +177,23 @@ export default function ChatClient() {
       window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
       window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId } }));
     } catch {}
-    // تصفير حالة الإعجاب عند مطابقة جديدة
     try { setLike(false); } catch {}
   }
 
   function emitRemoteTrackStarted() {
-    try {
-      window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent("rtc:remote-track", { detail: { started: true } })); } catch {}
   }
 
   function broadcastMediaState() {
     try {
-      window.dispatchEvent(
-        new CustomEvent("media:state", {
-          detail: {
-            facing: getCurrentFacing(),
-            torchSupported: isTorchSupported(),
-            micOn: getMicState(),
-            remoteMuted: !!lastMediaStateRef.current.remoteMuted,
-          },
-        }),
-      );
+      window.dispatchEvent(new CustomEvent("media:state", {
+        detail: {
+          facing: getCurrentFacing(),
+          torchSupported: isTorchSupported(),
+          micOn: getMicState(),
+          remoteMuted: !!lastMediaStateRef.current.remoteMuted,
+        },
+      }));
     } catch {}
   }
 
@@ -276,7 +262,6 @@ export default function ChatClient() {
     return typeof j?.room === "string" ? j.room : null;
   }
 
-  // تعديل: قبول signal لربط الجلب بالـSID
   async function tokenReq(room: string, id: string, signal?: AbortSignal): Promise<string> {
     const r = await fetch(`/api/livekit/token?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(id)}`, {
       method: "GET",
@@ -308,17 +293,13 @@ export default function ChatClient() {
 
   function clearRoomListeners() {
     for (const off of roomUnsubsRef.current.splice(0)) {
-      try {
-        off();
-      } catch {}
+      try { off(); } catch {}
     }
   }
 
   async function safePlay(el?: HTMLVideoElement | HTMLAudioElement | null) {
     if (!el) return;
-    try {
-      await el.play();
-    } catch {}
+    try { await el.play(); } catch {}
   }
 
   async function ensureLocalAliveLocal(): Promise<MediaStream | null> {
@@ -349,14 +330,8 @@ export default function ChatClient() {
 
   function applyLocalTrackStatesBeforePublish(src: MediaStream) {
     const { micOn, camOn } = lastMediaStateRef.current;
-    try {
-      const at = src.getAudioTracks?.()[0];
-      if (at) at.enabled = !!micOn;
-    } catch {}
-    try {
-      const vt = src.getVideoTracks?.()[0];
-      if (vt) vt.enabled = !!camOn;
-    } catch {}
+    try { const at = src.getAudioTracks?.()[0]; if (at) at.enabled = !!micOn; } catch {}
+    try { const vt = src.getVideoTracks?.()[0]; if (vt) vt.enabled = !!camOn; } catch {}
   }
 
   function attachRemoteTrack(kind: "video" | "audio", track: RemoteTrack | null) {
@@ -375,14 +350,10 @@ export default function ChatClient() {
   function detachRemoteAll() {
     try {
       if (remoteVideoTrackRef.current && remoteVideoRef.current) {
-        try {
-          (remoteVideoTrackRef.current as any).detach?.(remoteVideoRef.current);
-        } catch {}
+        try { (remoteVideoTrackRef.current as any).detach?.(remoteVideoRef.current); } catch {}
       }
       if (remoteAudioTrackRef.current && remoteAudioRef.current) {
-        try {
-          (remoteAudioTrackRef.current as any).detach?.(remoteAudioRef.current);
-        } catch {}
+        try { (remoteAudioTrackRef.current as any).detach?.(remoteAudioRef.current); } catch {}
       }
     } catch {}
     remoteVideoTrackRef.current = null;
@@ -411,13 +382,9 @@ export default function ChatClient() {
       const ctrl = new AbortController();
       pollAbortRef.current = ctrl;
       let rn: string | null = null;
-      try {
-        rn = await nextReq(ticket, wait, ctrl.signal);
-      } catch (e: any) {
-        if (e?.name === "AbortError") return null;
-      } finally {
-        if (pollAbortRef.current === ctrl) pollAbortRef.current = null;
-      }
+      try { rn = await nextReq(ticket, wait, ctrl.signal); }
+      catch (e: any) { if (e?.name === "AbortError") return null; }
+      finally { if (pollAbortRef.current === ctrl) pollAbortRef.current = null; }
       if (!isActiveSid(sid)) return null;
       if (rn) return rn;
       wait = Math.min(20000, Math.round(wait * 1.25));
@@ -431,13 +398,9 @@ export default function ChatClient() {
     manualSwitchRef.current = !!opts?.bySwitch;
 
     snapshotMediaState();
-
     abortPolling();
 
-    // ألغِ أي rejoin مجدول
-    try {
-      if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current);
-    } catch {}
+    try { if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current); } catch {}
 
     const room = roomRef.current;
     roomRef.current = null;
@@ -450,7 +413,6 @@ export default function ChatClient() {
       (window as any).__pairId = undefined;
     } catch {}
 
-    // لا تلمس المعاينة المحلية لتفادي وميض
     detachRemoteAll();
 
     if (room) {
@@ -459,34 +421,24 @@ export default function ChatClient() {
         const finish = () => {
           if (done) return;
           done = true;
-          try {
-            room.off(RoomEvent.Disconnected, finish);
-          } catch {}
+          try { room.off(RoomEvent.Disconnected, finish); } catch {}
           resolve();
         };
-        try {
-          room.on(RoomEvent.Disconnected, finish);
-        } catch {}
-        try {
-          room.disconnect(false);
-        } catch {
-          finish();
-        }
+        try { room.on(RoomEvent.Disconnected, finish); } catch {}
+        try { room.disconnect(false); } catch { finish(); }
         setTimeout(finish, DISCONNECT_TIMEOUT_MS);
       });
     }
 
     (globalThis as any).__lkRoom = null;
-    remoteDidRef.current = ""; // نسيان هوية الطرف السابق
+    remoteDidRef.current = "";
     leavingRef.current = false;
   }
 
   function wireRoomEvents(room: Room, roomName: string, sid: number) {
     const onTrack = (t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
       if (!isActiveSid(sid)) return;
-      try {
-        remoteDidRef.current = String(p?.identity || "");
-      } catch {}
+      try { remoteDidRef.current = String(p?.identity || ""); } catch {}
       try {
         if (pub.kind === Track.Kind.Video && remoteVideoRef.current) attachRemoteTrack("video", t);
         else if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) attachRemoteTrack("audio", t);
@@ -494,35 +446,23 @@ export default function ChatClient() {
       } catch {}
     };
     room.on(RoomEvent.TrackSubscribed, onTrack);
-    roomUnsubsRef.current.push(() => {
-      try {
-        room.off(RoomEvent.TrackSubscribed, onTrack);
-      } catch {}
-    });
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.TrackSubscribed, onTrack); } catch {} });
 
     const onTrackUnsub = (t: RemoteTrack, pub: RemoteTrackPublication) => {
       if (!isActiveSid(sid)) return;
       try {
         if (pub.kind === Track.Kind.Video && remoteVideoRef.current) {
-          try {
-            (t as any).detach?.(remoteVideoRef.current);
-          } catch {}
+          try { (t as any).detach?.(remoteVideoRef.current); } catch {}
           if (remoteVideoTrackRef.current === t) remoteVideoTrackRef.current = null;
         }
         if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
-          try {
-            (t as any).detach?.(remoteAudioRef.current);
-          } catch {}
+          try { (t as any).detach?.(remoteAudioRef.current); } catch {}
           if (remoteAudioTrackRef.current === t) remoteAudioTrackRef.current = null;
         }
       } catch {}
     };
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsub);
-    roomUnsubsRef.current.push(() => {
-      try {
-        room.off(RoomEvent.TrackUnsubscribed, onTrackUnsub);
-      } catch {}
-    });
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.TrackUnsubscribed, onTrackUnsub); } catch {} });
 
     const onConn = (state: ConnectionState) => {
       if (!isActiveSid(sid)) return;
@@ -531,27 +471,18 @@ export default function ChatClient() {
         setPhase("connected");
         safePlay(remoteVideoRef.current);
         safePlay(remoteAudioRef.current);
-        try {
-          window.dispatchEvent(new CustomEvent("lk:attached"));
-        } catch {}
-        // طبّق حالة كتم الصوت البعيد المحفوظة
+        try { window.dispatchEvent(new CustomEvent("lk:attached")); } catch {}
         try {
           const muted = !!lastMediaStateRef.current.remoteMuted;
           if (remoteAudioRef.current) remoteAudioRef.current.muted = muted;
           if (remoteVideoRef.current) remoteVideoRef.current.muted = muted;
         } catch {}
         broadcastMediaState();
-
-        // NEW: فتح قفل التحويل اليدوي فقط بعد اكتمال الاتصال الجديد
         manualSwitchRef.current = false;
       }
     };
     room.on(RoomEvent.ConnectionStateChanged, onConn);
-    roomUnsubsRef.current.push(() => {
-      try {
-        room.off(RoomEvent.ConnectionStateChanged, onConn);
-      } catch {}
-    });
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ConnectionStateChanged, onConn); } catch {} });
 
     const onData = (payload: Uint8Array, _p?: RemoteParticipant, _k?: any, topic?: string) => {
       if (!isActiveSid(sid)) return;
@@ -567,27 +498,25 @@ export default function ChatClient() {
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
 
-      // مزامنة العدّاد لو وصلت رسالة مزوّدة بالـcount
-if (j?.t === "like:sync") {
-  window.dispatchEvent(
-    new CustomEvent("like:sync", {
-      detail: { count: j?.count, likedByOther: !!j?.liked, pairId: roomName },
-    })
-  );
-  return;
-}
-// الرسالة الخفيفة الفورية
-if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
-  const detail = { pairId: roomName, liked: !!j?.liked };
-  window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail }));
-  window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail }));
-  window.dispatchEvent(
-    new CustomEvent("like:sync", {
-      detail: { likedByOther: !!j?.liked, pairId: roomName },
-    })
-  );
-}
+        // مزامنة غنية بالعدّاد
+        if (j?.t === "like:sync") {
+          const detail = {
+            pairId: roomName,
+            liked: !!j?.liked,
+            likedByOther: !!j?.liked,
+            count: typeof j?.count === "number" ? j.count : undefined,
+          };
+          window.dispatchEvent(new CustomEvent("like:sync", { detail }));
+          return;
+        }
 
+        // الرسالة الخفيفة الفورية
+        if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
+          const base = { pairId: roomName, liked: !!j?.liked };
+          window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: base }));
+          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base }));
+          window.dispatchEvent(new CustomEvent("like:sync", { detail: { ...base, likedByOther: !!j?.liked } }));
+        }
 
         if (j?.t === "peer-meta" && j.payload) {
           window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload }));
@@ -600,25 +529,15 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       } catch {}
     };
     room.on(RoomEvent.DataReceived, onData as any);
-    roomUnsubsRef.current.push(() => {
-      try {
-        room.off(RoomEvent.DataReceived, onData as any);
-      } catch {}
-    });
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.DataReceived, onData as any); } catch {} });
 
     const onPart = () => {
       if (!isActiveSid(sid)) return;
       setPhase("searching");
-      try {
-        window.dispatchEvent(new CustomEvent("livekit:participant-disconnected"));
-      } catch {}
+      try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {}
     };
     room.on(RoomEvent.ParticipantDisconnected, onPart);
-    roomUnsubsRef.current.push(() => {
-      try {
-        room.off(RoomEvent.ParticipantDisconnected, onPart);
-      } catch {}
-    });
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
 
     const onDisc = () => {
       if (!isActiveSid(sid)) return;
@@ -626,13 +545,9 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       setPhase("searching");
       broadcastMediaState();
 
-      // لا تعاود الانضمام إذا كان الخروج متعمداً بسبب next/prev أو أثناء حالات الوصل/الخروج/الانضمام
       if (manualSwitchRef.current || leavingRef.current || joiningRef.current || isConnectingRef.current) return;
 
-      // إعادة انضمام تلقائي مع قفل anti-thrash
-      try {
-        if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current);
-      } catch {}
+      try { if (rejoinTimerRef.current) clearTimeout(rejoinTimerRef.current); } catch {}
       rejoinTimerRef.current = window.setTimeout(() => {
         if (!isActiveSid(sid)) return;
         if (joiningRef.current || leavingRef.current || isConnectingRef.current) return;
@@ -641,42 +556,28 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       }, 650);
     };
     room.on(RoomEvent.Disconnected, onDisc);
-    roomUnsubsRef.current.push(() => {
-      try {
-        room.off(RoomEvent.Disconnected, onDisc);
-      } catch {}
-    });
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.Disconnected, onDisc); } catch {} });
 
     const onPeerJoined = (p: RemoteParticipant) => {
       if (!isActiveSid(sid)) return;
-      try {
-        remoteDidRef.current = String(p?.identity || "");
-      } catch {}
+      try { remoteDidRef.current = String(p?.identity || ""); } catch {}
       requestPeerMetaTwice(room);
-      try {
-        window.dispatchEvent(new CustomEvent("livekit:participant-connected"));
-      } catch {}
+      try { window.dispatchEvent(new CustomEvent("livekit:participant-connected")); } catch {}
     };
     room.on(RoomEvent.ParticipantConnected, onPeerJoined);
-    roomUnsubsRef.current.push(() => {
-      try {
-        room.off(RoomEvent.ParticipantConnected, onPeerJoined);
-      } catch {}
-    });
+    roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantConnected, onPeerJoined); } catch {} });
   }
 
   // --------- مؤثرات الفيديو ----------
   async function replaceLocalVideoTrack(stream: MediaStream | null) {
     if (!stream) return;
 
-    // preview
     if (localRef.current && (localRef.current as any).srcObject !== stream) {
       (localRef.current as any).srcObject = stream;
       localRef.current.muted = true;
       await safePlay(localRef.current);
     }
 
-    // publish if connected
     const room = roomRef.current;
     const vt = stream.getVideoTracks?.()[0];
     if (!room || room.state !== "connected" || !vt) return;
@@ -687,15 +588,12 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
         typeof lp.getTrackPublications === "function"
           ? lp.getTrackPublications()
           : Array.from(lp.trackPublications?.values?.() ?? []);
-
-      // حاول الاستبدال على نفس الـpublication لتفادي إعادة التفاوض
       const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track);
       const pubTrack: any = vidPub?.track;
 
       if (pubTrack && typeof pubTrack.replaceTrack === "function") {
         await pubTrack.replaceTrack(vt);
       } else {
-        // fallback آمن عند غياب replaceTrack
         for (const pub of pubs) {
           if (pub.kind === Track.Kind.Video && pub.track) {
             await lp.unpublishTrack(pub.track, { stop: false });
@@ -722,9 +620,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
   async function enableBeauty(on: boolean) {
     beautyOnRef.current = on;
     setBeautyEnabled(on);
-    try {
-      localStorage.setItem("ditona_beauty_on", on ? "1" : "0");
-    } catch {}
+    try { localStorage.setItem("ditona_beauty_on", on ? "1" : "0"); } catch {}
     if (on) {
       await ensureEffectsRunning();
       toast("Beauty ON");
@@ -745,7 +641,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       toast(`Mask: ${name}`);
       try {
         localStorage.setItem("ditona_mask_name", name);
-        localStorage.setItem("ditona_mask", name); // توافق خلفي
+        localStorage.setItem("ditona_mask", name);
       } catch {}
     } else {
       await setMask(null as any).catch(() => {});
@@ -814,7 +710,6 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       lastTicketRef.current = ticket;
       if (!isActiveSid(sid)) return;
 
-      // انتظر حتى تأتي غرفة
       let roomName: string | null = null;
       while (isActiveSid(sid) && !roomName) {
         roomName = await waitRoomLoop(ticket, sid);
@@ -832,7 +727,6 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
 
       const id = identity();
 
-      // NEW: ربط جلب التوكن بالـSID مع إمكانية الإلغاء
       const tokCtrl = new AbortController();
       tokenAbortRef.current = tokCtrl;
       const token = await tokenReq(roomName, id, tokCtrl.signal);
@@ -851,9 +745,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       isConnectingRef.current = true;
       await room.connect(ws, token);
       if (!isActiveSid(sid)) {
-        try {
-          await room.disconnect(false);
-        } catch {}
+        try { await room.disconnect(false); } catch {}
         isConnectingRef.current = false;
         return;
       }
@@ -863,15 +755,12 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
 
       await requestPeerMetaTwice(room);
 
-      // انشر المسار الحالي: مؤثرات إن كانت فعالة وإلا الخام
       const publishSrc = processedStreamRef.current ?? getLocalStream() ?? null;
       if (publishSrc && room.state === "connected") {
         applyLocalTrackStatesBeforePublish(publishSrc);
         for (const t of publishSrc.getTracks()) {
           if (!isActiveSid(sid)) break;
-          try {
-            await room.localParticipant.publishTrack(t);
-          } catch {}
+          try { await room.localParticipant.publishTrack(t); } catch {}
         }
       }
 
@@ -887,7 +776,6 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
     } finally {
       joiningRef.current = false;
       isConnectingRef.current = false;
-      // فتح القفل إن بقي مفعّلاً بعد انتهاء محاولة الانضمام
       if (manualSwitchRef.current && isActiveSid(sid)) manualSwitchRef.current = false;
     }
   }
@@ -904,7 +792,6 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
     wireRoomEvents(room, roomName, sid);
 
     const id = identity();
-    // NEW: ربط جلب التوكن بالـSID
     const tokCtrl = new AbortController();
     tokenAbortRef.current = tokCtrl;
     const token = await tokenReq(roomName, id, tokCtrl.signal).catch(() => "");
@@ -933,9 +820,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
     if (publishSrc) {
       applyLocalTrackStatesBeforePublish(publishSrc);
       for (const t of publishSrc.getTracks()) {
-        try {
-          await room.localParticipant.publishTrack(t);
-        } catch {}
+        try { await room.localParticipant.publishTrack(t); } catch {}
       }
     }
     try {
@@ -966,7 +851,6 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       try {
         const s0 = await ensureLocalAliveLocal();
 
-        // استرجاع وحفظ تفضيلات الصوت
         try {
           const savedMic = readLSBool("ditona_mic_on", true);
           lastMediaStateRef.current.micOn = savedMic;
@@ -984,7 +868,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           localRef.current.muted = true;
           await safePlay(localRef.current);
         }
-        // استرجاع تفضيلات المؤثرات
+
         try {
           beautyOnRef.current = localStorage.getItem("ditona_beauty_on") === "1";
           const savedMask = (localStorage.getItem("ditona_mask_name") ?? localStorage.getItem("ditona_mask")) || "";
@@ -1019,9 +903,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
         toggleMic();
         const v = !!getMicState();
         lastMediaStateRef.current.micOn = v;
-        try {
-          localStorage.setItem("ditona_mic_on", v ? "1" : "0");
-        } catch {}
+        try { localStorage.setItem("ditona_mic_on", v ? "1" : "0"); } catch {}
         broadcastMediaState();
       }),
     );
@@ -1044,9 +926,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
     // settings
     offs.push(
       on("ui:openSettings", () => {
-        try {
-          window.location.href = "/settings";
-        } catch {}
+        try { window.location.href = "/settings"; } catch {}
       }),
     );
 
@@ -1059,7 +939,7 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
       }),
     );
 
-    // التقاط DID الحقيقي للطرف من أحداث الميتا
+    // التقاط DID من الميتا
     const onPeerMetaCapture = (ev: any) => {
       try {
         const d = ev?.detail || {};
@@ -1090,19 +970,23 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
         const newLike = !like;
         setLike(newLike);
 
-        // بث فوري لحالة الإعجاب محليًا لتحديث UI دون انتظار API
+        // تفاؤل محلي
         try {
           const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-          window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByMe: newLike, pairId: curPair } }));
+          window.dispatchEvent(
+            new CustomEvent("like:sync", {
+              detail: { pairId: curPair, likedByMe: newLike, liked: newLike },
+            }),
+          );
         } catch {}
 
-        // NEW: إرسال DC مبكرًا وبدون topic لضمان التوافق
+        // إرسال DC فوري خفيف
         try {
           const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-          await (room.localParticipant as any).publishData(payload, { reliable: true });
+          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
         } catch {}
 
-        // تحديث العداد على الخادم
+        // API
         try {
           const res = await fetch("/api/like", {
             method: "POST",
@@ -1116,47 +1000,43 @@ if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           });
           const j = await res.json().catch(() => ({}));
           if (!res.ok) {
-            // تراجع
             setLike(!newLike);
             try {
               const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-              window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByMe: !newLike, pairId: curPair } }));
+              window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId: curPair, likedByMe: !newLike, liked: !newLike } }));
             } catch {}
             try {
               const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
-              await (room.localParticipant as any).publishData(payload, { reliable: true }); // بدون topic
+              await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
             } catch {}
             toast("like failed");
             return;
           }
 
-          // مزامنة عدديّة عند توفر count من الخادم
+          // مزامنة محلية بالعدّاد
           try {
             const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
             window.dispatchEvent(
               new CustomEvent("like:sync", {
-                detail: { count: j?.count, likedByMe: j?.liked, pairId: curPair },
+                detail: { pairId: curPair, count: j?.count, likedByMe: j?.liked, liked: j?.liked },
               }),
             );
-            // أرسل count للطرف الآخر عبر DC بعد نجاح الـAPI
-try {
-  const payload2 = new TextEncoder().encode(
-    JSON.stringify({ t: "like:sync", liked: !!j?.liked, count: j?.count })
-  );
-  await (room.localParticipant as any).publishData(payload2, { reliable: true, topic: "like" });
-} catch {}
-            
+          } catch {}
+
+          // إرسال count للطرف الآخر
+          try {
+            const payload2 = new TextEncoder().encode(JSON.stringify({ t: "like:sync", liked: !!j?.liked, count: j?.count }));
+            await (room.localParticipant as any).publishData(payload2, { reliable: true, topic: "like" });
           } catch {}
         } catch {
-          // فشل الشبكة: تراجع وإبلاغ
           setLike(!newLike);
           try {
             const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-            window.dispatchEvent(new CustomEvent("like:sync", { detail: { likedByMe: !newLike, pairId: curPair } }));
+            window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId: curPair, likedByMe: !newLike, liked: !newLike } }));
           } catch {}
           try {
             const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
-            await (room.localParticipant as any).publishData(payload, { reliable: true }); // بدون topic
+            await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
           } catch {}
           toast("like failed");
         }
@@ -1174,7 +1054,6 @@ try {
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        // الاهتزاز يُنفذ في ChatToolbar
         setPhase("searching");
 
         abortPolling();
@@ -1192,7 +1071,6 @@ try {
           await ensureEffectsRunning().catch(() => {});
         }
 
-        // ملاحظة: لا نحرر manualSwitchRef هنا. سيُحرَّر بعد اتصال الغرفة الجديدة.
         await joinViaRedisMatch(sid);
       }),
     );
@@ -1210,7 +1088,6 @@ try {
         if (now - lastNextTsRef.current < NEXT_COOLDOWN_MS) return;
         lastNextTsRef.current = now;
 
-        // الاهتزاز يُنفذ في ChatToolbar
         setPhase("searching");
 
         abortPolling();
@@ -1220,13 +1097,9 @@ try {
 
         const ok = await Promise.race<boolean>([
           (async () => await tryPrevReconnect())(),
-          (async () => {
-            await new Promise((r) => setTimeout(r, 7000));
-            return false;
-          })(),
+          (async () => { await new Promise((r) => setTimeout(r, 7000)); return false; })(),
         ]);
 
-        // لا نحرر manualSwitchRef هنا أيضاً
         if (!ok) {
           const s2 = await ensureLocalAliveLocal();
           if (localRef.current && s2 && (localRef.current as any).srcObject !== s2) {
@@ -1255,16 +1128,14 @@ try {
         if (target) {
           target.muted = !target.muted;
           lastMediaStateRef.current.remoteMuted = target.muted;
-          try {
-            localStorage.setItem("ditona_remote_muted", target.muted ? "1" : "0");
-          } catch {}
+          try { localStorage.setItem("ditona_remote_muted", target.muted ? "1" : "0"); } catch {}
           broadcastMediaState();
           toast(target.muted ? "Remote muted" : "Remote unmuted");
         }
       }),
     );
 
-    // Beauty ON/OFF — منفصل عن الماسكات
+    // Beauty
     offs.push(
       on("ui:toggleBeauty", async (d: any) => {
         const onB = !!d?.enabled;
@@ -1313,7 +1184,7 @@ try {
     offs.push(on("ui:closeMaskTray", () => setMaskOpen(false)));
     offs.push(on("ui:toggleMaskTray", () => setMaskOpen((v) => !v)));
 
-    // Cancel البحث: فقط إيقاف الاستطلاع وإبقاء المرحلة على "searching"
+    // Cancel
     offs.push(
       on("ui:cancel", () => {
         abortPolling();
@@ -1336,7 +1207,7 @@ try {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.isVip, ffa, router, filters.gender, filters.countries, profile?.gender]);
 
-  // بث حالة درج الماسكات عند التغيير لتمكين عزل الإيماءات خارجيًا
+  // بث حالة درج الماسكات
   useEffect(() => {
     emit(maskOpen ? "ui:maskTrayOpen" : "ui:maskTrayClose");
   }, [maskOpen]);
