@@ -1,256 +1,172 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { emit, on } from "@/utils/events";
-import safeFetch from "@/app/chat/safeFetch";
-import { likeApiThenDc } from "@/app/chat/likeSyncClient";
-import { useProfile } from "@/state/profile";
+import { useEffect, useState } from "react";
+import { normalizeGender, genderLabel } from "@/lib/gender";
 
-interface LikeData {
-  myLikes: number;
-  peerLikes: number;
-  isLiked: boolean;
-  canLike: boolean;
+type Meta = {
+  did?: string; country?: string; city?: string; gender?: string;
+  avatarUrl?: string; likes?: number; displayName?: string; vip?: boolean;
+  hideLikes?: boolean; hideCountry?: boolean; hideCity?: boolean;
+};
+
+function loadCached(): Meta {
+  try {
+    const w: any = globalThis as any;
+    if (w.__ditonaLastPeerMeta && typeof w.__ditonaLastPeerMeta === "object") return w.__ditonaLastPeerMeta;
+    const raw = sessionStorage.getItem("ditona:last_peer_meta");
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
 }
 
-export default function LikeSystem() {
-  const { profile } = useProfile();
-  const showCount = !!profile?.likes?.showCount;
+function shallowEq(a: Meta, b: Meta) {
+  return a.did===b.did && a.country===b.country && a.city===b.city && a.gender===b.gender &&
+         a.avatarUrl===b.avatarUrl && a.displayName===b.displayName &&
+         !!a.vip===!!b.vip && !!a.hideLikes===!!b.hideLikes &&
+         !!a.hideCountry===!!b.hideCountry && !!a.hideCity===!!b.hideCity;
+}
 
-  const [likeData, setLikeData] = useState<LikeData>({
-    myLikes: 0,
-    peerLikes: 0,
-    isLiked: false,
-    canLike: true,
-  });
-  const [isAnimating, setIsAnimating] = useState(false);
-  const [showHeart, setShowHeart] = useState(false);
-  const [currentPairId, setCurrentPairId] = useState<string | null>(null);
-
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isPollingRef = useRef(false);
-
-  // ---- polling helpers ----
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
+function genderBadgeLocal(g: unknown) {
+  const n = normalizeGender(g);
+  if (n === "u") return null;
+  const label = genderLabel(n);
+  const BIG = "text-[1.25rem] sm:text-[1.5rem] leading-none";
+  switch (n) {
+    case "m": return { symbol: "♂", label, labelCls: "text-blue-500",  symbolCls: `text-blue-500 ${BIG}` };
+    case "f": return { symbol: "♀", label, labelCls: "text-red-500",   symbolCls: `text-red-500 ${BIG}` };
+    case "c": return { symbol: "⚤", label, labelCls: "text-rose-400",  symbolCls: `text-rose-400 ${BIG}` };
+    case "l": {
+      const GRAD="bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
+      return { symbol: "🏳️‍🌈", label: "LGBTQ+", labelCls: GRAD, symbolCls: `${GRAD} ${BIG}` };
     }
-    isPollingRef.current = false;
-  };
+  }
+  return null;
+}
 
-  const pollLikeCount = async (pairId: string) => {
-    if (!pairId || isPollingRef.current) return;
-    isPollingRef.current = true;
-    try {
-      const r = await safeFetch(`/api/like?pairId=${encodeURIComponent(pairId)}`, { method: "GET" });
-      if (r.ok) {
-        const j = await r.json();
-        setLikeData((prev) => ({
-          ...prev,
-          peerLikes: Number(j?.count ?? 0),
-          isLiked: !!(j?.mine ?? j?.you),
-          canLike: true,
-        }));
-      }
-    } catch {
-      /* noop */
-    } finally {
-      isPollingRef.current = false;
-    }
-  };
+export default function PeerOverlay() {
+  const [meta, setMeta] = useState<Meta>(loadCached());
+  const [likes, setLikes] = useState<number>(typeof meta.likes === "number" ? meta.likes! : 0);
 
-  const startPolling = (pairId: string) => {
-    stopPolling();
-    // لا حاجة للـpolling إذا كان العداد مخفياً
-    if (!showCount) return;
-    // poll الآن ثم كل ثانيتين
-    pollLikeCount(pairId);
-    pollingIntervalRef.current = setInterval(() => pollLikeCount(pairId), 2000);
-  };
-
-  // ---- wiring ----
   useEffect(() => {
-    const offPair = on("rtc:pair" as any, (data) => {
-      const pid = data?.pairId;
-      if (!pid) return;
-      setCurrentPairId(pid);
-      setLikeData({ myLikes: 0, peerLikes: 0, isLiked: false, canLike: true });
-      startPolling(pid);
-    });
-
-    const offPhase = on("rtc:phase" as any, (d) => {
-      const ph = d?.phase;
-      if (ph === "idle" || ph === "stopped" || ph === "searching") {
-        stopPolling();
-        setCurrentPairId(null);
-        setLikeData({ myLikes: 0, peerLikes: 0, isLiked: false, canLike: true });
-      }
-    });
-
-    // استمع لتزامن العدّاد عبر DC
-    const offSync = on("like:sync" as any, (ev) => {
-      const det = ev || {};
-      const cur = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-      if (det.pairId && cur && det.pairId !== cur) return;
-
-      if (typeof det.count === "number") {
-        setLikeData((s) => ({ ...s, peerLikes: Math.max(0, Number(det.count) || 0) }));
-      }
-      if (typeof det.likedByMe === "boolean") {
-        setLikeData((s) => ({ ...s, isLiked: det.likedByMe }));
-      }
-    });
-
-    // عند إغلاق القناة ارجع للـpolling فقط
-    const onDcClosed = () => {
-      if (currentPairId) startPolling(currentPairId);
-    };
-    if (typeof window !== "undefined") {
-      window.addEventListener("ditona:datachannel-closed", onDcClosed);
+    function save(m: Meta) {
+      try {
+        (globalThis as any).__ditonaLastPeerMeta = m;
+        sessionStorage.setItem("ditona:last_peer_meta", JSON.stringify(m));
+      } catch {}
     }
+
+    const onMeta = (ev: any) => {
+      const d = ev?.detail || {};
+      const next: Meta = {
+        did: d.did || d.peerDid || d.id || d.identity || meta.did,
+        country: d.country ?? meta.country,
+        city: d.city ?? meta.city,
+        gender: d.gender ?? meta.gender,
+        avatarUrl: d.avatarUrl ?? d.avatar ?? meta.avatarUrl,
+        likes: typeof d.likes === "number" ? d.likes : likes,
+        displayName: d.displayName ?? d.name ?? meta.displayName,
+        vip: !!(d.vip ?? d.isVip ?? d.premium ?? d.pro ?? meta.vip),
+        hideLikes: !!(d.hideLikes ?? meta.hideLikes),
+        hideCountry: !!(d.hideCountry ?? meta.hideCountry),
+        hideCity: !!(d.hideCity ?? meta.hideCity),
+      };
+      try {
+        const w: any = globalThis as any;
+        if (next.did) { w.__peerDid = next.did; w.__ditonaPeerDid = next.did; }
+      } catch {}
+      if (!shallowEq(meta, next)) { setMeta(next); save(next); }
+      if (typeof next.likes === "number") setLikes((prev) => (next.likes! !== prev ? next.likes! : prev));
+    };
+
+    const onLikeSync = (ev: any) => {
+      const d = ev?.detail || {};
+      const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
+      if (d.pairId && curPair && d.pairId !== curPair) return;
+      const n = typeof d.count === "number" ? d.count : typeof d.likes === "number" ? d.likes : null;
+      if (n != null) setLikes((p) => (n !== p ? Math.max(0, Number(n) || 0) : p));
+    };
+
+    const resetAll = () => {
+      setMeta({}); setLikes(0);
+      try {
+        const w: any = globalThis as any;
+        delete w.__peerDid; delete w.__ditonaPeerDid;
+        sessionStorage.removeItem("ditona:last_peer_meta"); w.__ditonaLastPeerMeta = {};
+      } catch {}
+    };
+
+    const onPhase = (ev: any) => {
+      const ph = ev?.detail?.phase;
+      if (ph === "searching" || ph === "stopped") resetAll(); // لا نمسح على matched
+    };
+
+    window.addEventListener("ditona:peer-meta", onMeta as any);
+    window.addEventListener("rtc:peer-meta", onMeta as any);
+    window.addEventListener("like:sync", onLikeSync as any);
+    window.addEventListener("rtc:phase", onPhase as any);
+    window.addEventListener("rtc:pair", resetAll as any);
+
+    const t = setTimeout(() => {
+      try {
+        const room: any = (globalThis as any).__lkRoom;
+        if (room?.state === "connected") {
+          const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
+          room.localParticipant?.publishData?.(payload, { reliable: true, topic: "meta" });
+        }
+      } catch {}
+    }, 1000);
 
     return () => {
-      typeof offPair === "function" && offPair();
-      typeof offPhase === "function" && offPhase();
-      typeof offSync === "function" && offSync();
-      if (typeof window !== "undefined") {
-        window.removeEventListener("ditona:datachannel-closed", onDcClosed);
-      }
-      stopPolling();
+      clearTimeout(t);
+      window.removeEventListener("ditona:peer-meta", onMeta as any);
+      window.removeEventListener("rtc:peer-meta", onMeta as any);
+      window.removeEventListener("like:sync", onLikeSync as any);
+      window.removeEventListener("rtc:phase", onPhase as any);
+      window.removeEventListener("rtc:pair", resetAll as any);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPairId]);
+  }, []);
 
-  // إعادة تهيئة polling عند تغيّر سياسة عرض العداد
-  useEffect(() => {
-    if (currentPairId) {
-      startPolling(currentPairId);
-    } else {
-      stopPolling();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCount]);
-
-  // ---- like action ----
-  const handleLike = async () => {
-    if (!likeData.canLike || isAnimating || !currentPairId) return;
-
-    const newIsLiked = !likeData.isLiked;
-    const original = { ...likeData };
-
-    // تحديث متفائل
-    setLikeData((s) => ({
-      ...s,
-      isLiked: newIsLiked,
-      peerLikes: showCount ? (newIsLiked ? s.peerLikes + 1 : Math.max(0, s.peerLikes - 1)) : s.peerLikes,
-      canLike: false,
-    }));
-
-    // حركة
-    setIsAnimating(true);
-    if (newIsLiked) {
-      try {
-        if (typeof window !== "undefined") window.dispatchEvent(new Event("user:liked"));
-      } catch {}
-      setShowHeart(true);
-      setTimeout(() => setShowHeart(false), 1000);
-    }
-    setTimeout(() => setIsAnimating(false), 300);
-
-    try {
-      const dc = (globalThis as any).__ditonaDataChannel;
-      const res = await likeApiThenDc(currentPairId, dc);
-
-      if (res?.ok && !res?.duplicate) {
-        // جلب الحالة الحقيقية
-        if (showCount) {
-          const g = await safeFetch(`/api/like?pairId=${encodeURIComponent(currentPairId)}`, { method: "GET" });
-          if (g.ok) {
-            const j = await g.json();
-            setLikeData((s) => ({
-              ...s,
-              peerLikes: Number(j?.count ?? s.peerLikes),
-              isLiked: !!(j?.mine ?? j?.you ?? s.isLiked),
-              canLike: true,
-            }));
-            emit("ui:like", { isLiked: !!(j?.mine ?? j?.you), myLikes: Number(j?.count ?? 0), pairId: currentPairId });
-          } else {
-            setLikeData((s) => ({ ...s, canLike: true }));
-          }
-        } else {
-          setLikeData((s) => ({ ...s, canLike: true }));
-        }
-      } else if (res?.duplicate) {
-        setLikeData((s) => ({ ...s, canLike: true }));
-      } else {
-        setLikeData({ ...original, canLike: true });
-      }
-    } catch {
-      setLikeData({ ...original, canLike: true });
-    }
-  };
+  const g = genderBadgeLocal(meta.gender);
+  const showLoc = !(meta.hideCountry || meta.hideCity);
+  const showLikes = !meta.hideLikes;
 
   return (
-    <div className="absolute top-4 right-4 z-30">
-      <div className="flex flex-col items-center gap-2">
-        {/* Peer Likes Display */}
-        {showCount && (
-          <div className="flex items-center gap-1 px-3 py-1 bg-black/50 backdrop-blur rounded-full border border-white/20">
-            <span className="text-pink-400 text-sm">💖</span>
-            <span className="text-white text-sm font-medium">{likeData.peerLikes}</span>
-          </div>
-        )}
-
-        {/* Like Button */}
-        <button
-          onClick={handleLike}
-          disabled={!likeData.canLike || isAnimating}
-          className={`relative w-14 h-14 rounded-full border-2 flex items-center justify-center transition-all duration-300 ${
-            likeData.isLiked ? "bg-pink-500 border-pink-400 text-white scale-110"
-                              : "bg-black/50 border-white/30 text-white hover:border-pink-400 hover:bg-pink-500/20"
-          } ${isAnimating ? "scale-125" : ""} ${!likeData.canLike ? "opacity-50 cursor-not-allowed" : ""}`}
-          aria-label={likeData.isLiked ? "Unlike" : "Like"}
-        >
-          <span className={`text-2xl transition-transform ${isAnimating ? "scale-125" : ""}`}>
-            {likeData.isLiked ? "💗" : "🤍"}
-          </span>
-
-          {showHeart && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-4xl animate-ping text-pink-400">💖</span>
-            </div>
+    <>
+      {/* أعلى اليسار */}
+      <div className="absolute top-2 left-2 z-30 flex items-center gap-2 select-none pointer-events-none">
+        <div className="h-8 w-8 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
+          {meta.avatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={meta.avatarUrl} alt="" className="h-full w-full object-cover"
+                 onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />
+          ) : (
+            <div className="h-full w-full grid place-items-center text-[10px] text-white/80 bg-black/30">?</div>
           )}
-
-          {isAnimating && <div className="absolute inset-0 rounded-full border-2 border-pink-400 animate-ping opacity-30" />}
-        </button>
-
-        {/* My Likes Counter */}
-        {showCount && (
-          <div className="flex items-center gap-1 px-2 py-1 bg-black/50 backdrop-blur rounded-full border border-white/20">
-            <span className="text-pink-400 text-xs">💕</span>
-            <span className="text-white text-xs font-medium">{likeData.myLikes}</span>
-          </div>
-        )}
+        </div>
+        <div className="flex items-center gap-1 text-white/95 drop-shadow">
+          {meta.displayName && <span className="text-xs font-medium">{meta.displayName}</span>}
+          {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
+          {showLikes && <>
+            <span className="ml-1 text-sm">❤</span>
+            <span className="text-xs">{likes}</span>
+          </>}
+        </div>
       </div>
 
-      {showHeart && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-1 bg-pink-500 text-white text-xs rounded-full whitespace-nowrap animate-fade-in-up">
-          Added to friends! 💕
-        </div>
-      )}
-    </div>
+      {/* أسفل اليسار */}
+      <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
+        {showLoc && (
+          <span className="text-white/95">
+            {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
+          </span>
+        )}
+        {g && (
+          <span className="inline-flex items-center gap-1 ml-2 align-middle">
+            <span className={g.symbolCls}>{g.symbol}</span>
+            <span className={g.labelCls}>{g.label}</span>
+          </span>
+        )}
+      </div>
+    </>
   );
-}
-
-// inject CSS once
-if (typeof window !== "undefined" && !(window as any).__likeAnimCss) {
-  (window as any).__likeAnimCss = 1;
-  const css = `
-    @keyframes fade-in-up { from { opacity:0; transform: translateY(10px);} to {opacity:1; transform: translateY(0);} }
-    .animate-fade-in-up { animation: fade-in-up 0.3s ease-out; }
-  `;
-  const style = document.createElement("style");
-  style.textContent = css;
-  document.head.appendChild(style);
 }
