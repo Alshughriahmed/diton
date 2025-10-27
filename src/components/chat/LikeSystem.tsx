@@ -1,9 +1,15 @@
+// src/components/chat/LikeSystem.tsx
 "use client";
 
-import { useEffect, useRef } from "react";
-import { emit } from "@/utils/events";
+import { useEffect, useRef, useState } from "react";
 
-function stableDid(): string {
+type LikeState = {
+  count: number;      // عدّاد الطرف الآخر (B)
+  you: boolean;       // هل أنا أحببته
+  busy: boolean;      // منع النقرات المتتالية
+};
+
+function stableMyDid(): string {
   try {
     const k = "ditona_did";
     const v = localStorage.getItem(k);
@@ -16,84 +22,138 @@ function stableDid(): string {
   }
 }
 
-async function fetchCountByDid(did: string) {
-  const tryKeys = ["did", "targetDid"] as const; // دعم كلا الاسمين حسب عقد الخادم
-  for (const key of tryKeys) {
-    try {
-      const r = await fetch(`/api/like?${key}=${encodeURIComponent(did)}`, {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: { accept: "application/json" },
-      });
-      if (!r.ok) continue;
-      const j = await r.json().catch(() => ({} as any));
-      const count = Number(j?.count ?? j?.likes ?? 0);
-      const mine = Boolean(j?.mine ?? j?.you ?? false);
-      // بث موحّد تستهلكه PeerOverlay
-      emit("like:sync", { count, likedByMe: mine });
-      return true;
-    } catch {}
+async function apiLike(opts: { targetDid: string; liked?: boolean }): Promise<{ count?: number; you?: boolean } | null> {
+  try {
+    const me = stableMyDid();
+    const r = await fetch("/api/like", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "content-type": "application/json", "x-did": me },
+      body: JSON.stringify(opts),
+    });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    // نتوقع {count, you}. إن اختلفت المفاتيح نُطبّعها
+    if (j && typeof j === "object") {
+      const count = Number(j.count ?? j.likes ?? 0);
+      const you = Boolean(j.you ?? j.liked ?? j.meLiked);
+      return { count: isFinite(count) ? count : 0, you };
+    }
+    return null;
+  } catch {
+    return null;
   }
-  return false;
 }
 
 export default function LikeSystem() {
-  const peerDidRef = useRef<string>("");
-  const pollRef = useRef<number | null>(null);
+  const [st, setSt] = useState<LikeState>({ count: 0, you: false, busy: false });
+  const [visible, setVisible] = useState(false);
+  const peerDidRef = useRef<string | null>(null);
 
-  // التعرّف على DID للطرف وتحديثه من الميتا
+  // ظهور/اختفاء الودجت حسب المرحلة
   useEffect(() => {
-    const setDid = (d?: any) => {
-      const did =
-        d?.did || d?.peerDid || d?.id || d?.identity ||
-        (globalThis as any).__ditonaPeerDid || (globalThis as any).__peerDid || "";
-      if (did && did !== peerDidRef.current) {
-        peerDidRef.current = String(did);
-        fetchCountByDid(peerDidRef.current);
-      }
-    };
-
-    const onMeta = (e: any) => setDid(e?.detail);
-    window.addEventListener("ditona:peer-meta", onMeta as any);
-    window.addEventListener("rtc:peer-meta", onMeta as any);
-
-    const onPair = () => {
-      // زوج جديد: امسح العداد مؤقتًا ريثما تصل الميتا
-      emit("like:sync", { count: 0 });
-      // جرّب الالتقاط من المتغيرات العالمية فورًا
-      setTimeout(() => setDid(), 150);
-    };
-    window.addEventListener("rtc:pair", onPair as any);
-
     const onPhase = (e: any) => {
       const ph = e?.detail?.phase;
-      if (ph === "searching" || ph === "stopped" || ph === "matched") {
-        emit("like:sync", { count: 0 });
+      // لا نعرض أيقونة القلب أثناء البحث
+      if (ph === "connected") setVisible(true);
+      if (ph === "searching" || ph === "matched" || ph === "stopped" || ph === "idle") {
+        setVisible(false);
+        peerDidRef.current = null;
+        setSt({ count: 0, you: false, busy: false });
       }
     };
     window.addEventListener("rtc:phase", onPhase as any);
-
-    // مؤقّت polling خفيف بالـdid فقط
-    pollRef.current = window.setInterval(() => {
-      const did = peerDidRef.current;
-      if (did) fetchCountByDid(did);
-    }, 4000);
-
-    return () => {
-      window.removeEventListener("ditona:peer-meta", onMeta as any);
-      window.removeEventListener("rtc:peer-meta", onMeta as any);
-      window.removeEventListener("rtc:pair", onPair as any);
-      window.removeEventListener("rtc:phase", onPhase as any);
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    return () => window.removeEventListener("rtc:phase", onPhase as any);
   }, []);
 
-  // دعم إرسال اللايك من شريط الأدوات عبر ChatClient فقط. لا UI هنا.
-  // ملاحظة: ChatClient هو المسؤول عن:
-  //  - نشر {t:"like"} على الـDC
-  //  - POST /api/like مع headers:{ "x-did": stableDid() } و body:{ targetDid, liked }
-  //  - بث like:sync بعد النجاح أو التراجع بعد الفشل
+  // التهيئة عند ظهور زوج جديد: نقرأ peerDid ونزامن العدّاد من الـAPI
+  useEffect(() => {
+    const onPair = () => {
+      const did = (globalThis as any).__ditonaPeerDid || (globalThis as any).__peerDid || null;
+      peerDidRef.current = typeof did === "string" && did ? did : null;
+      setSt((s) => ({ ...s, busy: true }));
+      if (peerDidRef.current) {
+        // قراءة أولية عبر POST بدون liked
+        apiLike({ targetDid: peerDidRef.current }).then((res) => {
+          setSt({
+            count: res?.count ?? 0,
+            you: !!res?.you,
+            busy: false,
+          });
+        });
+      } else {
+        setSt({ count: 0, you: false, busy: false });
+      }
+    };
+    window.addEventListener("rtc:pair", onPair as any);
+    return () => window.removeEventListener("rtc:pair", onPair as any);
+  }, []);
 
-  return null;
+  // استماع لتزامن الـDC: like:sync {count, you?, pairId?}
+  useEffect(() => {
+    const onSync = (e: any) => {
+      const d = e?.detail || {};
+      if (typeof d.count === "number") {
+        setSt((s) => ({ ...s, count: Math.max(0, d.count | 0) }));
+      }
+      if (typeof d.you === "boolean") {
+        setSt((s) => ({ ...s, you: !!d.you }));
+      }
+    };
+    window.addEventListener("like:sync", onSync as any);
+    return () => window.removeEventListener("like:sync", onSync as any);
+  }, []);
+
+  async function toggleLike() {
+    if (st.busy) return;
+    const targetDid = peerDidRef.current;
+    if (!targetDid) return;
+
+    // تحديث متفائل
+    const nextYou = !st.you;
+    const nextCount = Math.max(0, st.count + (nextYou ? 1 : -1));
+    setSt({ count: nextCount, you: nextYou, busy: true });
+
+    // API الفعلي
+    const res = await apiLike({ targetDid, liked: nextYou });
+    if (res) {
+      setSt({ count: res.count ?? nextCount, you: res.you ?? nextYou, busy: false });
+      // دفع إشارة عبر الـDC عند النجاح
+      try {
+        const room: any = (globalThis as any).__lkRoom;
+        if (room?.localParticipant?.publishData) {
+          const bin = new TextEncoder().encode(JSON.stringify({ t: "like:sync", count: res.count ?? nextCount, you: res.you ?? nextYou }));
+          room.localParticipant.publishData(bin, { reliable: true, topic: "like" });
+        }
+      } catch {}
+    } else {
+      // فشل → رجوع للحالة السابقة
+      setSt({ count: Math.max(0, st.count), you: st.you, busy: false });
+    }
+  }
+
+  if (!visible) return null;
+
+  return (
+    <div className="absolute right-4 top-4 z-30 pointer-events-auto select-none">
+      {/* عدّاد الطرف الآخر */}
+      <div className="mb-2 inline-flex items-center gap-1 px-3 py-1 rounded-full bg-black/50 border border-white/15 backdrop-blur">
+        <span className="text-pink-400 text-sm">💖</span>
+        <span className="text-white text-sm font-medium">{st.count}</span>
+      </div>
+
+      {/* زرّ التبديل */}
+      <button
+        onClick={toggleLike}
+        disabled={st.busy || !peerDidRef.current}
+        aria-label={st.you ? "Unlike" : "Like"}
+        className={`block w-14 h-14 rounded-full border-2 flex items-center justify-center transition-all
+          ${st.you ? "bg-pink-500 border-pink-400 text-white" : "bg-black/50 border-white/30 text-white hover:border-pink-400"}
+          ${st.busy ? "opacity-60 cursor-not-allowed" : ""}`}
+      >
+        <span className="text-2xl">{st.you ? "💗" : "🤍"}</span>
+      </button>
+    </div>
+  );
 }
