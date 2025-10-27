@@ -4,155 +4,155 @@
 import { useEffect, useRef, useState } from "react";
 
 type LikeState = {
-  count: number;      // عدّاد الطرف الآخر (B)
-  you: boolean;       // هل أنا أحببته
-  busy: boolean;      // منع النقرات المتتالية
+  isLiked: boolean;
+  canLike: boolean;
+  hidden: boolean;          // أخفِ الزر إلا عند connected
+  targetDid: string | null; // DID للطرف
+  pairId: string | null;    // للفلترة في أحداث sync
 };
 
-function stableMyDid(): string {
+function stableDid(): string {
   try {
     const k = "ditona_did";
-    const v = localStorage.getItem(k);
-    if (v) return v;
-    const gen = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
-    localStorage.setItem(k, gen);
-    return gen;
+    let v = localStorage.getItem(k);
+    if (!v) { v = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9); localStorage.setItem(k, v); }
+    return v;
   } catch {
     return "did-" + Math.random().toString(36).slice(2, 9);
   }
 }
 
-async function apiLike(opts: { targetDid: string; liked?: boolean }): Promise<{ count?: number; you?: boolean } | null> {
-  try {
-    const me = stableMyDid();
-    const r = await fetch("/api/like", {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { "content-type": "application/json", "x-did": me },
-      body: JSON.stringify(opts),
-    });
-    if (!r.ok) return null;
-    const j = await r.json().catch(() => null);
-    // نتوقع {count, you}. إن اختلفت المفاتيح نُطبّعها
-    if (j && typeof j === "object") {
-      const count = Number(j.count ?? j.likes ?? 0);
-      const you = Boolean(j.you ?? j.liked ?? j.meLiked);
-      return { count: isFinite(count) ? count : 0, you };
-    }
-    return null;
-  } catch {
-    return null;
-  }
+function curPair(): string | null {
+  const w: any = globalThis as any;
+  return w.__ditonaPairId || w.__pairId || null;
+}
+
+function curPeerDid(): string | null {
+  const w: any = globalThis as any;
+  return w.__ditonaPeerDid || w.__peerDid || null;
+}
+
+async function likePost(targetDid: string, liked?: boolean) {
+  const me = stableDid();
+  const r = await fetch("/api/like", {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", "x-did": me },
+    body: JSON.stringify(liked == null ? { targetDid } : { targetDid, liked }),
+  });
+  const j = await r.json().catch(() => null);
+  return { ok: r.ok, j };
 }
 
 export default function LikeSystem() {
-  const [st, setSt] = useState<LikeState>({ count: 0, you: false, busy: false });
-  const [visible, setVisible] = useState(false);
-  const peerDidRef = useRef<string | null>(null);
+  const [st, setSt] = useState<LikeState>({
+    isLiked: false,
+    canLike: true,
+    hidden: true,
+    targetDid: curPeerDid(),
+    pairId: curPair(),
+  });
 
-  // ظهور/اختفاء الودجت حسب المرحلة
+  const mounted = useRef(false);
+
+  // طور الاتصال يُظهر/يخفي
   useEffect(() => {
     const onPhase = (e: any) => {
       const ph = e?.detail?.phase;
-      // لا نعرض أيقونة القلب أثناء البحث
-      if (ph === "connected") setVisible(true);
-      if (ph === "searching" || ph === "matched" || ph === "stopped" || ph === "idle") {
-        setVisible(false);
-        peerDidRef.current = null;
-        setSt({ count: 0, you: false, busy: false });
-      }
+      setSt(s => ({ ...s, hidden: ph !== "connected" }));
     };
     window.addEventListener("rtc:phase", onPhase as any);
+    // حالة البداية
+    setSt(s => ({ ...s, hidden: (globalThis as any).__lkRoom?.state !== "connected" }));
     return () => window.removeEventListener("rtc:phase", onPhase as any);
   }, []);
 
-  // التهيئة عند ظهور زوج جديد: نقرأ peerDid ونزامن العدّاد من الـAPI
+  // التثبيت الأول + التقاط الـDID عند كل pair أو عند وصول meta
   useEffect(() => {
-    const onPair = () => {
-      const did = (globalThis as any).__ditonaPeerDid || (globalThis as any).__peerDid || null;
-      peerDidRef.current = typeof did === "string" && did ? did : null;
-      setSt((s) => ({ ...s, busy: true }));
-      if (peerDidRef.current) {
-        // قراءة أولية عبر POST بدون liked
-        apiLike({ targetDid: peerDidRef.current }).then((res) => {
-          setSt({
-            count: res?.count ?? 0,
-            you: !!res?.you,
-            busy: false,
-          });
-        });
-      } else {
-        setSt({ count: 0, you: false, busy: false });
-      }
-    };
-    window.addEventListener("rtc:pair", onPair as any);
-    return () => window.removeEventListener("rtc:pair", onPair as any);
-  }, []);
+    if (mounted.current) return;
+    mounted.current = true;
 
-  // استماع لتزامن الـDC: like:sync {count, you?, pairId?}
-  useEffect(() => {
+    const syncTarget = () =>
+      setSt(s => ({ ...s, targetDid: curPeerDid(), pairId: curPair() }));
+
+    const onPair = () => {
+      syncTarget();
+      const did = curPeerDid();
+      if (!did) return;
+      // قراءة الحالة الأولية بالـPOST فقط
+      likePost(did, undefined).then(({ ok, j }) => {
+        if (!ok || !j) return;
+        setSt(s => ({ ...s, isLiked: !!j.you, canLike: true }));
+        // ادفع sync للواجهة الأخرى ولمراقبينا المحليين
+        const pid = curPair();
+        try {
+          const room: any = (globalThis as any).__lkRoom;
+          const payload = { t: "like:sync", count: j.count, you: j.you, pairId: pid };
+          room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), { reliable: true, topic: "like" });
+        } catch {}
+        window.dispatchEvent(new CustomEvent("like:sync", { detail: { count: j.count, you: j.you, pairId: pid } }));
+      });
+    };
+
+    const onPeerMeta = () => syncTarget();
+
+    window.addEventListener("rtc:pair", onPair as any);
+    window.addEventListener("ditona:peer-meta", onPeerMeta as any);
+    // تزامن عدّاد من بث خارجي
     const onSync = (e: any) => {
       const d = e?.detail || {};
-      if (typeof d.count === "number") {
-        setSt((s) => ({ ...s, count: Math.max(0, d.count | 0) }));
-      }
-      if (typeof d.you === "boolean") {
-        setSt((s) => ({ ...s, you: !!d.you }));
-      }
+      const pid = curPair();
+      if (d?.pairId && pid && d.pairId !== pid) return;
+      // لا نرسم العداد هنا؛ PeerOverlay يتكفل. فقط نحدّث حالة الزر.
+      if (typeof d.you === "boolean") setSt(s => ({ ...s, isLiked: d.you }));
     };
     window.addEventListener("like:sync", onSync as any);
-    return () => window.removeEventListener("like:sync", onSync as any);
+
+    // بداية
+    onPair();
+
+    return () => {
+      window.removeEventListener("rtc:pair", onPair as any);
+      window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
+      window.removeEventListener("like:sync", onSync as any);
+    };
   }, []);
 
-  async function toggleLike() {
-    if (st.busy) return;
-    const targetDid = peerDidRef.current;
-    if (!targetDid) return;
-
-    // تحديث متفائل
-    const nextYou = !st.you;
-    const nextCount = Math.max(0, st.count + (nextYou ? 1 : -1));
-    setSt({ count: nextCount, you: nextYou, busy: true });
-
-    // API الفعلي
-    const res = await apiLike({ targetDid, liked: nextYou });
-    if (res) {
-      setSt({ count: res.count ?? nextCount, you: res.you ?? nextYou, busy: false });
-      // دفع إشارة عبر الـDC عند النجاح
-      try {
-        const room: any = (globalThis as any).__lkRoom;
-        if (room?.localParticipant?.publishData) {
-          const bin = new TextEncoder().encode(JSON.stringify({ t: "like:sync", count: res.count ?? nextCount, you: res.you ?? nextYou }));
-          room.localParticipant.publishData(bin, { reliable: true, topic: "like" });
-        }
-      } catch {}
-    } else {
-      // فشل → رجوع للحالة السابقة
-      setSt({ count: Math.max(0, st.count), you: st.you, busy: false });
+  async function onToggle() {
+    if (!st.canLike || !st.targetDid) return;
+    const next = !st.isLiked;
+    // تحديث تفاؤلي
+    setSt(s => ({ ...s, isLiked: next, canLike: false }));
+    const { ok, j } = await likePost(st.targetDid, next);
+    if (!ok || !j) {
+      // تراجع
+      setSt(s => ({ ...s, isLiked: !next, canLike: true }));
+      return;
     }
+    const pid = curPair();
+    // بثّ sync: DC + حدث محلّي (ليلتقطه PeerOverlay)
+    try {
+      const room: any = (globalThis as any).__lkRoom;
+      const payload = { t: "like:sync", count: j.count, you: j.you, pairId: pid };
+      room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), { reliable: true, topic: "like" });
+    } catch {}
+    window.dispatchEvent(new CustomEvent("like:sync", { detail: { count: j.count, you: j.you, pairId: pid } }));
+    setSt(s => ({ ...s, canLike: true }));
   }
 
-  if (!visible) return null;
+  if (st.hidden || !st.targetDid) return null;
 
   return (
-    <div className="absolute right-4 top-4 z-30 pointer-events-auto select-none">
-      {/* عدّاد الطرف الآخر */}
-      <div className="mb-2 inline-flex items-center gap-1 px-3 py-1 rounded-full bg-black/50 border border-white/15 backdrop-blur">
-        <span className="text-pink-400 text-sm">💖</span>
-        <span className="text-white text-sm font-medium">{st.count}</span>
-      </div>
-
-      {/* زرّ التبديل */}
+    <div className="absolute top-4 right-4 z-30">
       <button
-        onClick={toggleLike}
-        disabled={st.busy || !peerDidRef.current}
-        aria-label={st.you ? "Unlike" : "Like"}
-        className={`block w-14 h-14 rounded-full border-2 flex items-center justify-center transition-all
-          ${st.you ? "bg-pink-500 border-pink-400 text-white" : "bg-black/50 border-white/30 text-white hover:border-pink-400"}
-          ${st.busy ? "opacity-60 cursor-not-allowed" : ""}`}
+        onClick={onToggle}
+        disabled={!st.canLike}
+        aria-label={st.isLiked ? "Unlike" : "Like"}
+        className={`w-12 h-12 rounded-full border-2 grid place-items-center transition-all
+        ${st.isLiked ? "bg-pink-500 border-pink-400 text-white scale-110"
+                     : "bg-black/50 border-white/30 text-white hover:border-pink-400 hover:bg-pink-500/20"}`}
       >
-        <span className="text-2xl">{st.you ? "💗" : "🤍"}</span>
+        <span className="text-2xl">{st.isLiked ? "💗" : "🤍"}</span>
       </button>
     </div>
   );
