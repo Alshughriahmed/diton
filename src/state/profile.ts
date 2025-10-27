@@ -1,9 +1,10 @@
-'use client';
+// src/state/profile.ts
+"use client";
 
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { Profile } from '@/lib/profile';
-import { normalizeGender } from '@/lib/gender';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { Profile } from "@/lib/profile";
+import { normalizeGender } from "@/lib/gender";
 
 type Store = {
   profile: Profile;
@@ -14,32 +15,32 @@ type Store = {
   reset: () => void;
 };
 
-function emitProfileUpdated(g: any) {
+function emitProfileUpdated(detail: any) {
   try {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('profile:updated', { detail: { gender: g } }));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("profile:updated", { detail }));
     }
   } catch {}
 }
 
 // Default profile: store gender normalized (m|f|c|l|u). Start as 'u'.
 const defaultProfile: Profile = {
-  displayName: '',
-  gender: normalizeGender('u') as any,
+  displayName: "",
+  gender: normalizeGender("u") as any,
   avatarDataUrl: undefined,
   introEnabled: false,
-  introText: '',
-  social: { platform: undefined, handle: '' },
+  introText: "",
+  social: { platform: undefined, handle: "" },
   privacy: { hideCountry: false, hideCity: false },
   likes: { showCount: true },
-  translation: { enabled: false, language: 'en' },
+  translation: { enabled: false, language: "en" },
   preferences: {
-    gender: 'all',
+    gender: "all",
     genderSelections: [],
     countries: [],
     beauty: { enabled: false, strength: 50, brightness: 50, smoothness: 50 },
-    masks: { enabled: false, currentMask: 'none' },
-    camera: { facing: 'user' },
+    masks: { enabled: false, currentMask: "none" },
+    camera: { facing: "user" },
   },
 };
 
@@ -51,10 +52,10 @@ export const useProfile = create<Store>()(
       set: (p) =>
         set(() => {
           const cur = get().profile;
-          const hasGender = Object.prototype.hasOwnProperty.call(p, 'gender');
+          const hasGender = Object.prototype.hasOwnProperty.call(p, "gender");
           const nextGender = hasGender ? (normalizeGender((p as any).gender) as any) : (cur as any).gender;
           const next: Profile = { ...cur, ...p, gender: nextGender };
-          if (hasGender && nextGender !== (cur as any).gender) emitProfileUpdated(nextGender);
+          emitProfileUpdated({ profile: next, changed: p });
           return { profile: next };
         }),
 
@@ -63,7 +64,7 @@ export const useProfile = create<Store>()(
           const cur = get().profile;
           const nextGender = normalizeGender((p as any).gender) as any;
           const next: Profile = { ...p, gender: nextGender };
-          if (nextGender !== (cur as any).gender) emitProfileUpdated(nextGender);
+          emitProfileUpdated({ profile: next });
           return { profile: next };
         }),
 
@@ -71,12 +72,16 @@ export const useProfile = create<Store>()(
         const cur = get().profile;
         const norm = normalizeGender(g) as any;
         if ((cur as any).gender === norm) return;
-        set({ profile: { ...cur, gender: norm } });
-        emitProfileUpdated(norm);
+        const next = { ...cur, gender: norm };
+        set({ profile: next });
+        emitProfileUpdated({ profile: next, changed: { gender: norm } });
       },
 
-      reset: () => set({ profile: defaultProfile }),
+      reset: () => {
+        set({ profile: defaultProfile });
+        emitProfileUpdated({ profile: defaultProfile, reset: true });
+      },
     }),
-    { name: 'ditona.profile.v1' }
+    { name: "ditona.profile.v1" }
   )
 );
