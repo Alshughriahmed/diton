@@ -45,7 +45,7 @@ function shallowEq(a: Meta, b: Meta) {
 }
 
 function genderBadgeLocal(
-  g: unknown
+  g: unknown,
 ): { symbol: string; label: string; labelCls: string; symbolCls: string } | null {
   const n = normalizeGender(g);
   if (n === "u") return null;
@@ -62,9 +62,8 @@ function genderBadgeLocal(
       const GRAD = "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
       return { symbol: "🏳️‍🌈", label: "LGBTQ+", labelCls: GRAD, symbolCls: `${GRAD} ${BIG}` };
     }
-    default:
-      return null;
   }
+  return null;
 }
 
 export default function PeerOverlay() {
@@ -87,15 +86,13 @@ export default function PeerOverlay() {
         city: d.city ?? meta.city,
         gender: d.gender ?? meta.gender,
         avatarUrl: d.avatarUrl ?? d.avatar ?? meta.avatarUrl,
-        // لا تأخذ قيمة likes من الإغلاق القديم. استخدم الرسالة فقط إن حملت رقمًا.
-        likes: typeof d.likes === "number" ? d.likes : undefined,
+        likes: typeof d.likes === "number" ? d.likes : likes,
         displayName: d.displayName ?? d.name ?? meta.displayName,
         vip: !!(d.vip ?? d.isVip ?? d.premium ?? d.pro ?? meta.vip),
         hideLikes: !!(d.hideLikes ?? meta.hideLikes),
         hideCountry: !!(d.hideCountry ?? meta.hideCountry),
         hideCity: !!(d.hideCity ?? meta.hideCity),
       };
-      if (typeof next.likes !== "number") delete (next as any).likes;
 
       try {
         const w: any = globalThis as any;
@@ -141,7 +138,7 @@ export default function PeerOverlay() {
 
     const onPhase = (ev: any) => {
       const ph = ev?.detail?.phase;
-      if (ph === "searching" || ph === "stopped") resetAll(); // لا نمسح على matched
+      if (ph === "searching" || ph === "stopped") resetAll();
     };
 
     window.addEventListener("ditona:peer-meta", onMeta as any);
