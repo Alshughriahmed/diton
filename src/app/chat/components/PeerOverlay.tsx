@@ -1,12 +1,21 @@
+// src/app/chat/components/PeerOverlay.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { normalizeGender, genderLabel } from "@/lib/gender";
 
 type Meta = {
-  did?: string; country?: string; city?: string; gender?: string;
-  avatarUrl?: string; likes?: number; displayName?: string; vip?: boolean;
-  hideLikes?: boolean; hideCountry?: boolean; hideCity?: boolean;
+  did?: string;
+  country?: string;
+  city?: string;
+  gender?: string;
+  avatarUrl?: string;
+  likes?: number;
+  displayName?: string;
+  vip?: boolean;
+  hideLikes?: boolean;
+  hideCountry?: boolean;
+  hideCity?: boolean;
 };
 
 function loadCached(): Meta {
@@ -15,31 +24,47 @@ function loadCached(): Meta {
     if (w.__ditonaLastPeerMeta && typeof w.__ditonaLastPeerMeta === "object") return w.__ditonaLastPeerMeta;
     const raw = sessionStorage.getItem("ditona:last_peer_meta");
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 function shallowEq(a: Meta, b: Meta) {
-  return a.did===b.did && a.country===b.country && a.city===b.city && a.gender===b.gender &&
-         a.avatarUrl===b.avatarUrl && a.displayName===b.displayName &&
-         !!a.vip===!!b.vip && !!a.hideLikes===!!b.hideLikes &&
-         !!a.hideCountry===!!b.hideCountry && !!a.hideCity===!!b.hideCity;
+  return (
+    a.did === b.did &&
+    a.country === b.country &&
+    a.city === b.city &&
+    a.gender === b.gender &&
+    a.avatarUrl === b.avatarUrl &&
+    a.displayName === b.displayName &&
+    !!a.vip === !!b.vip &&
+    !!a.hideLikes === !!b.hideLikes &&
+    !!a.hideCountry === !!b.hideCountry &&
+    !!a.hideCity === !!b.hideCity
+  );
 }
 
-function genderBadgeLocal(g: unknown) {
+function genderBadgeLocal(
+  g: unknown
+): { symbol: string; label: string; labelCls: string; symbolCls: string } | null {
   const n = normalizeGender(g);
   if (n === "u") return null;
   const label = genderLabel(n);
   const BIG = "text-[1.25rem] sm:text-[1.5rem] leading-none";
   switch (n) {
-    case "m": return { symbol: "♂", label, labelCls: "text-blue-500",  symbolCls: `text-blue-500 ${BIG}` };
-    case "f": return { symbol: "♀", label, labelCls: "text-red-500",   symbolCls: `text-red-500 ${BIG}` };
-    case "c": return { symbol: "⚤", label, labelCls: "text-rose-400",  symbolCls: `text-rose-400 ${BIG}` };
+    case "m":
+      return { symbol: "♂", label, labelCls: "text-blue-500", symbolCls: `text-blue-500 ${BIG}` };
+    case "f":
+      return { symbol: "♀", label, labelCls: "text-red-500", symbolCls: `text-red-500 ${BIG}` };
+    case "c":
+      return { symbol: "⚤", label, labelCls: "text-rose-400", symbolCls: `text-rose-400 ${BIG}` };
     case "l": {
-      const GRAD="bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
+      const GRAD = "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
       return { symbol: "🏳️‍🌈", label: "LGBTQ+", labelCls: GRAD, symbolCls: `${GRAD} ${BIG}` };
     }
+    default:
+      return null;
   }
-  return null;
 }
 
 export default function PeerOverlay() {
@@ -62,19 +87,33 @@ export default function PeerOverlay() {
         city: d.city ?? meta.city,
         gender: d.gender ?? meta.gender,
         avatarUrl: d.avatarUrl ?? d.avatar ?? meta.avatarUrl,
-        likes: typeof d.likes === "number" ? d.likes : likes,
+        // لا تأخذ قيمة likes من الإغلاق القديم. استخدم الرسالة فقط إن حملت رقمًا.
+        likes: typeof d.likes === "number" ? d.likes : undefined,
         displayName: d.displayName ?? d.name ?? meta.displayName,
         vip: !!(d.vip ?? d.isVip ?? d.premium ?? d.pro ?? meta.vip),
         hideLikes: !!(d.hideLikes ?? meta.hideLikes),
         hideCountry: !!(d.hideCountry ?? meta.hideCountry),
         hideCity: !!(d.hideCity ?? meta.hideCity),
       };
+      if (typeof next.likes !== "number") delete (next as any).likes;
+
       try {
         const w: any = globalThis as any;
-        if (next.did) { w.__peerDid = next.did; w.__ditonaPeerDid = next.did; }
+        if (next.did) {
+          w.__peerDid = next.did;
+          w.__ditonaPeerDid = next.did;
+        }
       } catch {}
-      if (!shallowEq(meta, next)) { setMeta(next); save(next); }
-      if (typeof next.likes === "number") setLikes((prev) => (next.likes! !== prev ? next.likes! : prev));
+
+      if (!shallowEq(meta, next)) {
+        setMeta(next);
+        save(next);
+      }
+
+      if (typeof next.likes === "number") {
+        const nv = Math.max(0, Number(next.likes) || 0);
+        setLikes((prev) => (nv !== prev ? nv : prev));
+      }
     };
 
     const onLikeSync = (ev: any) => {
@@ -82,15 +121,21 @@ export default function PeerOverlay() {
       const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
       if (d.pairId && curPair && d.pairId !== curPair) return;
       const n = typeof d.count === "number" ? d.count : typeof d.likes === "number" ? d.likes : null;
-      if (n != null) setLikes((p) => (n !== p ? Math.max(0, Number(n) || 0) : p));
+      if (n != null) {
+        const nv = Math.max(0, Number(n) || 0);
+        setLikes((p) => (nv !== p ? nv : p));
+      }
     };
 
     const resetAll = () => {
-      setMeta({}); setLikes(0);
+      setMeta({});
+      setLikes(0);
       try {
         const w: any = globalThis as any;
-        delete w.__peerDid; delete w.__ditonaPeerDid;
-        sessionStorage.removeItem("ditona:last_peer_meta"); w.__ditonaLastPeerMeta = {};
+        delete w.__peerDid;
+        delete w.__ditonaPeerDid;
+        sessionStorage.removeItem("ditona:last_peer_meta");
+        w.__ditonaLastPeerMeta = {};
       } catch {}
     };
 
@@ -137,8 +182,14 @@ export default function PeerOverlay() {
         <div className="h-8 w-8 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
           {meta.avatarUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={meta.avatarUrl} alt="" className="h-full w-full object-cover"
-                 onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")} />
+            <img
+              src={meta.avatarUrl}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = "none";
+              }}
+            />
           ) : (
             <div className="h-full w-full grid place-items-center text-[10px] text-white/80 bg-black/30">?</div>
           )}
@@ -146,10 +197,12 @@ export default function PeerOverlay() {
         <div className="flex items-center gap-1 text-white/95 drop-shadow">
           {meta.displayName && <span className="text-xs font-medium">{meta.displayName}</span>}
           {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
-          {showLikes && <>
-            <span className="ml-1 text-sm">❤</span>
-            <span className="text-xs">{likes}</span>
-          </>}
+          {showLikes && (
+            <>
+              <span className="ml-1 text-sm">❤</span>
+              <span className="text-xs">{likes}</span>
+            </>
+          )}
         </div>
       </div>
 
