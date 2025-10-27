@@ -1,13 +1,10 @@
 // src/app/chat/likeSyncClient.ts
 /**
- * مزامنة الإعجاب عبر قناة البيانات + دالة توافقية مع LikeSystem.tsx.
- * يدعم:
- *  - likeApiThenDc(liked:boolean)
- *  - likeApiThenDc(pairId:string, dc?:any)  // توقيع قديم
+ * مزامنة إعجاب عبر قناة البيانات.
+ * - يمرّر رسائل like:sync الواردة كحدث window "like:sync".
+ * - يحوّل رسائل {t:"like", liked:boolean} القديمة إلى "rtc:peer-like".
+ * - يوفر likeApiThenDc() للتماثل مع الكود القائم.
  */
-
-// لا نعلن أنواع نافذة صارمة لتفادي تعارضات مع الشيم
-// نستعمل (window as any) فقط.
 
 function parseJSONFromDC(ev: MessageEvent) {
   const d = (ev as any)?.data;
@@ -30,7 +27,14 @@ function emitPeerLike(liked: boolean) {
   } catch {}
 }
 
-/** إرسال إشعار الإعجاب عبر LiveKit أو الشِّيم. */
+function emitLikeSync(payload: any) {
+  try {
+    // انتبه لمواءمة pairId إن وُجد
+    window.dispatchEvent(new CustomEvent("like:sync", { detail: payload }));
+  } catch {}
+}
+
+/** إرسال إشعار إعجاب عبر LiveKit أو الشِّيم. */
 export async function likeApiThenDc(a?: any, _b?: any): Promise<{ ok: boolean; duplicate?: boolean }> {
   try {
     const legacy = typeof a === "string"; // pairId, dc (غير مستخدمين فعليًا هنا)
@@ -39,8 +43,7 @@ export async function likeApiThenDc(a?: any, _b?: any): Promise<{ ok: boolean; d
     const room = (window as any).__lkRoom;
     const dc = (window as any).__ditonaDataChannel;
 
-    const payloadObj =
-      likedArg === undefined ? { type: "like:toggled" } : { t: "like", liked: !!likedArg };
+    const payloadObj = likedArg === undefined ? { type: "like:toggled" } : { t: "like", liked: !!likedArg };
     const payloadTxt = JSON.stringify(payloadObj);
     const payloadBin = new TextEncoder().encode(payloadTxt);
 
@@ -68,10 +71,23 @@ export async function likeApiThenDc(a?: any, _b?: any): Promise<{ ok: boolean; d
   const onDCMessage = (ev: MessageEvent) => {
     const j = parseJSONFromDC(ev);
     if (!j) return;
+
+    // الشكل القديم
     if (j?.t === "like" && typeof j.liked === "boolean") {
       emitPeerLike(!!j.liked);
-    } else if (j?.type === "like:toggled" && j?.payload && typeof j.payload.liked === "boolean") {
+      return;
+    }
+
+    // مزامنة رسمية للعداد والحالة
+    if (j?.t === "like:sync" && (typeof j.count === "number" || typeof j.you === "boolean")) {
+      emitLikeSync({ count: j.count, you: j.you, pairId: j.pairId });
+      return;
+    }
+
+    // شكل تجريبي سابق
+    if (j?.type === "like:toggled" && j?.payload && typeof j.payload.liked === "boolean") {
       emitPeerLike(!!j.payload.liked);
+      return;
     }
   };
 
