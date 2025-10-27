@@ -5,7 +5,7 @@ import { emit, on } from "@/utils/events";
 import safeFetch from "@/app/chat/safeFetch";
 import { likeApiThenDc } from "@/app/chat/likeSyncClient";
 
-type LikeData = {
+type LikeState = {
   myLikes: number;
   peerLikes: number;
   isLiked: boolean;
@@ -13,128 +13,100 @@ type LikeData = {
 };
 
 export default function LikeSystem() {
-  // منطق اللايكات فقط، بدون أي UI
-  const [likeData, setLikeData] = useState<LikeData>({
-    myLikes: 0,
-    peerLikes: 0,
-    isLiked: false,
-    canLike: true,
-  });
+  const [st, setSt] = useState<LikeState>({ myLikes: 0, peerLikes: 0, isLiked: false, canLike: true });
+  const pairRef = useRef<string | null>(null);
+  const connectedRef = useRef(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const [phase, setPhase] = useState<string>("idle");
-  const [pairId, setPairId] = useState<string | null>(null);
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
-
-  const readPairId = () => {
-    try {
-      return (
-        (window as any).__ditonaPairId ||
-        (window as any).__pairId ||
-        null
-      );
-    } catch {
-      return null;
-    }
-  };
-
-  const stopPolling = () => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-  };
-
-  const pollOnce = async (pid: string) => {
+  const pollOnce = async () => {
+    const pid = pairRef.current;
+    if (!connectedRef.current || !pid) return;
     try {
       const r = await safeFetch(`/api/like?pairId=${encodeURIComponent(pid)}`, { method: "GET" });
-      if (!r.ok) return;
-      const j = await r.json();
-      setLikeData((prev) => ({
-        ...prev,
-        peerLikes: j.count || 0,
-        isLiked: !!(j.you ?? j.mine),
-        canLike: true,
-      }));
+      if (r.ok) {
+        const j = await r.json();
+        setSt((p) => ({ ...p, peerLikes: j.count || 0, isLiked: !!(j.mine ?? j.you), canLike: true }));
+      }
     } catch {}
   };
 
-  const startPolling = (pid: string) => {
+  const startPolling = () => {
     stopPolling();
-    pollOnce(pid);
-    pollingRef.current = setInterval(() => pollOnce(pid), 2000);
+    pollOnce();
+    pollRef.current = setInterval(pollOnce, 2000);
+  };
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
 
-  // تتبّع المرحلة والزوج الحالي
+  // pair + phase wiring
   useEffect(() => {
-    const offPair = on("rtc:pair" as any, (d: any) => {
-      const pid = d?.pairId || readPairId();
-      setPairId(pid || null);
-      setLikeData((s) => ({ ...s, peerLikes: 0, isLiked: false, canLike: true }));
-      if (pid) startPolling(pid);
+    const offPair = on("rtc:pair" as any, (d) => {
+      pairRef.current = d?.pairId || null;
+      setSt({ myLikes: 0, peerLikes: 0, isLiked: false, canLike: true });
+      if (connectedRef.current && pairRef.current) startPolling();
     });
 
-    const offPhase = on("rtc:phase" as any, (d: any) => {
-      const p = d?.phase || "idle";
-      setPhase(p);
-      if (p === "searching" || p === "matched" || p === "stopped" || p === "idle") {
+    const offPhase = on("rtc:phase" as any, (d) => {
+      const ph = d?.phase;
+      connectedRef.current = ph === "connected";
+      if (!connectedRef.current) {
         stopPolling();
-        setPairId(null);
-        setLikeData((s) => ({ ...s, peerLikes: 0, isLiked: false, canLike: true }));
+        setSt({ myLikes: 0, peerLikes: 0, isLiked: false, canLike: true });
+      } else if (pairRef.current) {
+        startPolling();
       }
     });
 
-    const onDcClosed = () => {
-      // في حال انقطع الـDC نزيد الاعتماد على polling
-      if (pairId) startPolling(pairId);
-    };
-    try {
-      window.addEventListener("ditona:datachannel-closed", onDcClosed);
-    } catch {}
+    // back-compat external updates
+    const offUiUpd = on("ui:likeUpdate", (data) => data && setSt((p) => ({ ...p, ...data })));
+
+    // DC closed → نعتمد على polling فقط
+    const onDcClosed = () => connectedRef.current && pairRef.current && startPolling();
+    window.addEventListener("ditona:datachannel-closed", onDcClosed);
 
     return () => {
-      if (typeof offPair === "function") offPair();
-      if (typeof offPhase === "function") offPhase();
-      try { window.removeEventListener("ditona:datachannel-closed", onDcClosed); } catch {}
-      stopPolling();
+      offPair?.(); offPhase?.(); offUiUpd?.(); stopPolling();
+      window.removeEventListener("ditona:datachannel-closed", onDcClosed);
     };
-  }, [pairId]);
+  }, []);
 
-  // استقبال طلبات الإرسال من شريط الأدوات
+  // public action via custom event from شريط الأدوات
   useEffect(() => {
-    const onUiLike = (d: any) => {
-      if (!pairId || phase !== "connected") return;
-      // قلب الحالة تفاؤليًا
-      const optimistic = !likeData.isLiked;
-      const snapshot = likeData;
+    const onTap = async (e: any) => {
+      const pid = pairRef.current;
+      if (!pid || !st.canLike) return;
 
-      setLikeData((s) => ({
-        ...s,
-        isLiked: optimistic,
-        peerLikes: Math.max(0, s.peerLikes + (optimistic ? 1 : -1)),
+      const original = st;
+      const nextIsLiked = !st.isLiked;
+
+      // optimistic
+      setSt((p) => ({
+        ...p,
+        isLiked: nextIsLiked,
+        peerLikes: Math.max(0, p.peerLikes + (nextIsLiked ? 1 : -1)),
         canLike: false,
       }));
 
-      (async () => {
-        try {
-          const dc = (globalThis as any).__ditonaDataChannel;
-          const res = await likeApiThenDc(pairId, dc);
-          if (res?.ok) {
-            // حدّث من الخادم ليبقى العداد دقيقًا
-            await pollOnce(pairId);
-          } else {
-            // فشل → رجوع
-            setLikeData({ ...snapshot, canLike: true });
-          }
-        } catch {
-          setLikeData({ ...snapshot, canLike: true });
-        }
-      })();
+      try {
+        const dc = (globalThis as any).__ditonaDataChannel;
+        const res = await likeApiThenDc(pid, dc);
+        if (!res || !res.ok) throw new Error("like failed");
+        // sync from server
+        await pollOnce();
+        emit("ui:like", { isLiked: nextIsLiked, myLikes: st.myLikes, pairId: pid });
+      } catch {
+        // rollback
+        setSt({ ...original, canLike: true });
+      } finally {
+        setSt((p) => ({ ...p, canLike: true }));
+      }
     };
 
-    const off = on("ui:like", onUiLike as any);
-    return () => { if (typeof off === "function") off(); };
-  }, [pairId, phase, likeData]);
+    window.addEventListener("ui:like:toggle", onTap as any);
+    return () => window.removeEventListener("ui:like:toggle", onTap as any);
+  }, [st]);
 
-  // لا نرسم أي واجهة. يبقى هذا المكوّن خفيًا ويقوم فقط بالتنسيق.
+  // لا UI إطلاقًا
   return null;
 }
