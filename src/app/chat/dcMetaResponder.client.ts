@@ -1,18 +1,19 @@
+// src/app/chat/dcMetaResponder.client.ts
 "use client";
-
 /**
- * Peer meta responder over global DC shim.
- * Source of truth: profile.gender
- * Triggers send on:
- *  - DC message {t:"meta:init"}  (also dispatches "ditona:meta:init")
- *  - window "ditona:meta:init" (from ChatClient on DataReceived)
- *  - window "rtc:phase" => matched|connected
- *  - window "profile:updated"
- *  - window "ditona:geo"
- *  - optional: "dc:attached", "lk:attached", "livekit:participant-connected"
- * Sends twice (250ms apart). Falls back to LiveKit publishData(topic:"meta").
- */
+Peer meta responder over global DC shim.
 
+Source of truth: profile (gender, privacy, likes)
+Triggers send on:
+- DC message {t:"meta:init"}  (also dispatches "ditona:meta:init")
+- window "ditona:meta:init" (from ChatClient on DataReceived)
+- window "rtc:phase" => matched|connected
+- window "profile:updated"
+- window "ditona:geo"
+- optional: "dc:attached", "lk:attached", "livekit:participant-connected"
+
+Sends twice (250ms apart). Falls back to LiveKit publishData(topic:"meta").
+*/
 import { useProfile } from "@/state/profile";
 import { normalizeGender } from "@/lib/gender";
 
@@ -25,6 +26,9 @@ type Payload = {
   city?: string;
   gender?: string; // "m" | "f" | "c" | "l" | "u"
   likes?: number;
+  hideCountry?: boolean;
+  hideCity?: boolean;
+  hideLikes?: boolean;
 };
 
 const isBrowser = typeof window !== "undefined";
@@ -36,9 +40,7 @@ function readGeo(): Geo {
     const j = JSON.parse(raw);
     return {
       countryCode: String(j.countryCode || j.cc || "").toUpperCase(),
-      country: String(
-        j.country || j.cn || j.ctry || j.country_name || j.countryCode || ""
-      ),
+      country: String(j.country || j.cn || j.ctry || j.country_name || j.countryCode || ""),
       city: String(j.city || j.locality || j.town || ""),
     };
   } catch {
@@ -59,10 +61,8 @@ function buildPayload(): Payload {
   const p: any = readProfile();
   const g = readGeo();
 
-  const displayName =
-    String(p?.displayName || p?.name || "").trim() || undefined;
-  const avatar =
-    String(p?.avatarUrl || p?.avatar || p?.photo || "").trim() || undefined;
+  const displayName = String(p?.displayName || p?.name || "").trim() || undefined;
+  const avatar = String(p?.avatarUrl || p?.avatar || p?.photo || p?.avatarDataUrl || "").trim() || undefined;
   const vip = !!(p?.vip || p?.isVip || p?.premium || p?.pro);
 
   const gender = normalizeGender(p?.gender);
@@ -75,14 +75,21 @@ function buildPayload(): Payload {
       ? p.likes.count
       : undefined;
 
+  const hideCountry = !!p?.privacy?.hideCountry;
+  const hideCity = !!p?.privacy?.hideCity;
+  const hideLikes = !Boolean(p?.likes?.showCount);
+
   return {
     displayName,
     avatar,
     vip,
-    country: g.country,
-    city: g.city,
+    country: hideCountry ? undefined : g.country,
+    city: hideCity ? undefined : g.city,
     gender,
-    likes,
+    likes: hideLikes ? undefined : likes,
+    hideCountry,
+    hideCity,
+    hideLikes,
   };
 }
 
@@ -108,6 +115,7 @@ function sendJSON(obj: any) {
 function sendPeerMetaOnce() {
   sendJSON({ t: "peer-meta", payload: buildPayload() });
 }
+
 function sendPeerMetaTwice() {
   sendPeerMetaOnce();
   setTimeout(sendPeerMetaOnce, 250);
@@ -116,10 +124,8 @@ function sendPeerMetaTwice() {
 function attachOnce() {
   if (!isBrowser) return;
   if ((window as any).__dcMetaResponderBound) return;
-
   const dc: any = (window as any).__ditonaDataChannel;
   if (!dc?.addEventListener) return;
-
   (window as any).__dcMetaResponderBound = 1;
 
   // DC inbound messages
@@ -128,15 +134,15 @@ function attachOnce() {
       const d = (ev as any)?.data;
       let txt: string | null = null;
       if (typeof d === "string") txt = d;
-      else if (d instanceof ArrayBuffer)
-        txt = new TextDecoder().decode(new Uint8Array(d));
-      else if (ArrayBuffer.isView(d))
-        txt = new TextDecoder().decode(d as any);
+      else if (d instanceof ArrayBuffer) txt = new TextDecoder().decode(new Uint8Array(d));
+      else if (ArrayBuffer.isView(d)) txt = new TextDecoder().decode(d as any);
       if (!txt || !/^\s*\{/.test(txt)) return;
 
       const j = JSON.parse(txt);
       if (j?.t === "meta:init") {
-        try { window.dispatchEvent(new CustomEvent("ditona:meta:init")); } catch {}
+        try {
+          window.dispatchEvent(new CustomEvent("ditona:meta:init"));
+        } catch {}
         sendPeerMetaTwice();
       }
     } catch {}
@@ -168,7 +174,9 @@ function attachOnce() {
   // HMR cleanup
   if ((import.meta as any)?.hot) {
     (import.meta as any).hot.dispose(() => {
-      try { dc.removeEventListener?.("message", onMsg as any); } catch {}
+      try {
+        dc.removeEventListener?.("message", onMsg as any);
+      } catch {}
       window.removeEventListener("ditona:geo", onGeo as any);
       window.removeEventListener("profile:updated", onProfile as any);
       window.removeEventListener("rtc:phase", onPhase as any);
@@ -186,7 +194,6 @@ function attachOnce() {
   if (!isBrowser) return;
   if ((window as any).__dcMetaResponderMounted) return;
   (window as any).__dcMetaResponderMounted = 1;
-
   let tries = 0;
   const iv = setInterval(() => {
     tries++;
