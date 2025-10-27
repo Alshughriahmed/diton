@@ -58,7 +58,7 @@ export default function HomeClient() {
       }
     } catch {}
     setGender(normToHome((profileStore as any)?.profile?.gender) as MyGender | null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function selectGender(next: MyGender) {
@@ -98,6 +98,7 @@ export default function HomeClient() {
 
   return (
     <div className="relative min-h-screen text-white">
+      {/* الخلفية */}
       <div className="absolute inset-0 -z-10">
         <div className="absolute inset-0 bg-[url('/hero.webp')] bg-cover bg-center" />
         <div className="absolute inset-0 bg-black/50" />
@@ -106,66 +107,74 @@ export default function HomeClient() {
 
       <HeaderLite />
 
-      <main className="mx-auto max-w-4xl px-4 pt-28 pb-12">
-        <h1 className="text-5xl sm:text-6xl font-extrabold leading-tight">
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600">
-            Welcome to Ditona Video Chat
-          </span>
-        </h1>
-        <p className="mt-4 text-lg text-gray-300">Fun, fast, and simple.</p>
+      {/* محتوى مركزي: العنوان + صندوق الجنس في منتصف الشاشة */}
+      <main className="px-4">
+        <div className="mx-auto max-w-4xl min-h-[calc(100dvh-80px)] flex flex-col items-center justify-center text-center">
+          {/* العنوان الجديد */}
+          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold leading-tight">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600">
+              Ditona Video Chat{" "}
+            </span>
+            <span className="align-super text-red-500">+18</span>
+          </h1>
+          <p className="mt-3 text-base sm:text-lg md:text-xl text-gray-200">
+            💥Unleash your madness💥
+          </p>
 
-        <div className="mt-8 bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl max-w-lg">
-          <label className="block text-sm text-gray-300 mb-2">Select your gender</label>
-          <div className="grid grid-cols-2 gap-3">
-            {genderOptions.map(opt => {
-              const cls = classesFor(opt.key as MyGender);
-              const active = gender === opt.key ? "ring-2 ring-white" : "";
-              return (
-                <button
-                  key={opt.key}
-                  type="button"
-                  onClick={() => selectGender(opt.key as MyGender)}
-                  className={`px-3 py-3 rounded-lg border bg-black/40 hover:bg-black/30 transition-colors ${active} ${cls.border}`}
-                  aria-label={opt.label}
-                >
-                  {opt.key !== "lgbt" ? (
-                    <span className={`flex items-center gap-2 ${cls.text}`}>
-                      <span className="text-2xl leading-none">{opt.symbol}</span>
-                      <span className="text-base font-semibold">{opt.label}</span>
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-2">
-                      <span className="text-2xl leading-none">🏳️‍🌈</span>
-                      <span className={`text-2xl leading-none ${rainbowText}`}>⚧</span>
-                      <span className={`text-base font-semibold ${rainbowText}`}>LGBT</span>
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          {/* صندوق خيارات الجنس وسط الصفحة */}
+          <div className="mt-8 w-full max-w-lg bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl">
+            <label className="block text-sm text-gray-300 mb-2">Select your gender</label>
+            <div className="grid grid-cols-2 gap-3">
+              {genderOptions.map(opt => {
+                const cls = classesFor(opt.key as MyGender);
+                const active = gender === opt.key ? "ring-2 ring-white" : "";
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => selectGender(opt.key as MyGender)}
+                    className={`px-3 py-3 rounded-lg border bg-black/40 hover:bg-black/30 transition-colors ${active} ${cls.border}`}
+                    aria-label={opt.label}
+                  >
+                    {opt.key !== "lgbt" ? (
+                      <span className={`flex items-center justify-center gap-2 ${cls.text}`}>
+                        <span className="text-2xl leading-none">{opt.symbol}</span>
+                        <span className="text-base font-semibold">{opt.label}</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-center gap-2">
+                        <span className="text-2xl leading-none">🏳️‍🌈</span>
+                        <span className={`text-2xl leading-none ${rainbowText}`}>⚧</span>
+                        <span className={`text-base font-semibold ${rainbowText}`}>LGBT</span>
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
 
-          <div className="mt-4 flex items-center gap-2">
-            <input id="ageok" type="checkbox" className="h-4 w-4" checked={ageOk} onChange={(e) => setAgeOk(e.target.checked)} />
-            <label htmlFor="ageok" className="text-sm text-gray-200">I confirm I am 18+</label>
-          </div>
+            <div className="mt-4 flex items-center gap-2 justify-center">
+              <input id="ageok" type="checkbox" className="h-4 w-4" checked={ageOk} onChange={(e) => setAgeOk(e.target.checked)} />
+              <label htmlFor="ageok" className="text-sm text-gray-200">I confirm I am 18+</label>
+            </div>
 
-          <button
-            onClick={onStart}
-            disabled={!canStart}
-            className="mt-6 w-full py-3 rounded-xl text-white text-lg font-semibold bg-gradient-to-r from-fuchsia-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 disabled:opacity-50"
-          >
-            Start Video Chat
-          </button>
+            <button
+              onClick={onStart}
+              disabled={!canStart}
+              className="mt-6 w-full py-3 rounded-xl text-white text-lg font-semibold bg-gradient-to-r from-fuchsia-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 disabled:opacity-50"
+            >
+              Start Video Chat
+            </button>
 
-          <div className="mt-4 text-center text-sm text-gray-300 space-x-4">
-            <a href="/terms" className="hover:text-white">Terms of Use</a>
-            <a href="/privacy" className="hover:text-white">Privacy Policy</a>
-          </div>
-          <div className="mt-2 text-center text-xs text-gray-400 space-x-3">
-            <a href="mailto:info@ditonachat.com" className="hover:text-gray-200">info@ditonachat.com</a>
-            <a href="mailto:user@ditonachat.com" className="hover:text-gray-200">user@ditonachat.com</a>
-            <a href="mailto:suggestions@ditonachat.com" className="hover:text-gray-200">suggestions@ditonachat.com</a>
+            <div className="mt-4 text-center text-sm text-gray-300 space-x-4">
+              <a href="/terms" className="hover:text-white">Terms of Use</a>
+              <a href="/privacy" className="hover:text-white">Privacy Policy</a>
+            </div>
+            <div className="mt-2 text-center text-xs text-gray-400 space-x-3">
+              <a href="mailto:info@ditonachat.com" className="hover:text-gray-200">info@ditonachat.com</a>
+              <a href="mailto:user@ditonachat.com" className="hover:text-gray-200">user@ditonachat.com</a>
+              <a href="mailto:suggestions@ditonachat.com" className="hover:text-gray-200">suggestions@ditonachat.com</a>
+            </div>
           </div>
         </div>
       </main>
