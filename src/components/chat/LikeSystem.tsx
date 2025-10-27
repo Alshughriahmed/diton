@@ -3,26 +3,20 @@
 
 import { useEffect, useRef, useState } from "react";
 
-/** Headless controller. لا يرسم زرًا. يتعامل مع API/DC ويستقبل أوامر UI. */
 type LikeState = {
   isLiked: boolean;
   canLike: boolean;
-  targetDid: string | null; // DID للطرف
-  pairId: string | null; // للفلترة في أحداث sync
+  targetDid: string | null;
+  pairId: string | null;
 };
 
 function stableDid(): string {
   try {
     const k = "ditona_did";
     let v = localStorage.getItem(k);
-    if (!v) {
-      v = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
-      localStorage.setItem(k, v);
-    }
+    if (!v) { v = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9); localStorage.setItem(k, v); }
     return v;
-  } catch {
-    return "did-" + Math.random().toString(36).slice(2, 9);
-  }
+  } catch { return "did-" + Math.random().toString(36).slice(2, 9); }
 }
 
 function curPair(): string | null {
@@ -47,6 +41,7 @@ async function likePost(targetDid: string, liked?: boolean) {
   return { ok: r.ok, j };
 }
 
+/** Headless: يستقبل أوامر UI ويحدّث العدّاد عبر بث like:sync. */
 export default function LikeSystem() {
   const [st, setSt] = useState<LikeState>({
     isLiked: false,
@@ -54,10 +49,8 @@ export default function LikeSystem() {
     targetDid: curPeerDid(),
     pairId: curPair(),
   });
-
   const mounted = useRef(false);
 
-  // التثبيت الأول + التقاط الـDID عند كل pair أو عند وصول meta
   useEffect(() => {
     if (mounted.current) return;
     mounted.current = true;
@@ -68,19 +61,15 @@ export default function LikeSystem() {
       syncTarget();
       const did = curPeerDid();
       if (!did) return;
-      // قراءة الحالة الأولية بالـPOST فقط
       likePost(did, undefined).then(({ ok, j }) => {
         if (!ok || !j) return;
         setSt((s) => ({ ...s, isLiked: !!j.you, canLike: true }));
-        // دفع sync للواجهة الأخرى ولمراقبينا المحليين
         const pid = curPair();
+        // بث أولي للحالة حتى تتحدّث الواجهة فورًا
         try {
           const room: any = (globalThis as any).__lkRoom;
           const payload = { t: "like:sync", count: j.count, you: j.you, pairId: pid };
-          room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), {
-            reliable: true,
-            topic: "like",
-          });
+          room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), { reliable: true, topic: "like" });
         } catch {}
         window.dispatchEvent(new CustomEvent("like:sync", { detail: { count: j.count, you: j.you, pairId: pid } }));
       });
@@ -91,7 +80,6 @@ export default function LikeSystem() {
     window.addEventListener("rtc:pair", onPair as any);
     window.addEventListener("ditona:peer-meta", onPeerMeta as any);
 
-    // تزامن عدّاد من بث خارجي: نحدّث حالة الزر فقط
     const onSync = (e: any) => {
       const d = e?.detail || {};
       const pid = curPair();
@@ -100,7 +88,6 @@ export default function LikeSystem() {
     };
     window.addEventListener("like:sync", onSync as any);
 
-    // أوامر من واجهة المستخدم: ui:like أو ui:like:toggle
     const onUiLike = (e: any) => {
       const want = e?.detail?.liked;
       toggle(want);
@@ -108,7 +95,6 @@ export default function LikeSystem() {
     window.addEventListener("ui:like", onUiLike as any);
     window.addEventListener("ui:like:toggle", onUiLike as any);
 
-    // بداية
     onPair();
 
     return () => {
@@ -125,28 +111,19 @@ export default function LikeSystem() {
     if (!st.canLike || !st.targetDid) return;
     const next = typeof force === "boolean" ? !!force : !st.isLiked;
 
-    // تحديث تفاؤلي
     setSt((s) => ({ ...s, isLiked: next, canLike: false }));
     const { ok, j } = await likePost(st.targetDid, next);
-    if (!ok || !j) {
-      // تراجع
-      setSt((s) => ({ ...s, isLiked: !next, canLike: true }));
-      return;
-    }
+    if (!ok || !j) { setSt((s) => ({ ...s, isLiked: !next, canLike: true })); return; }
+
     const pid = curPair();
-    // بثّ sync: DC + حدث محلّي (يلتقطه PeerOverlay)
     try {
       const room: any = (globalThis as any).__lkRoom;
       const payload = { t: "like:sync", count: j.count, you: j.you, pairId: pid };
-      room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), {
-        reliable: true,
-        topic: "like",
-      });
+      room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), { reliable: true, topic: "like" });
     } catch {}
     window.dispatchEvent(new CustomEvent("like:sync", { detail: { count: j.count, you: j.you, pairId: pid } }));
     setSt((s) => ({ ...s, canLike: true }));
   }
 
-  // Headless
   return null;
 }
