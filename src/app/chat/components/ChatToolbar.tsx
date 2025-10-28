@@ -82,20 +82,16 @@ export default function ChatToolbar() {
             title="Messages"
           >💬</button>
 
-          {/* زر القلب يبقى كما هو وهو الذي يرسل أمر اللايك */}
-         // داخل src/app/chat/components/ChatToolbar.tsx
-// استبدل زر اللايك فقط
+        {/* Like */}
 <button
-  onClick={() => {
-    // طلب تبديل الحالة عبر Headless LikeSystem
-    window.dispatchEvent(new CustomEvent("ui:like:toggle", { detail: { liked: undefined } }));
-  }}
+  onClick={() => emit("ui:like:toggle", { liked: undefined })}
   aria-label="Like"
   className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40"
   title="Like"
 >
   ❤
 </button>
+
 
           <button
             data-ui="btn-remote-audio"
