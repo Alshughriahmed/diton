@@ -1,3 +1,4 @@
+// src/app/chat/components/ChatToolbar.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -65,7 +66,7 @@ export default function ChatToolbar() {
 
   return (
     <>
-      {/* Prev / Next */}
+      {/* Prev / Next big touch targets */}
       <button
         onClick={() => {
           if (canPrev) {
@@ -115,17 +116,16 @@ export default function ChatToolbar() {
             💬
           </button>
 
-          {/* Like: تبديل */}
+          {/* Like */}
           <button
-            onClick={() => emit("ui:like:toggle")}
+            onClick={() => emit("ui:like", { isLiked: true })}
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40"
             title="Like"
-            aria-label="Like"
           >
             ❤
           </button>
 
-          {/* Remote audio */}
+          {/* Remote audio: 🔊 / 🔇 */}
           <button
             data-ui="btn-remote-audio"
             onClick={() => emit("ui:toggleRemoteAudio")}
@@ -135,7 +135,7 @@ export default function ChatToolbar() {
             {remoteMuted ? "🔇" : "🔊"}
           </button>
 
-          {/* Mic */}
+          {/* Mic: 🎤 / 🎤🚫 */}
           <button
             data-ui="btn-mic"
             onClick={() => emit("ui:toggleMic")}
@@ -147,7 +147,7 @@ export default function ChatToolbar() {
             {micOn ? "🎤" : "🎤🚫"}
           </button>
 
-          {/* Flash */}
+          {/* Flash: disabled unless back+torch */}
           {onMobile ? (
             <button
               data-ui="btn-flash"
@@ -178,7 +178,7 @@ export default function ChatToolbar() {
             ⚙️
           </button>
 
-          {/* Masks */}
+          {/* Masks: ارسل حدث تبديل للدرج المُدار في ChatClient */}
           <button
             data-ui="btn-masks"
             onClick={() => emit("ui:toggleMaskTray")}
