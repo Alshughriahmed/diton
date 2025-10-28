@@ -5,8 +5,9 @@
  *   - "ditona:peer-meta"   -> apply meta immediately
  *   - "rtc:phase"          -> reset on searching|matched|stopped
  *   - "rtc:pair"           -> reset on new pair
- *   - "lk:attached"        -> send my meta on connect            // NEW
- *   - "ditona:meta:init"   -> send my meta when requested        // NEW
+ *   - "lk:attached"        -> send my meta on connect
+ *   - "ditona:meta:init"   -> send my meta when requested
+ *   - "like:sync"          -> update likes counter
  */
 
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
@@ -67,7 +68,17 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     } catch {}
   }
 
-  // NEW: إرسال ميتا الطرف المحلي عند الطلب/الاتصال
+  // helpers
+  function curPairId(): string | null {
+    try {
+      const w: any = globalThis as any;
+      return w.__ditonaPairId || w.__pairId || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // send my meta on demand
   function stableDid(): string {
     try {
       const k = "ditona_did";
@@ -91,7 +102,6 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   }
 
   function readProfile() {
-    // قد لا تتوفر مفاتيح الحالة؛ وفّر افتراضات آمنة
     let displayName = "";
     let gender = "";
     let avatarUrl = "";
@@ -100,7 +110,6 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     let hideCity = false;
     let hideLikes = false;
     try {
-      // إذا كان المتجر يحفظ في localStorage بمفتاح معروف
       const raw = localStorage.getItem("ditona_profile") || localStorage.getItem("profile");
       if (raw) {
         const p = JSON.parse(raw);
@@ -110,7 +119,6 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         vip = !!(p?.state?.vip ?? p?.vip);
         hideCountry = !!(p?.state?.privacy?.hideCountry ?? p?.privacy?.hideCountry);
         hideCity = !!(p?.state?.privacy?.hideCity ?? p?.privacy?.hideCity);
-        // showCount=true => hideLikes=false
         const showCount = !!(p?.state?.likes?.showCount ?? p?.likes?.showCount ?? true);
         hideLikes = !showCount;
       }
@@ -146,19 +154,35 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     } catch {}
   }
 
+  // listeners
   const onPeerMeta = (e: Event) => apply((e as CustomEvent).detail);
+
   const onPhase = (e: Event) => {
     const ph = (e as CustomEvent)?.detail?.phase;
     if (ph === "searching" || ph === "matched" || ph === "stopped") reset();
   };
+
   const onPair = () => reset();
+
+  // NEW: update likes counter from like:sync
+  const onLikeSync = (e: Event) => {
+    try {
+      const d = (e as CustomEvent).detail || {};
+      const cur = curPairId();
+      if (d?.pairId && cur && d.pairId !== cur) return;
+      if (typeof d?.count !== "number") return;
+      const el = q('[data-ui="peer-likes"]');
+      if (el) el.textContent = String(Math.max(0, d.count));
+    } catch {}
+  };
 
   window.addEventListener("ditona:peer-meta", onPeerMeta as any);
   window.addEventListener("rtc:phase", onPhase as any);
   window.addEventListener("rtc:pair", onPair as any);
+  window.addEventListener("like:sync", onLikeSync as any);
 
-  window.addEventListener("lk:attached", () => { sendMyMeta(); }, { passive: true } as any); // NEW
-  window.addEventListener("ditona:meta:init", () => { sendMyMeta(); }, { passive: true } as any); // NEW
+  window.addEventListener("lk:attached", () => { sendMyMeta(); }, { passive: true } as any);
+  window.addEventListener("ditona:meta:init", () => { sendMyMeta(); }, { passive: true } as any);
 
   window.addEventListener(
     "pagehide",
@@ -167,9 +191,11 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
         window.removeEventListener("rtc:phase", onPhase as any);
         window.removeEventListener("rtc:pair", onPair as any);
+        window.removeEventListener("like:sync", onLikeSync as any);
       } catch {}
     },
     { once: true }
   );
 }
+
 export {};
