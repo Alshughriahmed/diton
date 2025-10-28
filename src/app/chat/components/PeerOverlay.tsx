@@ -196,7 +196,7 @@ export default function PeerOverlay() {
           {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
           {showLikes && (
             <>
-              <span className="ml-1 text-sm">❤</span>
+              <span className="ml-1 text-sm">❤️</span>
               <span className="text-xs">{likes}</span>
             </>
           )}
