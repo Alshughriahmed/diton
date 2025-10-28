@@ -1,67 +1,61 @@
+// src/app/chat/likeSyncClient.ts
 /**
- * مزامنة إعجاب عبر قناة البيانات:
- * - تحويل {t:"like"} إلى like:sync خفيفة.
- * - تمرير {t:"like:sync"} كما هي مع إرفاق pairId الحالي.
+ * إرسال/استقبال رسائل اللايك. يدعم LiveKit + الشيم.
  */
+function emit(name: string, detail: any) {
+  try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
+}
+
+function parse(b: ArrayBuffer | Uint8Array | string) {
+  try {
+    if (typeof b === "string") return JSON.parse(b);
+    const u8 = b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
+    return JSON.parse(new TextDecoder().decode(u8));
+  } catch { return null; }
+}
+
+/** إرسال فقط، لا يعيد بث محلي لتفادي الحلقات. */
+export async function likeApiThenDc(liked?: boolean): Promise<{ ok: boolean }> {
+  try {
+    const room: any = (window as any).__lkRoom;
+    const dc: any = (window as any).__ditonaDataChannel;
+
+    const msg = liked === undefined ? { type: "like:toggled" } : { t: "like", liked: !!liked };
+    const bin = new TextEncoder().encode(JSON.stringify(msg));
+
+    if (room?.state === "connected" && room.localParticipant?.publishData) {
+      await room.localParticipant.publishData(bin, { reliable: true, topic: "like" });
+      return { ok: true };
+    }
+    if (dc?.send) { dc.send(JSON.stringify(msg)); return { ok: true }; }
+    return { ok: false };
+  } catch { return { ok: false }; }
+}
+
+/* استقبال رسائل LiveKit والشيم → أحداث واجهة */
 (function mountOnce() {
-  if (typeof window === "undefined") return;
   const w: any = window as any;
-  if (w.__likeSyncMounted) return;
+  if (typeof window === "undefined" || w.__likeSyncMounted) return;
   w.__likeSyncMounted = 1;
 
-  const curPair = () => (w.__ditonaPairId || w.__pairId || null);
-
-  function parse(ev: MessageEvent): any | null {
-    const d: any = (ev as any).data;
-    let s: string | null = null;
-    if (typeof d === "string") s = d;
-    else if (d instanceof ArrayBuffer) s = new TextDecoder().decode(d);
-    else if (ArrayBuffer.isView(d)) s = new TextDecoder().decode(d as any);
-    if (!s || !/^\s*\{/.test(s)) return null;
-    try { return JSON.parse(s); } catch { return null; }
-  }
-
-  const onMsg = (ev: MessageEvent) => {
-    const j = parse(ev);
-    if (!j) return;
-
-    if (j.t === "like" && typeof j.liked === "boolean") {
-      try {
-        window.dispatchEvent(new CustomEvent("like:sync", {
-          detail: { pairId: curPair(), likedByOther: !!j.liked, liked: !!j.liked }
-        }));
-      } catch {}
-      return;
-    }
-
-    if (j.t === "like:sync" && (typeof j.count === "number" || typeof j.liked === "boolean")) {
-      try {
-        window.dispatchEvent(new CustomEvent("like:sync", {
-          detail: { pairId: curPair(), count: j.count, likedByOther: !!j.liked }
-        }));
-      } catch {}
-      return;
-    }
-
-    if (j.t === "peer-meta" && j.payload) {
-      try { window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: j.payload })); } catch {}
-    }
-
-    if (j.t === "meta:init") {
-      try { window.dispatchEvent(new CustomEvent("ditona:meta:init")); } catch {}
-    }
-  };
-
+  // من الشيم
   try {
-    const dc = w.__ditonaDataChannel;
-    dc?.addEventListener?.("message", onMsg);
+    const dc: any = w.__ditonaDataChannel;
+    dc?.addEventListener?.("message", (ev: MessageEvent) => {
+      const j = parse((ev as any).data);
+      if (!j) return;
+      if (j.t === "like:sync") emit("like:sync", { count: j.count, you: j.you, pairId: j.pairId });
+      else if (j.t === "like" && typeof j.liked === "boolean") emit("rtc:peer-like", { liked: !!j.liked });
+    });
   } catch {}
 
-  window.addEventListener("pagehide", () => {
-    try {
-      const dc = w.__ditonaDataChannel;
-      dc?.removeEventListener?.("message", onMsg);
-    } catch {}
-  }, { once: true } as any);
+  // من LiveKit
+  const room: any = w.__lkRoom;
+  room?.on?.("dataReceived", (payload: Uint8Array, _p: any, _k: any, topic?: string) => {
+    if (topic !== "like") return;
+    const j = parse(payload);
+    if (!j) return;
+    if (j.t === "like:sync") emit("like:sync", { count: j.count, you: j.you, pairId: j.pairId });
+    else if (j.t === "like" && typeof j.liked === "boolean") emit("rtc:peer-like", { liked: !!j.liked });
+  });
 })();
-export {};
