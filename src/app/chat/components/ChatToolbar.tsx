@@ -1,3 +1,4 @@
+// ####  src/app/chat/components/ChatToolbar.tsx
 "use client";
 import { useEffect, useState } from "react";
 import { emit } from "@/utils/events";
@@ -82,16 +83,15 @@ export default function ChatToolbar() {
             title="Messages"
           >💬</button>
 
-        {/* Like */}
-<button
-  onClick={() => emit("ui:like:toggle", { liked: undefined })}
-  aria-label="Like"
-  className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40"
-  title="Like"
->
-  ❤️
-</button>
-
+          {/* Like */}
+          <button
+            onClick={() => emit("ui:like:toggle", { liked: undefined })}
+            aria-label="Like"
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40"
+            title="Like"
+          >
+            ❤️
+          </button>
 
           <button
             data-ui="btn-remote-audio"
