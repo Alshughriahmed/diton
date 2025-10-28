@@ -1,119 +1,113 @@
-"use client";
-
+// src/app/chat/likeSyncClient.ts
 /**
- * مزامنة الإعجاب عبر قناتي LiveKit وDC الشيم.
- * - يمرّر رسائل like:sync الواردة إلى window: "like:sync".
- * - يحوّل رسائل {t:"like", liked:boolean} القديمة إلى "rtc:peer-like".
- * - يوفّر likeApiThenDc() للإرسال السريع عبر البيانات إن لزم.
- */
+ * مزامنة إعجاب عبر قناة البيانات.
+ * - يمرّر رسائل like:sync الواردة كحدث window "like:sync".
+ * - يحوّل رسائل {t:"like", liked:boolean} القديمة إلى "rtc:peer-like".
+ * - يوفر likeApiThenDc() للتماثل مع الكود القائم.
+ */
 
-function parseJSONFromUnknown(evData: any): any | null {
-  try {
-    if (typeof evData === "string") return JSON.parse(evData);
-    if (evData instanceof ArrayBuffer) {
-      return JSON.parse(new TextDecoder().decode(new Uint8Array(evData)));
-    }
-    if (ArrayBuffer.isView(evData)) {
-      return JSON.parse(new TextDecoder().decode(evData as any));
-    }
-  } catch {}
-  return null;
-}
-
-function emitLikeSync(payload: any) {
-  try {
-    window.dispatchEvent(new CustomEvent("like:sync", { detail: payload }));
-  } catch {}
+function parseJSONFromDC(ev: MessageEvent) {
+  const d = (ev as any)?.data;
+  let s: string | null = null;
+  if (typeof d === "string") s = d;
+  else if (d instanceof ArrayBuffer) s = new TextDecoder().decode(new Uint8Array(d));
+  else if (ArrayBuffer.isView(d)) s = new TextDecoder().decode(d as any);
+  if (!s || !/^\s*\{/.test(s)) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }
 
 function emitPeerLike(liked: boolean) {
-  try {
-    window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked } }));
-    window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { liked } }));
-  } catch {}
+  try {
+    window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: { liked } }));
+    window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: { liked } }));
+  } catch {}
 }
 
-/** إرسال خفيف عبر قناة البيانات فقط. لا يتعامل مع الـAPI. */
+function emitLikeSync(payload: any) {
+  try {
+    // انتبه لمواءمة pairId إن وُجد
+    window.dispatchEvent(new CustomEvent("like:sync", { detail: payload }));
+  } catch {}
+}
+
+/** إرسال إشعار إعجاب عبر LiveKit أو الشِّيم. */
 export async function likeApiThenDc(a?: any, _b?: any): Promise<{ ok: boolean; duplicate?: boolean }> {
-  try {
-    const likedArg = typeof a === "boolean" ? (a as boolean) : undefined;
-    const room: any = (window as any).__lkRoom;
-    const dc: any = (window as any).__ditonaDataChannel;
+  try {
+    const legacy = typeof a === "string"; // pairId, dc (غير مستخدمين فعليًا هنا)
+    const likedArg = !legacy && typeof a === "boolean" ? (a as boolean) : undefined;
 
-    const obj = likedArg === undefined ? { type: "like:toggled" } : { t: "like", liked: !!likedArg };
-    const txt = JSON.stringify(obj);
-    const bin = new TextEncoder().encode(txt);
+    const room = (window as any).__lkRoom;
+    const dc = (window as any).__ditonaDataChannel;
 
-    if (room?.state === "connected" && room?.localParticipant?.publishData) {
-      await room.localParticipant.publishData(bin, { reliable: true, topic: "like" });
-      return { ok: true, duplicate: false };
-    }
-    if (dc?.send) {
-      dc.send(txt);
-      return { ok: true, duplicate: false };
-    }
-    return { ok: false, duplicate: false };
-  } catch {
-    return { ok: false, duplicate: false };
-  }
+    const payloadObj = likedArg === undefined ? { type: "like:toggled" } : { t: "like", liked: !!likedArg };
+    const payloadTxt = JSON.stringify(payloadObj);
+    const payloadBin = new TextEncoder().encode(payloadTxt);
+
+    if (room && room.state === "connected" && room.localParticipant?.publishData) {
+      await room.localParticipant.publishData(payloadBin, { reliable: true, topic: "like" });
+      return { ok: true, duplicate: false };
+    }
+    if (dc?.send) {
+      dc.send(payloadTxt);
+      return { ok: true, duplicate: false };
+    }
+    return { ok: false, duplicate: false };
+  } catch {
+    return { ok: false, duplicate: false };
+  }
 }
 
-// mount once
-(() => {
-  if (typeof window === "undefined") return;
-  const w: any = window as any;
-  if (w.__likeSyncMounted) return;
-  w.__likeSyncMounted = 1;
+// مستمع الرسائل الواردة لتحويلها لأحداث UI
+(function mountOnce() {
+  const w = window as any;
+  if (typeof window === "undefined") return;
+  if (w.__likeSyncMounted) return;
+  w.__likeSyncMounted = 1;
 
-  // DC shim listener
-  try {
-    const dc: any = w.__ditonaDataChannel;
-    const onMsg = (ev: MessageEvent) => {
-      const j = parseJSONFromUnknown((ev as any)?.data);
-      if (!j) return;
-      if (j?.t === "like" && typeof j.liked === "boolean") {
-        emitPeerLike(!!j.liked);
-        return;
-      }
-      if (j?.t === "like:sync" && (typeof j.count === "number" || typeof j.you === "boolean")) {
-        emitLikeSync({ count: j.count, you: j.you, pairId: j.pairId });
-      }
-      if (j?.type === "like:toggled" && j?.payload && typeof j.payload.liked === "boolean") {
-        emitPeerLike(!!j.payload.liked);
-      }
-    };
-    dc?.addEventListener?.("message", onMsg);
-    dc?.setSendGuard?.(() => {
-      const room: any = (window as any).__lkRoom;
-      return !!room && room.state === "connected";
-    });
-    window.addEventListener(
-      "pagehide",
-      () => {
-        try {
-          dc?.removeEventListener?.("message", onMsg);
-        } catch {}
-      },
-      { once: true }
-    );
-  } catch {}
+  const onDCMessage = (ev: MessageEvent) => {
+    const j = parseJSONFromDC(ev);
+    if (!j) return;
 
-  // LiveKit topic listener
-  try {
-    const room: any = w.__lkRoom;
-    if (room?.on) {
-      room.on("dataReceived", (payload: Uint8Array, _p: any, _k: any, topic?: string) => {
-        if (topic !== "like") return;
-        const j = parseJSONFromUnknown(payload);
-        if (!j) return;
-        if (j?.t === "like" && typeof j.liked === "boolean") {
-          emitPeerLike(!!j.liked);
-          return;
-        }
-        if (j?.t === "like:sync" && (typeof j.count === "number" || typeof j.you === "boolean")) {
-          emitLikeSync({ count: j.count, you: j.you, pairId: j.pairId });
-        }
-      });
-    }
-  } catch {}
+    // الشكل القديم
+    if (j?.t === "like" && typeof j.liked === "boolean") {
+      emitPeerLike(!!j.liked);
+      return;
+    }
+
+    // مزامنة رسمية للعداد والحالة
+    if (j?.t === "like:sync" && (typeof j.count === "number" || typeof j.you === "boolean")) {
+      emitLikeSync({ count: j.count, you: j.you, pairId: j.pairId });
+      return;
+    }
+
+    // شكل تجريبي سابق
+    if (j?.type === "like:toggled" && j?.payload && typeof j.payload.liked === "boolean") {
+      emitPeerLike(!!j.payload.liked);
+      return;
+    }
+  };
+
+  try {
+    const dc = (window as any).__ditonaDataChannel;
+    dc?.addEventListener?.("message", onDCMessage);
+    dc?.setSendGuard?.(() => {
+      const room = (window as any).__lkRoom;
+      return !!room && room.state === "connected";
+    });
+  } catch {}
+
+  window.addEventListener(
+    "pagehide",
+    () => {
+      try {
+        const dc = (window as any).__ditonaDataChannel;
+        dc?.removeEventListener?.("message", onDCMessage);
+      } catch {}
+    },
+    { once: true }
+  );
 })();
