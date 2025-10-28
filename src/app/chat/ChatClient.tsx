@@ -100,7 +100,6 @@ export default function ChatClient() {
 
   // واجهة
   const [ready, setReady] = useState(false);
-  const [like, setLike] = useState(false);
   const [rtcPhase, setRtcPhase] = useState<Phase>("idle");
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
@@ -177,7 +176,6 @@ export default function ChatClient() {
       window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
       window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId } }));
     } catch {}
-    try { setLike(false); } catch {}
   }
 
   function emitRemoteTrackStarted() {
@@ -498,24 +496,21 @@ export default function ChatClient() {
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
 
-        // مزامنة غنية بالعدّاد
+        // مزامنة غنية بالعدّاد — المصدر الوحيد لتحديث العدّاد
         if (j?.t === "like:sync") {
-          const detail = {
-            pairId: roomName,
-            liked: !!j?.liked,
-            likedByOther: !!j?.liked,
-            count: typeof j?.count === "number" ? j.count : undefined,
-          };
+          const pid = (typeof j?.pairId === "string" && j.pairId) ? j.pairId : roomName;
+          const detail: any = { pairId: pid };
+          if (typeof j?.count === "number") detail.count = j.count;
+          if (typeof j?.you === "boolean") detail.you = j.you;
           window.dispatchEvent(new CustomEvent("like:sync", { detail }));
           return;
         }
 
-        // الرسالة الخفيفة الفورية
+        // رسائل like القديمة — توافق فقط، لا تحديث عدّاد
         if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           const base = { pairId: roomName, liked: !!j?.liked };
           window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: base }));
           window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base }));
-          window.dispatchEvent(new CustomEvent("like:sync", { detail: { ...base, likedByOther: !!j?.liked } }));
         }
 
         if (j?.t === "peer-meta" && j.payload) {
@@ -951,97 +946,6 @@ export default function ChatClient() {
     window.addEventListener("rtc:peer-meta", onPeerMetaCapture as any);
     offs.push(() => window.removeEventListener("ditona:peer-meta", onPeerMetaCapture as any));
     offs.push(() => window.removeEventListener("rtc:peer-meta", onPeerMetaCapture as any));
-
-    // like: زر واحد في شريط الأدوات
-    offs.push(
-      on("ui:like", async () => {
-        const room = roomRef.current;
-        if (!room || room.state !== "connected") {
-          toast("No active connection for like");
-          return;
-        }
-
-        const targetDid = String(remoteDidRef.current || "");
-        if (!targetDid) {
-          toast("peer id missing");
-          return;
-        }
-
-        const newLike = !like;
-        setLike(newLike);
-
-        // تفاؤل محلي
-        try {
-          const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-          window.dispatchEvent(
-            new CustomEvent("like:sync", {
-              detail: { pairId: curPair, likedByMe: newLike, liked: newLike },
-            }),
-          );
-        } catch {}
-
-        // إرسال DC فوري خفيف
-        try {
-          const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
-          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-        } catch {}
-
-        // API
-        try {
-          const res = await fetch("/api/like", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-did": String(stableDid()),
-            },
-            body: JSON.stringify({ targetDid, liked: newLike }),
-            credentials: "include",
-            cache: "no-store",
-          });
-          const j = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            setLike(!newLike);
-            try {
-              const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-              window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId: curPair, likedByMe: !newLike, liked: !newLike } }));
-            } catch {}
-            try {
-              const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
-              await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-            } catch {}
-            toast("like failed");
-            return;
-          }
-
-          // مزامنة محلية بالعدّاد
-          try {
-            const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-            window.dispatchEvent(
-              new CustomEvent("like:sync", {
-                detail: { pairId: curPair, count: j?.count, likedByMe: j?.liked, liked: j?.liked },
-              }),
-            );
-          } catch {}
-
-          // إرسال count للطرف الآخر
-          try {
-            const payload2 = new TextEncoder().encode(JSON.stringify({ t: "like:sync", liked: !!j?.liked, count: j?.count }));
-            await (room.localParticipant as any).publishData(payload2, { reliable: true, topic: "like" });
-          } catch {}
-        } catch {
-          setLike(!newLike);
-          try {
-            const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
-            window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId: curPair, likedByMe: !newLike, liked: !newLike } }));
-          } catch {}
-          try {
-            const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
-            await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
-          } catch {}
-          toast("like failed");
-        }
-      }),
-    );
 
     // report
     offs.push(on("ui:report", () => toast("Report sent. Moving on")));
