@@ -1,204 +1,54 @@
 // src/app/chat/dcMetaResponder.client.ts
-"use client";
 /**
-Peer meta responder over global DC shim.
+ * جسر LiveKit Data → window events.
+ * يتعامل فقط مع topic="meta" و topic="like" ويُهمل غير ذلك.
+ * يمنع الحلقات بإزالة أي إعادة بث محلية.
+ */
+if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) {
+  (window as any).__dcMetaResponderMounted = 1;
 
-Source of truth: profile (gender, privacy, likes)
-Triggers send on:
-- DC message {t:"meta:init"}  (also dispatches "ditona:meta:init")
-- window "ditona:meta:init" (from ChatClient on DataReceived)
-- window "rtc:phase" => matched|connected
-- window "profile:updated"
-- window "ditona:geo"
-- optional: "dc:attached", "lk:attached", "livekit:participant-connected"
-
-Sends twice (250ms apart). Falls back to LiveKit publishData(topic:"meta").
-*/
-import { useProfile } from "@/state/profile";
-import { normalizeGender } from "@/lib/gender";
-
-type Geo = { countryCode?: string; country?: string; city?: string };
-type Payload = {
-  displayName?: string;
-  avatar?: string;
-  vip?: boolean;
-  country?: string;
-  city?: string;
-  gender?: string; // "m" | "f" | "c" | "l" | "u"
-  likes?: number;
-  hideCountry?: boolean;
-  hideCity?: boolean;
-  hideLikes?: boolean;
-};
-
-const isBrowser = typeof window !== "undefined";
-
-function readGeo(): Geo {
-  try {
-    const raw = localStorage.getItem("ditona_geo");
-    if (!raw) return {};
-    const j = JSON.parse(raw);
-    return {
-      countryCode: String(j.countryCode || j.cc || "").toUpperCase(),
-      country: String(j.country || j.cn || j.ctry || j.country_name || j.countryCode || ""),
-      city: String(j.city || j.locality || j.town || ""),
-    };
-  } catch {
-    return {};
-  }
-}
-
-function readProfile() {
-  try {
-    const st = (useProfile as any)?.getState?.();
-    return st?.profile ?? {};
-  } catch {
-    return {};
-  }
-}
-
-function buildPayload(): Payload {
-  const p: any = readProfile();
-  const g = readGeo();
-
-  const displayName = String(p?.displayName || p?.name || "").trim() || undefined;
-  const avatar = String(p?.avatarUrl || p?.avatar || p?.photo || p?.avatarDataUrl || "").trim() || undefined;
-  const vip = !!(p?.vip || p?.isVip || p?.premium || p?.pro);
-
-  const gender = normalizeGender(p?.gender);
-  const likes =
-    typeof p?.likes === "number"
-      ? p.likes
-      : typeof p?.likeCount === "number"
-      ? p.likeCount
-      : typeof p?.likes?.count === "number"
-      ? p.likes.count
-      : undefined;
-
-  const hideCountry = !!p?.privacy?.hideCountry;
-  const hideCity = !!p?.privacy?.hideCity;
-  const hideLikes = !Boolean(p?.likes?.showCount);
-
-  return {
-    displayName,
-    avatar,
-    vip,
-    country: hideCountry ? undefined : g.country,
-    city: hideCity ? undefined : g.city,
-    gender,
-    likes: hideLikes ? undefined : likes,
-    hideCountry,
-    hideCity,
-    hideLikes,
-  };
-}
-
-function sendJSON(obj: any) {
-  // try DC shim first
-  try {
-    const dc: any = (window as any).__ditonaDataChannel;
-    if (dc?.send) {
-      dc.send(JSON.stringify(obj));
-      return;
-    }
-  } catch {}
-  // fallback LiveKit
-  try {
-    const room: any = (window as any).__lkRoom;
-    if (room?.localParticipant?.publishData) {
-      const data = new TextEncoder().encode(JSON.stringify(obj));
-      room.localParticipant.publishData(data, { reliable: true, topic: "meta" });
-    }
-  } catch {}
-}
-
-function sendPeerMetaOnce() {
-  sendJSON({ t: "peer-meta", payload: buildPayload() });
-}
-
-function sendPeerMetaTwice() {
-  sendPeerMetaOnce();
-  setTimeout(sendPeerMetaOnce, 250);
-}
-
-function attachOnce() {
-  if (!isBrowser) return;
-  if ((window as any).__dcMetaResponderBound) return;
-  const dc: any = (window as any).__ditonaDataChannel;
-  if (!dc?.addEventListener) return;
-  (window as any).__dcMetaResponderBound = 1;
-
-  // DC inbound messages
-  const onMsg = (ev: MessageEvent) => {
+  const parse = (b: ArrayBuffer | Uint8Array | string) => {
     try {
-      const d = (ev as any)?.data;
-      let txt: string | null = null;
-      if (typeof d === "string") txt = d;
-      else if (d instanceof ArrayBuffer) txt = new TextDecoder().decode(new Uint8Array(d));
-      else if (ArrayBuffer.isView(d)) txt = new TextDecoder().decode(d as any);
-      if (!txt || !/^\s*\{/.test(txt)) return;
+      if (typeof b === "string") return JSON.parse(b);
+      const u8 = b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
+      return JSON.parse(new TextDecoder().decode(u8));
+    } catch { return null; }
+  };
 
-      const j = JSON.parse(txt);
-      if (j?.t === "meta:init") {
-        try {
-          window.dispatchEvent(new CustomEvent("ditona:meta:init"));
-        } catch {}
-        sendPeerMetaTwice();
+  const dispatch = (name: string, detail: any) => {
+    try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
+  };
+
+  const room: any = (window as any).__lkRoom;
+  if (room?.on) {
+    room.on("dataReceived", (payload: Uint8Array, _p: any, _kind: any, topic?: string) => {
+      if (topic !== "meta" && topic !== "like") return;       // أهم سطر
+      const j = parse(payload);
+      if (!j || typeof j !== "object") return;
+
+      // peer meta
+      if (j.t === "peer-meta" && j.payload) {
+        dispatch("ditona:peer-meta", j.payload);
+        return;
       }
-    } catch {}
-  };
-  dc.addEventListener("message", onMsg as any);
 
-  // App-level triggers
-  const onGeo = () => sendPeerMetaTwice();
-  const onProfile = () => sendPeerMetaTwice();
-  const onPhase = (e: any) => {
-    const ph = e?.detail?.phase;
-    if (ph === "matched" || ph === "connected") sendPeerMetaTwice();
-  };
-  const onInitEvt = () => sendPeerMetaTwice();
+      // طلب الميتا
+      if (j.t === "meta:init") {
+        dispatch("ditona:meta:init", {});
+        return;
+      }
 
-  // optional hooks announced by ChatClient
-  const onDCAttached = () => sendPeerMetaTwice();
-  const onLkAttached = () => sendPeerMetaTwice();
-  const onLkParticipantConnected = () => sendPeerMetaTwice();
+      // مزامنة الإعجاب
+      if (j.t === "like:sync" && (typeof j.count === "number" || typeof j.you === "boolean")) {
+        dispatch("like:sync", { count: j.count, you: j.you, pairId: j.pairId });
+        return;
+      }
 
-  window.addEventListener("ditona:geo", onGeo as any);
-  window.addEventListener("profile:updated", onProfile as any);
-  window.addEventListener("rtc:phase", onPhase as any);
-  window.addEventListener("ditona:meta:init", onInitEvt as any);
-  window.addEventListener("dc:attached", onDCAttached as any);
-  window.addEventListener("lk:attached", onLkAttached as any);
-  window.addEventListener("livekit:participant-connected", onLkParticipantConnected as any);
-
-  // HMR cleanup
-  if ((import.meta as any)?.hot) {
-    (import.meta as any).hot.dispose(() => {
-      try {
-        dc.removeEventListener?.("message", onMsg as any);
-      } catch {}
-      window.removeEventListener("ditona:geo", onGeo as any);
-      window.removeEventListener("profile:updated", onProfile as any);
-      window.removeEventListener("rtc:phase", onPhase as any);
-      window.removeEventListener("ditona:meta:init", onInitEvt as any);
-      window.removeEventListener("dc:attached", onDCAttached as any);
-      window.removeEventListener("lk:attached", onLkAttached as any);
-      window.removeEventListener("livekit:participant-connected", onLkParticipantConnected as any);
-      (window as any).__dcMetaResponderBound = 0;
+      // الشكل القديم {t:"like", liked:boolean}
+      if (j.t === "like" && typeof j.liked === "boolean") {
+        dispatch("rtc:peer-like", { liked: !!j.liked });
+      }
     });
   }
 }
-
-// boot: wait until shim attaches
-(function boot() {
-  if (!isBrowser) return;
-  if ((window as any).__dcMetaResponderMounted) return;
-  (window as any).__dcMetaResponderMounted = 1;
-  let tries = 0;
-  const iv = setInterval(() => {
-    tries++;
-    attachOnce();
-    const ready = !!(window as any).__ditonaDataChannel?.addEventListener;
-    if (ready || tries > 50) clearInterval(iv);
-  }, 100);
-})();
+export {};
