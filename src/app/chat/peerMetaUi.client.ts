@@ -255,7 +255,13 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
 
   /* --------------- المستمعون --------------- */
 
-  const onPeerMeta = (e: Event) => apply((e as CustomEvent).detail);
+ const onPeerMeta = (e: Event) => {
+  const d = (e as CustomEvent).detail || {};
+  const cur = curPairId();
+  if (d?.pairId && cur && d.pairId !== cur) return; // pairId guard
+  apply(d);
+};
+
 
   const onPhase = (e: Event) => {
     const ph = (e as CustomEvent)?.detail?.phase;
