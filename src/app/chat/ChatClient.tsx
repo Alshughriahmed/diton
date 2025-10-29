@@ -744,7 +744,7 @@ if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
         (window as any).__pairId = roomName;
       } catch {}
 
-      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ?? (process as any).env?.LIVEKIT_URL ?? "";
+      const ws =process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       isConnectingRef.current = true;
       await room.connect(ws, token);
       if (!isActiveSid(sid)) {
@@ -808,7 +808,7 @@ if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
       (window as any).__pairId = roomName;
     } catch {}
 
-    const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ?? (process as any).env?.LIVEKIT_URL ?? "";
+    const ws =process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
     isConnectingRef.current = true;
     await room.connect(ws, token).catch(() => {});
     isConnectingRef.current = false;
