@@ -449,14 +449,17 @@ export default function ChatClient() {
     const onTrackUnsub = (t: RemoteTrack, pub: RemoteTrackPublication) => {
       if (!isActiveSid(sid)) return;
       try {
-        if (pub.kind === Track.Kind.Video && remoteVideoRef.current) {
-          try { (t as any).detach?.(remoteVideoRef.current); } catch {}
-          if (remoteVideoTrackRef.current === t) remoteVideoTrackRef.current = null;
-        }
-        if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
-          try { (t as any).detach?.(remoteAudioRef.current); } catch {}
-          if (remoteAudioTrackRef.current === t) remoteAudioTrackRef.current = null;
-        }
+       if (pub.kind === Track.Kind.Video && remoteVideoRef.current) {
+  try { (t as any).detach?.(remoteVideoRef.current); } catch {}
+  if (remoteVideoTrackRef.current === t) remoteVideoTrackRef.current = null;
+  try { (remoteVideoRef.current as any).srcObject = null; remoteVideoRef.current.load?.(); } catch {}
+}
+if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
+  try { (t as any).detach?.(remoteAudioRef.current); } catch {}
+  if (remoteAudioTrackRef.current === t) remoteAudioTrackRef.current = null;
+  try { (remoteAudioRef.current as any).srcObject = null; remoteAudioRef.current.load?.(); } catch {}
+}
+
       } catch {}
     };
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsub);
@@ -527,18 +530,23 @@ export default function ChatClient() {
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.DataReceived, onData as any); } catch {} });
 
     const onPart = () => {
-      if (!isActiveSid(sid)) return;
-      setPhase("searching");
-      try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {}
-    };
+  if (!isActiveSid(sid)) return;
+  detachRemoteAll();
+  try { remoteDidRef.current = ""; } catch {}
+  setPhase("searching");
+  try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {}
+};
+
     room.on(RoomEvent.ParticipantDisconnected, onPart);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
 
     const onDisc = () => {
-      if (!isActiveSid(sid)) return;
-      dcDetach();
-      setPhase("searching");
-      broadcastMediaState();
+  if (!isActiveSid(sid)) return;
+  dcDetach();
+  detachRemoteAll();
+  try { remoteDidRef.current = ""; } catch {}
+  setPhase("searching");
+  broadcastMediaState();
 
       if (manualSwitchRef.current || leavingRef.current || joiningRef.current || isConnectingRef.current) return;
 
