@@ -1,13 +1,7 @@
-// src/app/chat/peerMetaUi.client.ts
 /**
- * Idempotent DOM updater for peer metadata badges.
- * Listens to:
- *   - "ditona:peer-meta"   -> apply meta immediately
- *   - "rtc:phase"          -> reset on searching|stopped  (no reset on matched)
- *   - "rtc:pair"           -> reset on new pair
- *   - "lk:attached"        -> send my meta + request peer meta (meta:init)
- *   - "ditona:meta:init"   -> send my meta when requested
- *   - "like:sync"          -> update likes counter (pair-scoped)
+ * DOM updater for peer metadata badges.
+ * Sources meta from window events and sends my meta on attach/init.
+ * Ensures gender is never empty: profile.gender -> filters.gender/selfGender -> "".
  */
 
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
@@ -17,26 +11,14 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
 
   function reset() {
     try {
-      const g = q('[data-ui="peer-gender"]');
-      const ctry = q('[data-ui="peer-country"]');
-      const cty = q('[data-ui="peer-city"]');
-      const name = q('[data-ui="peer-name"]');
-      const likes = q('[data-ui="peer-likes"]');
-      const vip = q('[data-ui="peer-vip"]');
-      const avatar = document.querySelector('[data-ui="peer-avatar"]') as
-        | HTMLImageElement
-        | HTMLElement
-        | null;
-
-      if (g) g.textContent = "";        // لا خطوط بديلة
-      if (ctry) ctry.textContent = "";
-      if (cty) cty.textContent = "";
-      if (name) name.textContent = "";
-      if (likes) {
-        likes.style.display = "";
-        likes.textContent = "0";
-      }
-      if (vip) vip.classList.remove("is-vip");
+      q('[data-ui="peer-gender"]')!.textContent = "—";
+      const ctry = q('[data-ui="peer-country"]'); if (ctry) ctry.textContent = "—";
+      const cty  = q('[data-ui="peer-city"]');    if (cty)  cty.textContent  = "";
+      const name = q('[data-ui="peer-name"]');    if (name) name.textContent = "";
+      const likes= q('[data-ui="peer-likes"]');
+      if (likes) { likes.style.display = ""; likes.textContent = "0"; }
+      const vip  = q('[data-ui="peer-vip"]');     if (vip)  vip.classList.remove("is-vip");
+      const avatar = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | HTMLElement | null;
       if (avatar) {
         if (avatar instanceof HTMLImageElement) avatar.src = "";
         else (avatar as HTMLElement).style.backgroundImage = "";
@@ -52,35 +34,17 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       const name = q('[data-ui="peer-name"]');
       const likes = q('[data-ui="peer-likes"]');
       const vip = q('[data-ui="peer-vip"]');
-      const avatar = document.querySelector('[data-ui="peer-avatar"]') as
-        | HTMLImageElement
-        | HTMLElement
-        | null;
+      const avatar = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | HTMLElement | null;
 
-      // ثبّت did عالميًا للتوافق
-      try {
-        const did =
-          meta?.did ||
-          meta?.peerDid ||
-          meta?.id ||
-          meta?.identity ||
-          meta?.deviceId ||
-          "";
-        if (did) {
-          (globalThis as any).__peerDid = String(did);
-          (globalThis as any).__ditonaPeerDid = String(did);
-        }
-      } catch {}
-
-      if (g) g.textContent = meta?.gender ? String(meta.gender) : "";
+      if (g) g.textContent = meta?.gender ? String(meta.gender) : "—";
 
       if (ctry) {
         const hideCountry = !!meta?.hideCountry;
-        ctry.textContent = hideCountry ? "" : meta?.country ? String(meta.country) : "";
+        ctry.textContent = hideCountry ? "—" : (meta?.country ? String(meta.country) : "—");
       }
       if (cty) {
         const hideCity = !!meta?.hideCity;
-        cty.textContent = hideCity ? "" : meta?.city ? String(meta.city) : "";
+        cty.textContent = hideCity ? "" : (meta?.city ? String(meta.city) : "");
       }
 
       if (name) name.textContent = meta?.displayName ? String(meta.displayName) : "";
@@ -91,10 +55,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
           likes.style.display = "none";
         } else {
           likes.style.display = "";
-          const n =
-            typeof meta?.likes === "number"
-              ? meta.likes
-              : parseInt(meta?.likes ?? "0", 10) || 0;
+          const n = typeof meta?.likes === "number" ? meta.likes : parseInt(meta?.likes ?? "0", 10) || 0;
           likes.textContent = String(n);
         }
       }
@@ -113,45 +74,51 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   }
 
   function curPairId(): string | null {
-    try {
-      const w: any = globalThis as any;
-      return w.__ditonaPairId || w.__pairId || null;
-    } catch {
-      return null;
-    }
+    try { const w:any = globalThis as any; return w.__ditonaPairId || w.__pairId || null; } catch { return null; }
   }
 
-  // ---- send my meta on demand ----
+  // ---- profile + fallbacks ----
   function stableDid(): string {
     try {
-      const k = "ditona_did";
-      const v = localStorage.getItem(k);
-      if (v) return v;
-      const gen = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
-      localStorage.setItem(k, gen);
-      return gen;
-    } catch {
-      return "did-" + Math.random().toString(36).slice(2, 9);
-    }
+      const k = "ditona_did"; const v = localStorage.getItem(k);
+      if (v) return v; const gen = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
+      localStorage.setItem(k, gen); return gen;
+    } catch { return "did-" + Math.random().toString(36).slice(2, 9); }
+  }
+
+  function mapGender(v: unknown): string {
+    const s = String(v ?? "").toLowerCase().trim();
+    if (!s) return "";
+    if (/^m(ale)?$/.test(s)) return "m";
+    if (/^f(emale)?$/.test(s)) return "f";
+    if (/^c(ouple|p)?$/.test(s)) return "c";
+    if (/^l(gbtq?\+?)?$/.test(s) || /pride|rainbow/.test(s)) return "l";
+    if (/^(everyone|all|u)$/.test(s)) return ""; // لا نرسل “غير محدد”
+    // إذا كان مُخزّنًا أصلاً كـ m/f/c/l فاتركه
+    if (/^[mfcl]$/.test(s)) return s;
+    return "";
   }
 
   function readGeo() {
+    try { const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+      return { country: g?.country ?? null, city: g?.city ?? null }; } catch { return { country:null, city:null }; }
+  }
+
+  function readFiltersGender(): string {
     try {
-      const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
-      return { country: g?.country ?? null, city: g?.city ?? null };
-    } catch {
-      return { country: null, city: null };
-    }
+      const raw = localStorage.getItem("ditona.filters.v1")
+        || localStorage.getItem("ditona_filters")
+        || localStorage.getItem("filters");
+      if (!raw) return "";
+      const o = JSON.parse(raw);
+      const s = o?.state ?? o;
+      return mapGender(s?.selfGender ?? s?.gender);
+    } catch { return ""; }
   }
 
   function readProfile() {
-    let displayName = "";
-    let gender = "";
-    let avatarUrl = "";
-    let vip = false;
-    let hideCountry = false;
-    let hideCity = false;
-    let hideLikes = false;
+    let displayName = "", gender = "", avatarUrl = "", vip = false;
+    let hideCountry = false, hideCity = false, hideLikes = false;
     try {
       const raw =
         localStorage.getItem("ditona.profile.v1") ||
@@ -161,7 +128,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         const p = JSON.parse(raw);
         const state = p?.state ?? p;
         displayName = state?.displayName ?? "";
-        gender = state?.gender ?? "";
+        gender = mapGender(state?.gender);
         avatarUrl = state?.avatarDataUrl ?? "";
         vip = !!state?.vip;
         hideCountry = !!state?.privacy?.hideCountry;
@@ -170,6 +137,8 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         hideLikes = typeof showCount === "boolean" ? !showCount : false;
       }
     } catch {}
+    // سقوط إلى الفلاتر إذا كان الجنس فارغًا
+    if (!gender) gender = readFiltersGender();
     return { displayName, gender, avatarUrl, vip, hideCountry, hideCity, hideLikes };
   }
 
@@ -180,7 +149,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       did: stableDid(),
       country,
       city,
-      gender: prof.gender,
+      gender: prof.gender, // الآن لن تكون "" عندما يختار المستخدم جنسًا في البداية
       avatarUrl: prof.avatarUrl,
       displayName: prof.displayName,
       vip: prof.vip,
@@ -206,7 +175,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
 
   const onPhase = (e: Event) => {
     const ph = (e as CustomEvent)?.detail?.phase;
-    if (ph === "searching" || ph === "stopped") reset(); // لا تمسح على matched
+    if (ph === "searching" || ph === "stopped") reset();
   };
 
   const onPair = () => reset();
@@ -227,47 +196,25 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   window.addEventListener("rtc:pair", onPair as any);
   window.addEventListener("like:sync", onLikeSync as any);
 
-  // عند الاتصال: أرسل ميتا محلية واطلب ميتا الطرف
-  window.addEventListener(
-    "lk:attached",
-    () => {
-      // أرسل ميتا فوريًا ثم أعد الإرسال لاحقًا لتفادي السباقات المبكرة
-      sendMyMeta();
-      try {
-        const room: any = (globalThis as any).__lkRoom;
-        const bin = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
-        room?.localParticipant?.publishData?.(bin, { reliable: true, topic: "meta" });
-        setTimeout(() => {
-          try {
-            room?.localParticipant?.publishData?.(bin, { reliable: true, topic: "meta" });
-            sendMyMeta();
-          } catch {}
-        }, 250);
-      } catch {}
-    },
-    { passive: true } as any
-  );
+  window.addEventListener("lk:attached", () => {
+    sendMyMeta();
+    try {
+      const room: any = (globalThis as any).__lkRoom;
+      const bin = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
+      room?.localParticipant?.publishData?.(bin, { reliable: true, topic: "meta" });
+    } catch {}
+  }, { passive: true } as any);
 
-  window.addEventListener(
-    "ditona:meta:init",
-    () => {
-      sendMyMeta();
-    },
-    { passive: true } as any
-  );
+  window.addEventListener("ditona:meta:init", () => { sendMyMeta(); }, { passive: true } as any);
 
-  window.addEventListener(
-    "pagehide",
-    () => {
-      try {
-        window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
-        window.removeEventListener("rtc:phase", onPhase as any);
-        window.removeEventListener("rtc:pair", onPair as any);
-        window.removeEventListener("like:sync", onLikeSync as any);
-      } catch {}
-    },
-    { once: true }
-  );
+  window.addEventListener("pagehide", () => {
+    try {
+      window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
+      window.removeEventListener("rtc:phase", onPhase as any);
+      window.removeEventListener("rtc:pair", onPair as any);
+      window.removeEventListener("like:sync", onLikeSync as any);
+    } catch {}
+  }, { once: true });
 }
 
 export {};
