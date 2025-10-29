@@ -53,26 +53,17 @@ function genderBadgeLocal(
   const BIG = "text-[1.25rem] sm:text-[1.5rem] leading-none";
   switch (n) {
     case "m":
-      return { symbol: "♂", label, labelCls: "text-blue-500", symbolCls: text-blue-500 ${BIG} };
+      return { symbol: "♂", label, labelCls: "text-blue-500", symbolCls: `text-blue-500 ${BIG}` };
     case "f":
-      return { symbol: "♀", label, labelCls: "text-red-500", symbolCls: text-red-500 ${BIG} };
+      return { symbol: "♀", label, labelCls: "text-red-500", symbolCls: `text-red-500 ${BIG}` };
     case "c":
-      return { symbol: "⚤", label, labelCls: "text-rose-400", symbolCls: text-rose-400 ${BIG} };
+      return { symbol: "⚤", label, labelCls: "text-rose-400", symbolCls: `text-rose-400 ${BIG}` };
     case "l": {
       const GRAD = "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
-      return { symbol: "🏳️‍🌈", label: "LGBTQ+", labelCls: GRAD, symbolCls: ${GRAD} ${BIG} };
+      return { symbol: "🏳️‍🌈", label: "LGBTQ+", labelCls: GRAD, symbolCls: `${GRAD} ${BIG}` };
     }
   }
   return null;
-}
-
-function curPair(): string | null {
-  try {
-    const w: any = globalThis as any;
-    return w.__ditonaPairId || w.__pairId || null;
-  } catch {
-    return null;
-  }
 }
 
 export default function PeerOverlay() {
@@ -124,8 +115,8 @@ export default function PeerOverlay() {
 
     const onLikeSync = (ev: any) => {
       const d = ev?.detail || {};
-      const cur = curPair(); // __ditonaPairId أولوية
-      if (d.pairId && cur && d.pairId !== cur) return;
+      const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
+      if (d.pairId && curPair && d.pairId !== curPair) return;
       const n = typeof d.count === "number" ? d.count : typeof d.likes === "number" ? d.likes : null;
       if (n != null) {
         const nv = Math.max(0, Number(n) || 0);
@@ -150,8 +141,13 @@ export default function PeerOverlay() {
       if (ph === "searching" || ph === "stopped") resetAll();
     };
 
-    // اطلب الميتا من الطرف فور attach كتعجيل، مع مؤقت احتياطي
-    const ask = () => {
+    window.addEventListener("ditona:peer-meta", onMeta as any);
+    window.addEventListener("rtc:peer-meta", onMeta as any);
+    window.addEventListener("like:sync", onLikeSync as any);
+    window.addEventListener("rtc:phase", onPhase as any);
+    window.addEventListener("rtc:pair", resetAll as any);
+
+    const t = setTimeout(() => {
       try {
         const room: any = (globalThis as any).__lkRoom;
         if (room?.state === "connected") {
@@ -159,16 +155,7 @@ export default function PeerOverlay() {
           room.localParticipant?.publishData?.(payload, { reliable: true, topic: "meta" });
         }
       } catch {}
-    };
-
-    window.addEventListener("ditona:peer-meta", onMeta as any);
-    window.addEventListener("rtc:peer-meta", onMeta as any);
-    window.addEventListener("like:sync", onLikeSync as any);
-    window.addEventListener("rtc:phase", onPhase as any);
-    window.addEventListener("rtc:pair", resetAll as any);
-    window.addEventListener("lk:attached", ask as any, { passive: true } as any);
-
-    const t = setTimeout(ask, 1000);
+    }, 1000);
 
     return () => {
       clearTimeout(t);
@@ -177,7 +164,6 @@ export default function PeerOverlay() {
       window.removeEventListener("like:sync", onLikeSync as any);
       window.removeEventListener("rtc:phase", onPhase as any);
       window.removeEventListener("rtc:pair", resetAll as any);
-      window.removeEventListener("lk:attached", ask as any);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -210,7 +196,7 @@ export default function PeerOverlay() {
           {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
           {showLikes && (
             <>
-              <span className="ml-1 text-sm">❤️</span>
+              <span className="ml-1 text-sm">❤</span>
               <span className="text-xs">{likes}</span>
             </>
           )}
@@ -221,7 +207,7 @@ export default function PeerOverlay() {
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         {showLoc && (
           <span className="text-white/95">
-            {meta.country || meta.city ? ${meta.country ?? ""}${meta.city ? "–" + meta.city : ""} : ""}
+            {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
           </span>
         )}
         {g && (
