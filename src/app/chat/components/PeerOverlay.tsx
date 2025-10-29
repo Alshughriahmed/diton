@@ -66,6 +66,15 @@ function genderBadgeLocal(
   return null;
 }
 
+function curPair(): string | null {
+  try {
+    const w: any = globalThis as any;
+    return w.__ditonaPairId || w.__pairId || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function PeerOverlay() {
   const [meta, setMeta] = useState<Meta>(loadCached());
   const [likes, setLikes] = useState<number>(typeof meta.likes === "number" ? meta.likes! : 0);
@@ -115,8 +124,8 @@ export default function PeerOverlay() {
 
     const onLikeSync = (ev: any) => {
       const d = ev?.detail || {};
-      const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId;
-      if (d.pairId && curPair && d.pairId !== curPair) return;
+      const cur = curPair(); // __ditonaPairId أولوية
+      if (d.pairId && cur && d.pairId !== cur) return;
       const n = typeof d.count === "number" ? d.count : typeof d.likes === "number" ? d.likes : null;
       if (n != null) {
         const nv = Math.max(0, Number(n) || 0);
@@ -141,13 +150,8 @@ export default function PeerOverlay() {
       if (ph === "searching" || ph === "stopped") resetAll();
     };
 
-    window.addEventListener("ditona:peer-meta", onMeta as any);
-    window.addEventListener("rtc:peer-meta", onMeta as any);
-    window.addEventListener("like:sync", onLikeSync as any);
-    window.addEventListener("rtc:phase", onPhase as any);
-    window.addEventListener("rtc:pair", resetAll as any);
-
-    const t = setTimeout(() => {
+    // اطلب الميتا من الطرف فور attach كتعجيل، مع مؤقت احتياطي
+    const ask = () => {
       try {
         const room: any = (globalThis as any).__lkRoom;
         if (room?.state === "connected") {
@@ -155,7 +159,16 @@ export default function PeerOverlay() {
           room.localParticipant?.publishData?.(payload, { reliable: true, topic: "meta" });
         }
       } catch {}
-    }, 1000);
+    };
+
+    window.addEventListener("ditona:peer-meta", onMeta as any);
+    window.addEventListener("rtc:peer-meta", onMeta as any);
+    window.addEventListener("like:sync", onLikeSync as any);
+    window.addEventListener("rtc:phase", onPhase as any);
+    window.addEventListener("rtc:pair", resetAll as any);
+    window.addEventListener("lk:attached", ask as any, { passive: true } as any);
+
+    const t = setTimeout(ask, 1000);
 
     return () => {
       clearTimeout(t);
@@ -164,6 +177,7 @@ export default function PeerOverlay() {
       window.removeEventListener("like:sync", onLikeSync as any);
       window.removeEventListener("rtc:phase", onPhase as any);
       window.removeEventListener("rtc:pair", resetAll as any);
+      window.removeEventListener("lk:attached", ask as any);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -196,7 +210,7 @@ export default function PeerOverlay() {
           {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
           {showLikes && (
             <>
-              <span className="ml-1 text-sm">❤</span>
+              <span className="ml-1 text-sm">❤️</span>
               <span className="text-xs">{likes}</span>
             </>
           )}
