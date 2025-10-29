@@ -124,8 +124,8 @@ export default function PeerOverlay() {
 
     const onLikeSync = (ev: any) => {
       const d = ev?.detail || {};
-      const cur = curPair(); // __ditonaPairId أولوية
-      if (d.pairId && cur && d.pairId !== cur) return;
+      const cp = curPair();
+      if (d?.pairId && cp && d.pairId !== cp) return;
       const n = typeof d.count === "number" ? d.count : typeof d.likes === "number" ? d.likes : null;
       if (n != null) {
         const nv = Math.max(0, Number(n) || 0);
@@ -150,7 +150,7 @@ export default function PeerOverlay() {
       if (ph === "searching" || ph === "stopped") resetAll();
     };
 
-    // اطلب الميتا من الطرف فور attach كتعجيل، مع مؤقت احتياطي
+    // طلب meta فور attach ونسخة احتياطية بعد ثانية
     const ask = () => {
       try {
         const room: any = (globalThis as any).__lkRoom;
@@ -190,28 +190,35 @@ export default function PeerOverlay() {
     <>
       {/* أعلى اليسار */}
       <div className="absolute top-2 left-2 z-30 flex items-center gap-2 select-none pointer-events-none">
-        <div className="h-8 w-8 rounded-full overflow-hidden ring-1 ring-white/30 bg-white/10">
-          {meta.avatarUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={meta.avatarUrl}
-              alt=""
-              className="h-full w-full object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = "none";
-              }}
-            />
-          ) : (
-            <div className="h-full w-full grid place-items-center text-[10px] text-white/80 bg-black/30">?</div>
-          )}
-        </div>
+        {/* نحرص على وجود <img data-ui="peer-avatar"> دائمًا كي يعمل peerMetaUi */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          data-ui="peer-avatar"
+          src={meta.avatarUrl || ""}
+          alt=""
+          className="h-8 w-8 rounded-full overflow-hidden ring-1 ring-white/30 object-cover bg-white/10"
+          onError={(e) => {
+            const el = e.currentTarget;
+            el.removeAttribute("src");
+            el.style.display = "none";
+          }}
+        />
         <div className="flex items-center gap-1 text-white/95 drop-shadow">
-          {meta.displayName && <span className="text-xs font-medium">{meta.displayName}</span>}
-          {meta.vip && <span className="text-[10px] px-1 rounded-full bg-yellow-400/90 text-black font-bold">VIP</span>}
+          <span className="text-xs font-medium" data-ui="peer-name">
+            {meta.displayName || ""}
+          </span>
+          <span
+            data-ui="peer-vip"
+            className={`text-[10px] px-1 rounded-full ${meta.vip ? "bg-yellow-400/90 text-black font-bold" : "hidden"}`}
+          >
+            VIP
+          </span>
           {showLikes && (
             <>
               <span className="ml-1 text-sm">❤️</span>
-              <span className="text-xs">{likes}</span>
+              <span className="text-xs" data-ui="peer-likes">
+                {likes}
+              </span>
             </>
           )}
         </div>
@@ -220,14 +227,28 @@ export default function PeerOverlay() {
       {/* أسفل اليسار */}
       <div className="absolute bottom-2 left-2 z-30 text-xs sm:text-sm font-medium select-none pointer-events-none drop-shadow">
         {showLoc && (
-          <span className="text-white/95">
-            {meta.country || meta.city ? `${meta.country ?? ""}${meta.city ? "–" + meta.city : ""}` : ""}
-          </span>
+          <>
+            <span className="text-white/95" data-ui="peer-country">
+              {meta.country || "—"}
+            </span>
+            {/* city مطلوب للمحدّد، حتى لو مُخفى بصريًا */}
+            <span className="sr-only" aria-hidden="true" data-ui="peer-city">
+              {meta.city || ""}
+            </span>
+          </>
         )}
-        {g && (
+        {g ? (
           <span className="inline-flex items-center gap-1 ml-2 align-middle">
-            <span className={g.symbolCls}>{g.symbol}</span>
+            <span className={g.symbolCls} data-ui="peer-gender">
+              {g.symbol}
+            </span>
             <span className={g.labelCls}>{g.label}</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 ml-2 align-middle">
+            <span className="text-white/70" data-ui="peer-gender">
+              —
+            </span>
           </span>
         )}
       </div>
