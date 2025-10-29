@@ -7,7 +7,7 @@
  *   - "rtc:pair"           -> reset on new pair
  *   - "lk:attached"        -> send my meta + request peer meta (meta:init)
  *   - "ditona:meta:init"   -> send my meta when requested
- *   - "like:sync"          -> update likes counter
+ *   - "like:sync"          -> update likes counter (pair-scoped)
  */
 
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
@@ -23,10 +23,13 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       const name = q('[data-ui="peer-name"]');
       const likes = q('[data-ui="peer-likes"]');
       const vip = q('[data-ui="peer-vip"]');
-      const avatar = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | HTMLElement | null;
+      const avatar = document.querySelector('[data-ui="peer-avatar"]') as
+        | HTMLImageElement
+        | HTMLElement
+        | null;
 
-      if (g) g.textContent = "—";
-      if (ctry) ctry.textContent = "—";
+      if (g) g.textContent = "";        // لا خطوط بديلة
+      if (ctry) ctry.textContent = "";
       if (cty) cty.textContent = "";
       if (name) name.textContent = "";
       if (likes) {
@@ -49,17 +52,35 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       const name = q('[data-ui="peer-name"]');
       const likes = q('[data-ui="peer-likes"]');
       const vip = q('[data-ui="peer-vip"]');
-      const avatar = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | HTMLElement | null;
+      const avatar = document.querySelector('[data-ui="peer-avatar"]') as
+        | HTMLImageElement
+        | HTMLElement
+        | null;
 
-      if (g) g.textContent = meta?.gender ? String(meta.gender) : "—";
+      // ثبّت did عالميًا للتوافق
+      try {
+        const did =
+          meta?.did ||
+          meta?.peerDid ||
+          meta?.id ||
+          meta?.identity ||
+          meta?.deviceId ||
+          "";
+        if (did) {
+          (globalThis as any).__peerDid = String(did);
+          (globalThis as any).__ditonaPeerDid = String(did);
+        }
+      } catch {}
+
+      if (g) g.textContent = meta?.gender ? String(meta.gender) : "";
 
       if (ctry) {
         const hideCountry = !!meta?.hideCountry;
-        ctry.textContent = hideCountry ? "—" : (meta?.country ? String(meta.country) : "—");
+        ctry.textContent = hideCountry ? "" : meta?.country ? String(meta.country) : "";
       }
       if (cty) {
         const hideCity = !!meta?.hideCity;
-        cty.textContent = hideCity ? "" : (meta?.city ? String(meta.city) : "");
+        cty.textContent = hideCity ? "" : meta?.city ? String(meta.city) : "";
       }
 
       if (name) name.textContent = meta?.displayName ? String(meta.displayName) : "";
@@ -70,7 +91,10 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
           likes.style.display = "none";
         } else {
           likes.style.display = "";
-          const n = typeof meta?.likes === "number" ? meta.likes : parseInt(meta?.likes ?? "0", 10) || 0;
+          const n =
+            typeof meta?.likes === "number"
+              ? meta.likes
+              : parseInt(meta?.likes ?? "0", 10) || 0;
           likes.textContent = String(n);
         }
       }
@@ -129,14 +153,13 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     let hideCity = false;
     let hideLikes = false;
     try {
-      // مفاتيح محتملة لتخزين Zustand
       const raw =
         localStorage.getItem("ditona.profile.v1") ||
         localStorage.getItem("ditona_profile") ||
         localStorage.getItem("profile");
       if (raw) {
         const p = JSON.parse(raw);
-        const state = p?.state ?? p; // يدعم تنسيق persist
+        const state = p?.state ?? p;
         displayName = state?.displayName ?? "";
         gender = state?.gender ?? "";
         avatarUrl = state?.avatarDataUrl ?? "";
@@ -208,11 +231,18 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   window.addEventListener(
     "lk:attached",
     () => {
+      // أرسل ميتا فوريًا ثم أعد الإرسال لاحقًا لتفادي السباقات المبكرة
       sendMyMeta();
       try {
         const room: any = (globalThis as any).__lkRoom;
         const bin = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
         room?.localParticipant?.publishData?.(bin, { reliable: true, topic: "meta" });
+        setTimeout(() => {
+          try {
+            room?.localParticipant?.publishData?.(bin, { reliable: true, topic: "meta" });
+            sendMyMeta();
+          } catch {}
+        }, 250);
       } catch {}
     },
     { passive: true } as any
