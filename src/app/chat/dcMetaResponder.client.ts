@@ -1,11 +1,11 @@
-// src/app/chat/dcMetaResponder.client.ts
 /**
- * LiveKit DataChannel -> window events bridge (meta only).
- * - topic "meta": forward {t:"peer-meta", payload} to "ditona:peer-meta"
- * - topic "meta": on {t:"meta:init"} -> emit "ditona:meta:init" and send my peer-meta twice
- * لا يتعامل مع topic "like" لتجنّب الازدواج؛ likeSyncClient هو المسؤول.
+ * LiveKit DataChannel → window events (META فقط).
+ * - topic="meta":
+ *    • {t:"peer-meta", payload}  →  ditona:peer-meta  (+pairId)
+ *    • {t:"meta:init"}          →  ditona:meta:init  ثم sendMyMeta() مرّتين
+ *    • توافق: جسم ميتا مباشرةً   →  ditona:peer-meta  (+pairId)
+ * لا يتعامل مع topic="like"؛ likeSyncClient مسؤول عنه.
  */
-
 if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) {
   (window as any).__dcMetaResponderMounted = 1;
 
@@ -21,7 +21,14 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
     try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
   };
 
-  // -------- compose my meta (مطابق لـ peerMetaUi) --------
+  const curPair = (): string | null => {
+    try {
+      const w: any = window as any;
+      return w.__ditonaPairId || w.__pairId || null;
+    } catch { return null; }
+  };
+
+  // ---- compose & send my meta (مطابق لـ peerMetaUi) ----
   function stableDid(): string {
     try {
       const k = "ditona_did";
@@ -30,43 +37,33 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
       const gen = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
       localStorage.setItem(k, gen);
       return gen;
-    } catch {
-      return "did-" + Math.random().toString(36).slice(2, 9);
-    }
+    } catch { return "did-" + Math.random().toString(36).slice(2, 9); }
   }
 
   function readGeo() {
     try {
       const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
       return { country: g?.country ?? null, city: g?.city ?? null };
-    } catch {
-      return { country: null, city: null };
-    }
+    } catch { return { country: null, city: null }; }
   }
 
   function readProfile() {
-    let displayName = "";
-    let gender = "";
-    let avatarUrl = "";
-    let vip = false;
-    let hideCountry = false;
-    let hideCity = false;
-    let hideLikes = false;
+    let displayName = "", gender = "", avatarUrl = "";
+    let vip = false, hideCountry = false, hideCity = false, hideLikes = false;
     try {
       const raw =
         localStorage.getItem("ditona.profile.v1") ||
-        localStorage.getItem("ditona_profile") ||
+        localStorage.getItem("ditona_profile")   ||
         localStorage.getItem("profile");
       if (raw) {
-        const p = JSON.parse(raw);
-        const state = p?.state ?? p;
-        displayName = state?.displayName ?? "";
-        gender = state?.gender ?? "";
-        avatarUrl = state?.avatarDataUrl ?? "";
-        vip = !!state?.vip;
-        hideCountry = !!state?.privacy?.hideCountry;
-        hideCity = !!state?.privacy?.hideCity;
-        const showCount = state?.likes?.showCount;
+        const p = JSON.parse(raw); const s = p?.state ?? p;
+        displayName = s?.displayName ?? "";
+        gender = s?.gender ?? "";
+        avatarUrl = s?.avatarDataUrl ?? "";
+        vip = !!s?.vip;
+        hideCountry = !!s?.privacy?.hideCountry;
+        hideCity = !!s?.privacy?.hideCity;
+        const showCount = s?.likes?.showCount;
         hideLikes = typeof showCount === "boolean" ? !showCount : false;
       }
     } catch {}
@@ -75,19 +72,18 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
 
   function composeMyMeta() {
     const { country, city } = readGeo();
-    const prof = readProfile();
+    const p = readProfile();
     return {
       did: stableDid(),
-      country,
-      city,
-      gender: prof.gender,
-      avatarUrl: prof.avatarUrl,
-      displayName: prof.displayName,
-      vip: prof.vip,
+      country, city,
+      gender: p.gender,
+      avatarUrl: p.avatarUrl,
+      displayName: p.displayName,
+      vip: p.vip,
       likes: 0,
-      hideCountry: !!prof.hideCountry,
-      hideCity: !!prof.hideCity,
-      hideLikes: !!prof.hideLikes,
+      hideCountry: !!p.hideCountry,
+      hideCity: !!p.hideCity,
+      hideLikes: !!p.hideLikes,
     };
   }
 
@@ -95,21 +91,18 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
     try {
       const room: any = (window as any).__lkRoom;
       if (!room?.localParticipant?.publishData) return;
-      const msg = { t: "peer-meta", payload: composeMyMeta() };
-      const bin = new TextEncoder().encode(JSON.stringify(msg));
+      const bin = new TextEncoder().encode(JSON.stringify({ t: "peer-meta", payload: composeMyMeta() }));
       await room.localParticipant.publishData(bin, { reliable: true, topic: "meta" });
     } catch {}
   }
 
-  // -------- wiring --------
+  // ---- wiring ----
   let curRoom: any = null;
   let off: (() => void) | null = null;
 
   function attachRoom(room: any) {
-    if (!room || !room.on) return;
-    if (curRoom === room) return;
-
-    if (off) { try { off(); } catch {} off = null; }
+    if (!room?.on || curRoom === room) return;
+    try { off?.(); } catch {} ; off = null;
     curRoom = room;
 
     const onData = (payload: Uint8Array, _p?: any, _k?: any, topic?: string) => {
@@ -117,40 +110,34 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
       const j = parse(payload);
       if (!j || typeof j !== "object") return;
 
-      // وصلتنا ميتا جاهزة
+      // جاهزة
       if (j.t === "peer-meta" && j.payload) {
-        dispatch("ditona:peer-meta", j.payload);
+        dispatch("ditona:peer-meta", { ...j.payload, pairId: curPair() });
         return;
       }
 
-      // طلب الميتا
+      // طلب
       if (j.t === "meta:init") {
         dispatch("ditona:meta:init", {});
-        // ردّ مزدوج لتفادي السباقات المبكرة
         sendMyMeta();
         setTimeout(sendMyMeta, 250);
         return;
       }
 
-      // توافق: payload يبدو ميتا مباشرةً
+      // توافق
       if (!j.t && (j.gender || j.country || j.city || j.displayName || j.avatar || j.avatarUrl)) {
-        dispatch("ditona:peer-meta", j);
+        dispatch("ditona:peer-meta", { ...j, pairId: curPair() });
       }
     };
 
-    // "dataReceived" هو اسم الحدث في livekit-client على الكائن Room
+    // الاسم النصي يعمل دون استيراد RoomEvent
     room.on("dataReceived", onData);
     off = () => { try { room.off("dataReceived", onData); } catch {} };
   }
 
-  // حاول الربط الفوري ثم عند الإرفاق
   attachRoom((window as any).__lkRoom);
   window.addEventListener("lk:attached", () => attachRoom((window as any).__lkRoom), { passive: true } as any);
-
-  // استجابة محلية لطلب الميتا
   window.addEventListener("ditona:meta:init", () => { sendMyMeta(); }, { passive: true } as any);
-
   window.addEventListener("pagehide", () => { try { off?.(); } catch {} }, { once: true } as any);
 }
-
 export {};
