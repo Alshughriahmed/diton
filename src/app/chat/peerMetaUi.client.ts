@@ -1,24 +1,26 @@
 // src/app/chat/peerMetaUi.client.ts
 /**
- * Idempotent DOM updater for peer metadata badges.
- * Listens to:
- *  - "ditona:peer-meta"   → apply meta immediately
- *  - "rtc:phase"          → reset on searching|stopped
- *  - "rtc:pair"           → reset on new pair
- *  - "lk:attached"        → send my meta and request peer meta
- *  - "ditona:meta:init"   → send my meta on request
- *  - "like:sync"          → update likes counter with pairId guard
+ * محدِّث DOM آمن ومتكرر لبادجات ميتاداتا الطرف.
+ * يستمع إلى:
+ *  - "ditona:peer-meta"   → تطبيق الميتا فورًا
+ *  - "rtc:phase"          → إعادة الضبط عند searching|stopped  (لا مسح على matched)
+ *  - "rtc:pair"           → إعادة الضبط عند زوج جديد
+ *  - "lk:attached"        → إرسال ميتا محلية + طلب ميتا الطرف (meta:init)
+ *  - "ditona:meta:init"   → إرسال الميتا عند الطلب
+ *  - "like:sync"          → تحديث عدّاد الإعجاب مع حارس pairId
  *
- * Notes:
- *  - Do NOT write gender text here; React (PeerOverlay) renders the badge.
- *    We only set data-g attribute with normalized value: m|f|c|l|u.
- *  - DOM selectors stay stable: data-ui="peer-{gender|country|city|name|likes|vip|avatar}"
- *  - Likes counter source of truth is like:sync.
+ * ملاحظات:
+ *  - لا تغيُّر في محددات DOM: data-ui="peer-{gender|country|city|name|likes|vip|avatar}"
+ *  - مصدر حقيقة عدّاد الإعجاب هو like:sync فقط.
+ *  - gender يأتي من الإعدادات أو صفحة البداية. نطبّعه إلى m|f|c|l|u.
  */
+
 import { normalizeGender } from "@/lib/gender";
 
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   (window as any).__peerMetaUiMounted = 1;
+
+  /* --------------- أدوات مساعدة --------------- */
 
   const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
 
@@ -63,13 +65,14 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     let hideLikes = false;
 
     try {
+      // Zustand persist المرجّح من صفحة الإعدادات
       const raw =
         localStorage.getItem("ditona.profile.v1") ||
         localStorage.getItem("ditona_profile") ||
         localStorage.getItem("profile");
       if (raw) {
         const p = JSON.parse(raw);
-        const state = p?.state ?? p;
+        const state = p?.state ?? p; // يدعم شكل persist
         displayName = state?.displayName ?? "";
         gender = state?.gender ?? "";
         avatarUrl = state?.avatarDataUrl ?? "";
@@ -79,6 +82,8 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         const showCount = state?.likes?.showCount;
         hideLikes = typeof showCount === "boolean" ? !showCount : false;
       }
+
+      // Fallback من صفحة البداية/الفلاتر إن لم يُحفظ الجنس بعد
       if (!gender) {
         const fr =
           localStorage.getItem("ditona.filters.v1") ||
@@ -94,13 +99,33 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
           if (gLS) gender = gLS;
         }
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
 
     try {
-      gender = normalizeGender(gender); // m|f|c|l|u
-    } catch {}
+      gender = normalizeGender(gender); // → m|f|c|l|u
+    } catch {
+      /* ignore */
+    }
 
     return { displayName, gender, avatarUrl, vip, hideCountry, hideCity, hideLikes };
+  }
+
+  function formatGenderText(g: unknown): string {
+    const n = normalizeGender(g);
+    switch (n) {
+      case "m":
+        return "♂ Male";
+      case "f":
+        return "♀ Female";
+      case "c":
+        return "⚤ Couple";
+      case "l":
+        return "🏳️‍🌈 LGBTQ+";
+      default:
+        return "—";
+    }
   }
 
   function composeMyMeta() {
@@ -110,7 +135,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       did: stableDid(),
       country,
       city,
-      gender: prof.gender, // normalized; React renders badge
+      gender: prof.gender, // مُطبَّعة
       avatarUrl: prof.avatarUrl,
       displayName: prof.displayName,
       vip: prof.vip,
@@ -128,8 +153,12 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
       const payload = { t: "peer-meta", payload: composeMyMeta() };
       const bin = new TextEncoder().encode(JSON.stringify(payload));
       await room.localParticipant.publishData(bin, { reliable: true, topic: "meta" });
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }
+
+  /* --------------- التحديث/الضبط --------------- */
 
   function reset() {
     try {
@@ -144,8 +173,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         | HTMLElement
         | null;
 
-      // do not write gender text; only clear attribute
-      if (g) g.removeAttribute("data-g");
+      if (g) g.textContent = "—";
       if (ctry) ctry.textContent = "—";
       if (cty) cty.textContent = "";
       if (name) name.textContent = "";
@@ -158,7 +186,9 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         if (avatar instanceof HTMLImageElement) avatar.src = "";
         else (avatar as HTMLElement).style.backgroundImage = "";
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }
 
   function apply(meta: any) {
@@ -174,14 +204,13 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         | HTMLElement
         | null;
 
-      // gender: set only normalized attribute; React handles visual badge
+      // gender
       if (g) {
-        const n = normalizeGender(meta?.gender ?? "");
-        if (n && n !== "u") g.setAttribute("data-g", n);
-        else g.removeAttribute("data-g");
+        const gv = meta?.gender ?? "";
+        g.textContent = gv ? formatGenderText(gv) : "—";
       }
 
-      // location
+      // الموقع
       if (ctry) {
         const hideCountry = !!meta?.hideCountry;
         ctry.textContent = hideCountry ? "—" : meta?.country ? String(meta.country) : "—";
@@ -191,10 +220,10 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         cty.textContent = hideCity ? "" : meta?.city ? String(meta.city) : "";
       }
 
-      // name
+      // الاسم
       if (name) name.textContent = meta?.displayName ? String(meta.displayName) : "";
 
-      // likes
+      // العدّاد
       if (likes) {
         const hideLikes = !!meta?.hideLikes;
         if (hideLikes) {
@@ -213,20 +242,24 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         else vip.classList.remove("is-vip");
       }
 
-      // avatar
+      // الصورة
       if (avatar) {
         const url = meta?.avatar || meta?.avatarUrl || "";
         if (avatar instanceof HTMLImageElement) avatar.src = url || "";
         else (avatar as HTMLElement).style.backgroundImage = url ? `url("${url}")` : "";
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }
+
+  /* --------------- المستمعون --------------- */
 
   const onPeerMeta = (e: Event) => apply((e as CustomEvent).detail);
 
   const onPhase = (e: Event) => {
     const ph = (e as CustomEvent)?.detail?.phase;
-    if (ph === "searching" || ph === "stopped") reset(); // keep matched meta to avoid flicker
+    if (ph === "searching" || ph === "stopped") reset(); // لا تمسح على matched
   };
 
   const onPair = () => reset();
@@ -235,11 +268,13 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     try {
       const d = (e as CustomEvent).detail || {};
       const cur = curPairId();
-      if (d?.pairId && cur && d.pairId !== cur) return;
+      if (d?.pairId && cur && d.pairId !== cur) return; // حارس pairId
       if (typeof d?.count !== "number") return;
       const el = q('[data-ui="peer-likes"]');
       if (el) el.textContent = String(Math.max(0, d.count | 0));
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   };
 
   window.addEventListener("ditona:peer-meta", onPeerMeta as any);
@@ -247,13 +282,16 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   window.addEventListener("rtc:pair", onPair as any);
   window.addEventListener("like:sync", onLikeSync as any);
 
+  // عند الاتصال: أرسل ميتا محلية واطلب ميتا الطرف
   const onAttached = () => {
     sendMyMeta();
     try {
       const room: any = (globalThis as any).__lkRoom;
       const bin = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
       room?.localParticipant?.publishData?.(bin, { reliable: true, topic: "meta" });
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   };
   window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
 
@@ -274,7 +312,9 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
         window.removeEventListener("rtc:pair", onPair as any);
         window.removeEventListener("like:sync", onLikeSync as any);
         window.removeEventListener("lk:attached", onAttached as any);
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     },
     { once: true },
   );
