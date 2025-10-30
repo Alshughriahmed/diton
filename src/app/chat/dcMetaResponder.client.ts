@@ -1,15 +1,17 @@
 /**
  * LiveKit DataChannel → window events (META فقط).
- * - topic="meta":
- *    • {t:"peer-meta", payload}  →  ditona:peer-meta  (+pairId)
- *    • {t:"meta:init"}          →  ditona:meta:init  ثم sendMyMeta() مرّتين
- *    • توافق: جسم ميتا مباشرةً   →  ditona:peer-meta  (+pairId)
- * لا يتعامل مع topic="like"؛ likeSyncClient مسؤول عنه.
+ * يقبل:
+ *  - topic === "meta" أو أي رسالة تحمل جسماً له {t:"peer-meta"| "meta:init"} أو جسم ميتا مباشر.
+ * يُصدر:
+ *  - ditona:peer-meta  (+pairId دائماً)
+ *  - ditona:meta:init
+ * لا يتعامل مع topic="like".
  */
 if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) {
   (window as any).__dcMetaResponderMounted = 1;
 
-  const parse = (b: ArrayBuffer | Uint8Array | string) => {
+  /* ---------- utils ---------- */
+  const toJSON = (b: ArrayBuffer | Uint8Array | string) => {
     try {
       if (typeof b === "string") return JSON.parse(b);
       const u8 = b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
@@ -17,18 +19,18 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
     } catch { return null; }
   };
 
-  const dispatch = (name: string, detail?: any) => {
+  const fire = (name: string, detail?: any) => {
     try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
   };
 
-  const curPair = (): string | null => {
+  const pairId = (): string | null => {
     try {
-      const w: any = window as any;
+      const w: any = window;
       return w.__ditonaPairId || w.__pairId || null;
     } catch { return null; }
   };
 
-  // ---- compose & send my meta (مطابق لـ peerMetaUi) ----
+  /* ---------- compose my meta (متوافق مع peerMetaUi) ---------- */
   function stableDid(): string {
     try {
       const k = "ditona_did";
@@ -57,14 +59,14 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
         localStorage.getItem("profile");
       if (raw) {
         const p = JSON.parse(raw); const s = p?.state ?? p;
-        displayName = s?.displayName ?? "";
-        gender = s?.gender ?? "";
-        avatarUrl = s?.avatarDataUrl ?? "";
-        vip = !!s?.vip;
-        hideCountry = !!s?.privacy?.hideCountry;
-        hideCity = !!s?.privacy?.hideCity;
+        displayName = s?.displayName ?? s?.profile?.displayName ?? "";
+        gender      = s?.gender ?? s?.profile?.gender ?? "";
+        avatarUrl   = s?.avatarDataUrl ?? s?.profile?.avatarDataUrl ?? "";
+        vip         = !!(s?.vip ?? s?.profile?.vip);
+        hideCountry = !!(s?.privacy?.hideCountry);
+        hideCity    = !!(s?.privacy?.hideCity);
         const showCount = s?.likes?.showCount;
-        hideLikes = typeof showCount === "boolean" ? !showCount : false;
+        hideLikes  = typeof showCount === "boolean" ? !showCount : false;
       }
     } catch {}
     return { displayName, gender, avatarUrl, vip, hideCountry, hideCity, hideLikes };
@@ -76,7 +78,7 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
     return {
       did: stableDid(),
       country, city,
-      gender: p.gender,
+      gender: p.gender,             // الرمز فقط سيُعرض في PeerOverlay
       avatarUrl: p.avatarUrl,
       displayName: p.displayName,
       vip: p.vip,
@@ -87,57 +89,73 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
     };
   }
 
+  /* ---------- send meta with throttle ---------- */
+  let lastSend = 0;
   async function sendMyMeta() {
     try {
       const room: any = (window as any).__lkRoom;
       if (!room?.localParticipant?.publishData) return;
+      const now = Date.now();
+      if (now - lastSend < 400) return; // كبح
+      lastSend = now;
       const bin = new TextEncoder().encode(JSON.stringify({ t: "peer-meta", payload: composeMyMeta() }));
       await room.localParticipant.publishData(bin, { reliable: true, topic: "meta" });
     } catch {}
   }
 
-  // ---- wiring ----
+  /* ---------- wiring ---------- */
   let curRoom: any = null;
   let off: (() => void) | null = null;
 
-  function attachRoom(room: any) {
+  function detach() { try { off?.(); } catch {} ; off = null; curRoom = null; }
+
+  function attach(room: any) {
     if (!room?.on || curRoom === room) return;
-    try { off?.(); } catch {} ; off = null;
+    detach();
     curRoom = room;
 
     const onData = (payload: Uint8Array, _p?: any, _k?: any, topic?: string) => {
-      if (topic !== "meta") return;
-      const j = parse(payload);
+      // نقبل meta topic أو أي جسم يحمل مفاتيح الميتا المتوقعة
+      const j = toJSON(payload);
       if (!j || typeof j !== "object") return;
 
-      // جاهزة
+      const looksLikeMetaBody =
+        !!(j.gender || j.country || j.city || j.displayName || j.avatar || j.avatarUrl);
+
+      const isMetaTopic = topic === "meta";
+      const isMetaMsg   = j.t === "peer-meta" || j.t === "meta:init" || looksLikeMetaBody;
+
+      if (!(isMetaTopic || isMetaMsg)) return;
+
       if (j.t === "peer-meta" && j.payload) {
-        dispatch("ditona:peer-meta", { ...j.payload, pairId: curPair() });
+        fire("ditona:peer-meta", { ...j.payload, pairId: pairId() });
         return;
       }
-
-      // طلب
       if (j.t === "meta:init") {
-        dispatch("ditona:meta:init", {});
+        fire("ditona:meta:init", {});
+        // أرسل مرتين لضمان الوصول
         sendMyMeta();
         setTimeout(sendMyMeta, 250);
         return;
       }
-
-      // توافق
-      if (!j.t && (j.gender || j.country || j.city || j.displayName || j.avatar || j.avatarUrl)) {
-        dispatch("ditona:peer-meta", { ...j, pairId: curPair() });
+      if (!j.t && looksLikeMetaBody) {
+        fire("ditona:peer-meta", { ...j, pairId: pairId() });
       }
     };
 
-    // الاسم النصي يعمل دون استيراد RoomEvent
+    // بدون استيراد RoomEvent
     room.on("dataReceived", onData);
     off = () => { try { room.off("dataReceived", onData); } catch {} };
   }
 
-  attachRoom((window as any).__lkRoom);
-  window.addEventListener("lk:attached", () => attachRoom((window as any).__lkRoom), { passive: true } as any);
-  window.addEventListener("ditona:meta:init", () => { sendMyMeta(); }, { passive: true } as any);
-  window.addEventListener("pagehide", () => { try { off?.(); } catch {} }, { once: true } as any);
+  attach((window as any).__lkRoom);
+
+  // ربط تلقائي عند تبدّل الغرفة أو طلب المزامنة
+  window.addEventListener("lk:attached", () => attach((window as any).__lkRoom) as any, { passive: true } as any);
+  window.addEventListener("ditona:meta:init", () => { sendMyMeta(); } as any, { passive: true } as any);
+  window.addEventListener("ditona:meta:push", () => { sendMyMeta(); } as any, { passive: true } as any);
+
+  // تنظيف عند مغادرة الصفحة
+  window.addEventListener("pagehide", () => { detach(); } as any, { once: true } as any);
 }
 export {};
