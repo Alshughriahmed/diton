@@ -1,86 +1,179 @@
 /**
- * HUD ميتاداتا الطرف العلوي: لا مسح على rtc:pair. مسح فقط على searching.
- * يعتمد على أحداث:
- *  - "ditona:peer-meta"  → عرض فوري
- *  - "ditona:meta:init"  → طلب إرسال ميتا الطرف الآخر
- *  - "rtc:phase"         → مسح عند searching فقط
- * يحترم pairId guard حتى لا تتسرب ميتاداتا قديمة.
+ * محدِّث DOM رشيق لبادجات ميتاداتا الطرف.
+ * يعالج: ditona:peer-meta, ditona:meta:init, rtc:pair, lk:attached, like:sync, rtc:phase
+ * لا يستخدم أي كلاس إخفاء، ويضمن إظهار العناصر على كل المقاسات.
  */
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   (window as any).__peerMetaUiMounted = 1;
 
-  const qs = (k: string) => document.querySelector(`[data-ui="${k}"]`) as HTMLElement | null;
-  const $g = () => qs("peer-gender");
-  const $c = () => qs("peer-country");
-  const $ci = () => qs("peer-city");
-  const $n = () => qs("peer-name");
-  const $l = () => qs("peer-likes");
-  const $v = () => qs("peer-vip");
-
-  let curPair: string | null = null;
-
-  const getPair = (): string | null => {
-    const w: any = window as any;
-    return w.__ditonaPairId || w.__pairId || null;
+  // ---- أدوات ----
+  const qs = (sel: string) => document.querySelector(sel) as HTMLElement | null;
+  const $ = {
+    name: () => qs('[data-ui="peer-name"]'),
+    vip: () => qs('[data-ui="peer-vip"]'),
+    likes: () => qs('[data-ui="peer-likes"]'),
+    country: () => qs('[data-ui="peer-country"]'),
+    city: () => qs('[data-ui="peer-city"]'),
+    gender: () => qs('[data-ui="peer-gender"]'),
   };
+
+  const unhideAll = () => {
+    document
+      .querySelectorAll<HTMLElement>('[data-ui^="peer-"]')
+      .forEach((el) => el.classList.remove("hidden", "md:hidden", "lg:hidden", "opacity-0"));
+  };
+
+  type Norm = "m" | "f" | "c" | "l" | "u";
+  const norm = (g: unknown): Norm => {
+    const s = String(g ?? "").toLowerCase();
+    if (s === "m" || s.startsWith("male") || s.includes("♂")) return "m";
+    if (s === "f" || s.startsWith("fem") || s.includes("♀")) return "f";
+    if (s === "c" || s.includes("couple") || s.includes("paar")) return "c";
+    if (s === "l" || s.includes("lgbt") || s.includes("rainbow")) return "l";
+    return "u";
+  };
+  const sym = (n: Norm) => (n === "m" ? "♂" : n === "f" ? "♀" : n === "c" ? "👫" : n === "l" ? "🏳️‍🌈" : "？");
+  const cls = (n: Norm) =>
+    n === "m"
+      ? "text-blue-500"
+      : n === "f"
+      ? "text-rose-500"
+      : n === "c"
+      ? "text-red-500"
+      : n === "l"
+      ? "text-emerald-400"
+      : "text-white/70";
+
+  let lastMeta: any = null;
 
   const clear = () => {
-    $g()?.replaceChildren();
-    if ($c()) $c()!.textContent = "";
-    if ($ci()) $ci()!.textContent = "";
-    if ($n()) $n()!.textContent = "";
-    if ($l()) $l()!.textContent = "0";
-    if ($v()) $v()!.classList.toggle("hidden", true);
-  };
-
-  const render = (m: any) => {
-    // حارس الزوج
-    const pair = getPair();
-    if (curPair && pair && pair !== curPair) return;
-    curPair = pair;
-
-    const genderEl = $g();
-    if (genderEl) {
-      const sym = typeof m?.gender === "string" ? m.gender : "";
-      genderEl.textContent = sym || "";
+    $.name()?.replaceChildren();
+    $.vip()?.replaceChildren();
+    $.likes()?.replaceChildren();
+    $.country()?.replaceChildren();
+    $.city()?.replaceChildren();
+    const g = $.gender();
+    if (g) {
+      g.textContent = "";
+      g.className = g.className.replace(/\btext-[\w/-]+\b/g, "");
     }
-    if ($c()) $c()!.textContent = m?.country || "";
-    if ($ci()) $ci()!.textContent = m?.city || "";
-    if ($n()) $n()!.textContent = m?.displayName || "";
-    if ($l()) $l()!.textContent = String(typeof m?.likes === "number" ? m.likes : 0);
-    if ($v()) $v()!.classList.toggle("hidden", !m?.vip);
-    try { (window as any).__ditonaPeerDid = m?.did || ""; } catch {}
   };
 
-  // m→event
-  window.addEventListener("ditona:peer-meta", (ev: any) => {
-    const pair = getPair();
-    const pDetail = ev?.detail || {};
-    const pFromEv = pDetail?.pairId || null;
-    if (pair && pFromEv && pair !== pFromEv) return; // guard
-    render(pDetail);
-  });
+  const apply = (meta: any) => {
+    if (!meta || typeof meta !== "object") return;
+    unhideAll();
 
-  // لا مسح على rtc:pair. فقط نُحدّث pairId الحالي.
-  window.addEventListener("rtc:pair", () => {
-    curPair = getPair();
-    // لا clear هنا.
-  });
+    try {
+      // حفظ آخر ميتا للرجوع
+      (window as any).__ditonaLastPeerMeta = meta;
+      sessionStorage.setItem("ditona:last_peer_meta", JSON.stringify(meta));
+    } catch {}
 
-  window.addEventListener("rtc:phase", (ev: any) => {
-    const ph = ev?.detail?.phase;
-    if (ph === "searching" || ph === "idle" || ph === "boot") {
-      curPair = null;
+    // الاسم + VIP
+    const name = $.name();
+    if (name) name.textContent = String(meta.displayName || "").trim();
+
+    const vip = $.vip();
+    if (vip) vip.textContent = meta.vip ? "VIP" : "";
+
+    // البلد + المدينة
+    const ctry = $.country();
+    if (ctry) ctry.textContent = meta.hideCountry ? "" : String(meta.country || "").trim();
+
+    const city = $.city();
+    if (city) city.textContent = meta.hideCity ? "" : String(meta.city || "").trim();
+
+    // الجنس كرمز فقط
+    const g = $.gender();
+    if (g) {
+      const n = norm(meta.gender);
+      g.textContent = sym(n);
+      // نظّف أي لون قديم ثم أضف اللون الجديد
+      g.className = g.className.replace(/\btext-[\w/-]+\b/g, "");
+      g.classList.add(cls(n));
+    }
+
+    // اللايكات
+    const likes = $.likes();
+    if (likes) {
+      const hidden = !!meta.hideLikes;
+      likes.textContent = hidden ? "" : (typeof meta.likes === "number" ? `♥ ${meta.likes}` : "");
+    }
+
+    lastMeta = meta;
+  };
+
+  const reapplyCached = () => {
+    try {
+      const w: any = window as any;
+      if (w.__ditonaLastPeerMeta) return apply(w.__ditonaLastPeerMeta);
+      const raw = sessionStorage.getItem("ditona:last_peer_meta");
+      if (raw) return apply(JSON.parse(raw));
+    } catch {}
+  };
+
+  // ---- أحداث ----
+  window.addEventListener(
+    "ditona:peer-meta",
+    (e: any) => {
+      apply(e?.detail || {});
+      // إعادة تطبيق مؤجلة لسباقات التركيب
+      setTimeout(() => apply(e?.detail || {}), 50);
+    },
+    { passive: true } as any,
+  );
+
+  window.addEventListener(
+    "ditona:meta:init",
+    () => {
+      // عند طلب الميتا من الطرف الآخر نعيد حقن آخر نسخة لدينا محليًا
+      if (lastMeta) apply(lastMeta);
+      else reapplyCached();
+    },
+    { passive: true } as any,
+  );
+
+  window.addEventListener(
+    "rtc:pair",
+    () => {
+      // زوج جديد → امسح ثم أعد تطبيق المعلق عند وصوله
       clear();
-    }
-  });
+      setTimeout(reapplyCached, 100);
+    },
+    { passive: true } as any,
+  );
 
-  // عند طلب الميتا، نعيد بث "ditona:meta:init" لمزامنة الوحدات الأخرى
-  window.addEventListener("ditona:meta:init", () => {
-    try { window.dispatchEvent(new CustomEvent("ditona:meta:init:ack")); } catch {}
-  });
+  window.addEventListener(
+    "lk:attached",
+    () => {
+      // عند إرفاق الغرفة تأكد من ظهور العناصر
+      unhideAll();
+      reapplyCached();
+    },
+    { passive: true } as any,
+  );
 
-  // تنظيف عند مغادرة الصفحة
-  window.addEventListener("pagehide", () => { curPair = null; }, { once: true });
+  window.addEventListener(
+    "rtc:phase",
+    (e: any) => {
+      const ph = e?.detail?.phase;
+      if (ph === "searching" || ph === "idle" || ph === "boot") clear();
+    },
+    { passive: true } as any,
+  );
+
+  window.addEventListener(
+    "like:sync",
+    (e: any) => {
+      const d = e?.detail || {};
+      const likes = $.likes();
+      if (likes && typeof d.count === "number") likes.textContent = `♥ ${d.count}`;
+    },
+    { passive: true } as any,
+  );
+
+  // إظهار أي عقد مخفية بالخطأ عند التحميل الأول
+  unhideAll();
+  reapplyCached();
 }
 export {};
