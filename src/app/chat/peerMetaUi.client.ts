@@ -1,7 +1,11 @@
 /**
- * محدِّث DOM رشيق لبادجات ميتاداتا الطرف.
- * يعالج: ditona:peer-meta, ditona:meta:init, rtc:pair, lk:attached, like:sync, rtc:phase
- * لا يستخدم أي كلاس إخفاء، ويضمن إظهار العناصر على كل المقاسات.
+ * محدِّث DOM رشيق لبادجات ميتاداتا الطرف (B) فقط.
+ * المصدر: رسائل DataChannel بموضوع meta (حدث: ditona:peer-meta) + كاش sessionStorage.
+ * المتطلبات:
+ * - لا نُضيف/نُزيل أصناف إخفاء. عند الانتقال لـ searching نمسح النصوص فقط.
+ * - على الإقلاع نزيل مرة واحدة أصناف hidden/md:hidden/lg:hidden/opacity-0 من كل [data-ui^="peer-"].
+ * - تخزين/قراءة آخر ميتا في sessionStorage["ditona:last_peer_meta"].
+ * - خريطة رموز الجنس: m→♂ ، f→♀ ، c→👫 ، l→🏳️‍🌈 ، غير ذلك فارغ.
  */
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   (window as any).__peerMetaUiMounted = 1;
@@ -17,6 +21,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     gender: () => qs('[data-ui="peer-gender"]'),
   };
 
+  // إظهار العناصر في حال كانت مخفية تكوينياً — مرة واحدة.
   const unhideAll = () => {
     document
       .querySelectorAll<HTMLElement>('[data-ui^="peer-"]')
@@ -25,46 +30,33 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
 
   type Norm = "m" | "f" | "c" | "l" | "u";
   const norm = (g: unknown): Norm => {
-    const s = String(g ?? "").toLowerCase();
+    const s = String(g ?? "").toLowerCase().trim();
     if (s === "m" || s.startsWith("male") || s.includes("♂")) return "m";
     if (s === "f" || s.startsWith("fem") || s.includes("♀")) return "f";
     if (s === "c" || s.includes("couple") || s.includes("paar")) return "c";
     if (s === "l" || s.includes("lgbt") || s.includes("rainbow")) return "l";
     return "u";
   };
-  const sym = (n: Norm) => (n === "m" ? "♂" : n === "f" ? "♀" : n === "c" ? "👫" : n === "l" ? "🏳️‍🌈" : "？");
-  const cls = (n: Norm) =>
-    n === "m"
-      ? "text-blue-500"
-      : n === "f"
-      ? "text-rose-500"
-      : n === "c"
-      ? "text-red-500"
-      : n === "l"
-      ? "text-emerald-400"
-      : "text-white/70";
+  const sym = (n: Norm) => (n === "m" ? "♂" : n === "f" ? "♀" : n === "c" ? "👫" : n === "l" ? "🏳️‍🌈" : "");
 
   let lastMeta: any = null;
 
-  const clear = () => {
+  const clearTextsOnly = () => {
     $.name()?.replaceChildren();
     $.vip()?.replaceChildren();
     $.likes()?.replaceChildren();
     $.country()?.replaceChildren();
     $.city()?.replaceChildren();
     const g = $.gender();
-    if (g) {
-      g.textContent = "";
-      g.className = g.className.replace(/\btext-[\w/-]+\b/g, "");
-    }
+    if (g) g.textContent = "";
   };
 
   const apply = (meta: any) => {
     if (!meta || typeof meta !== "object") return;
     unhideAll();
 
+    // حفظ آخر ميتا للرجوع الفوري
     try {
-      // حفظ آخر ميتا للرجوع
       (window as any).__ditonaLastPeerMeta = meta;
       sessionStorage.setItem("ditona:last_peer_meta", JSON.stringify(meta));
     } catch {}
@@ -76,28 +68,26 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     const vip = $.vip();
     if (vip) vip.textContent = meta.vip ? "VIP" : "";
 
-    // البلد + المدينة
+    // البلد + المدينة (تحترم الإخفاء إن وُجد)
     const ctry = $.country();
     if (ctry) ctry.textContent = meta.hideCountry ? "" : String(meta.country || "").trim();
 
     const city = $.city();
     if (city) city.textContent = meta.hideCity ? "" : String(meta.city || "").trim();
 
-    // الجنس كرمز فقط
+    // الجنس كرمز فقط (لا نغيّر أي فئات — اللون تحدده CSS الحالية)
     const g = $.gender();
-    if (g) {
-      const n = norm(meta.gender);
-      g.textContent = sym(n);
-      // نظّف أي لون قديم ثم أضف اللون الجديد
-      g.className = g.className.replace(/\btext-[\w/-]+\b/g, "");
-      g.classList.add(cls(n));
-    }
+    if (g) g.textContent = sym(norm(meta.gender));
 
-    // اللايكات
+    // اللايكات (تحترم الإخفاء)
     const likes = $.likes();
     if (likes) {
       const hidden = !!meta.hideLikes;
-      likes.textContent = hidden ? "" : (typeof meta.likes === "number" ? `♥ ${meta.likes}` : "");
+      likes.textContent = hidden
+        ? ""
+        : typeof meta.likes === "number"
+        ? `♥ ${meta.likes}`
+        : "";
     }
 
     lastMeta = meta;
@@ -123,45 +113,47 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     { passive: true } as any,
   );
 
+  // عند طلب الميتا من الطرف الآخر نعيد حقن آخر نسخة لدينا محليًا
   window.addEventListener(
     "ditona:meta:init",
     () => {
-      // عند طلب الميتا من الطرف الآخر نعيد حقن آخر نسخة لدينا محليًا
       if (lastMeta) apply(lastMeta);
       else reapplyCached();
     },
     { passive: true } as any,
   );
 
+  // زوج جديد → امسح ثم أعد تطبيق المعلّق عند وصوله
   window.addEventListener(
     "rtc:pair",
     () => {
-      // زوج جديد → امسح ثم أعد تطبيق المعلق عند وصوله
-      clear();
+      clearTextsOnly();
       setTimeout(reapplyCached, 100);
     },
     { passive: true } as any,
   );
 
+  // عند إرفاق الغرفة تأكد من ظهور العناصر ثم إعادة ملء الكاش
   window.addEventListener(
     "lk:attached",
     () => {
-      // عند إرفاق الغرفة تأكد من ظهور العناصر
       unhideAll();
       reapplyCached();
     },
     { passive: true } as any,
   );
 
+  // استقرار HUD: في حالة البحث نمسح النصوص فقط (لا نُخفي العناصر)
   window.addEventListener(
     "rtc:phase",
     (e: any) => {
       const ph = e?.detail?.phase;
-      if (ph === "searching" || ph === "idle" || ph === "boot") clear();
+      if (ph === "searching") clearTextsOnly();
     },
     { passive: true } as any,
   );
 
+  // مزامنة عداد الإعجابات الحي
   window.addEventListener(
     "like:sync",
     (e: any) => {
@@ -172,7 +164,7 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     { passive: true } as any,
   );
 
-  // إظهار أي عقد مخفية بالخطأ عند التحميل الأول
+  // إظهار أي عقد مخفية بالخطأ عند التحميل الأول + ملء الكاش فورًا
   unhideAll();
   reapplyCached();
 }
