@@ -367,7 +367,9 @@ export default function ChatClient() {
   function subscribeAll(p: RemoteParticipant) {
     try {
       for (const pub of p.trackPublications.values()) {
-        if (!pub.isSubscribed) pub.setSubscribed(true).catch(() => {});
+        if (!pub.isSubscribed) {
+          try { (pub as any).setSubscribed?.(true); } catch {}
+        }
       }
     } catch {}
   }
@@ -533,7 +535,7 @@ export default function ChatClient() {
         if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           const base = { pairId: roomName, liked: !!j?.liked };
           window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: base }));
-          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base })); // توافق قديم
+          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base }));
           window.dispatchEvent(new CustomEvent("like:sync", { detail: { ...base, likedByOther: !!j?.liked } }));
         }
 
