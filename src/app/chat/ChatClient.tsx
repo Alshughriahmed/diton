@@ -661,7 +661,7 @@ export default function ChatClient() {
       }
       if (!roomName || !isActiveSid(sid)) return;
 
-      const room = new Room({ adaptiveStream: true, dynacast: true, autoSubscribe: true });
+     const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
       wireRoomEvents(room, roomName, sid);
 
@@ -683,7 +683,7 @@ export default function ChatClient() {
 
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
       isConnectingRef.current = true;
-      await room.connect(ws, token);
+      await room.connect(ws, token, { autoSubscribe: true });
       if (!isActiveSid(sid)) {
         try { await room.disconnect(false); } catch {}
         isConnectingRef.current = false;
@@ -727,7 +727,7 @@ export default function ChatClient() {
     if (!roomName) return false;
 
     const sid = newSid();
-    const room = new Room({ adaptiveStream: true, dynacast: true, autoSubscribe: true });
+   const room = new Room({ adaptiveStream: true, dynacast: true });
     roomRef.current = room;
     wireRoomEvents(room, roomName, sid);
 
@@ -747,7 +747,7 @@ export default function ChatClient() {
 
     const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
     isConnectingRef.current = true;
-    await room.connect(ws, token).catch(() => {});
+   await room.connect(ws, token, { autoSubscribe: true }).catch(() => {});
     isConnectingRef.current = false;
 
     if (room.state !== "connected") return false;
