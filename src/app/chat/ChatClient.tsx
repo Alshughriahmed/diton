@@ -100,6 +100,7 @@ export default function ChatClient() {
 
   // واجهة
   const [ready, setReady] = useState(false);
+  const [like, setLike] = useState(false);
   const [rtcPhase, setRtcPhase] = useState<Phase>("idle");
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
@@ -176,6 +177,7 @@ export default function ChatClient() {
       window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
       window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId } }));
     } catch {}
+    try { setLike(false); } catch {}
   }
 
   function emitRemoteTrackStarted() {
@@ -449,17 +451,14 @@ export default function ChatClient() {
     const onTrackUnsub = (t: RemoteTrack, pub: RemoteTrackPublication) => {
       if (!isActiveSid(sid)) return;
       try {
-       if (pub.kind === Track.Kind.Video && remoteVideoRef.current) {
-  try { (t as any).detach?.(remoteVideoRef.current); } catch {}
-  if (remoteVideoTrackRef.current === t) remoteVideoTrackRef.current = null;
-  try { (remoteVideoRef.current as any).srcObject = null; remoteVideoRef.current.load?.(); } catch {}
-}
-if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
-  try { (t as any).detach?.(remoteAudioRef.current); } catch {}
-  if (remoteAudioTrackRef.current === t) remoteAudioTrackRef.current = null;
-  try { (remoteAudioRef.current as any).srcObject = null; remoteAudioRef.current.load?.(); } catch {}
-}
-
+        if (pub.kind === Track.Kind.Video && remoteVideoRef.current) {
+          try { (t as any).detach?.(remoteVideoRef.current); } catch {}
+          if (remoteVideoTrackRef.current === t) remoteVideoTrackRef.current = null;
+        }
+        if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
+          try { (t as any).detach?.(remoteAudioRef.current); } catch {}
+          if (remoteAudioTrackRef.current === t) remoteAudioTrackRef.current = null;
+        }
       } catch {}
     };
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsub);
@@ -499,21 +498,24 @@ if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
           window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
         }
 
-        // مزامنة غنية بالعدّاد — المصدر الوحيد لتحديث العدّاد
+        // مزامنة غنية بالعدّاد
         if (j?.t === "like:sync") {
-          const pid = (typeof j?.pairId === "string" && j.pairId) ? j.pairId : roomName;
-          const detail: any = { pairId: pid };
-          if (typeof j?.count === "number") detail.count = j.count;
-          if (typeof j?.you === "boolean") detail.you = j.you;
+          const detail = {
+            pairId: roomName,
+            liked: !!j?.liked,
+            likedByOther: !!j?.liked,
+            count: typeof j?.count === "number" ? j.count : undefined,
+          };
           window.dispatchEvent(new CustomEvent("like:sync", { detail }));
           return;
         }
 
-        // رسائل like القديمة — توافق فقط، لا تحديث عدّاد
+        // الرسالة الخفيفة الفورية
         if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           const base = { pairId: roomName, liked: !!j?.liked };
           window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: base }));
           window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base }));
+          window.dispatchEvent(new CustomEvent("like:sync", { detail: { ...base, likedByOther: !!j?.liked } }));
         }
 
         if (j?.t === "peer-meta" && j.payload) {
@@ -530,23 +532,18 @@ if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.DataReceived, onData as any); } catch {} });
 
     const onPart = () => {
-  if (!isActiveSid(sid)) return;
-  detachRemoteAll();
-  try { remoteDidRef.current = ""; } catch {}
-  setPhase("searching");
-  try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {}
-};
-
+      if (!isActiveSid(sid)) return;
+      setPhase("searching");
+      try { window.dispatchEvent(new CustomEvent("livekit:participant-disconnected")); } catch {}
+    };
     room.on(RoomEvent.ParticipantDisconnected, onPart);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.ParticipantDisconnected, onPart); } catch {} });
 
     const onDisc = () => {
-  if (!isActiveSid(sid)) return;
-  dcDetach();
-  detachRemoteAll();
-  try { remoteDidRef.current = ""; } catch {}
-  setPhase("searching");
-  broadcastMediaState();
+      if (!isActiveSid(sid)) return;
+      dcDetach();
+      setPhase("searching");
+      broadcastMediaState();
 
       if (manualSwitchRef.current || leavingRef.current || joiningRef.current || isConnectingRef.current) return;
 
@@ -744,7 +741,7 @@ if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
         (window as any).__pairId = roomName;
       } catch {}
 
-      const ws =process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ?? (process as any).env?.LIVEKIT_URL ?? "";
       isConnectingRef.current = true;
       await room.connect(ws, token);
       if (!isActiveSid(sid)) {
@@ -808,7 +805,7 @@ if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
       (window as any).__pairId = roomName;
     } catch {}
 
-    const ws =process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+    const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL ?? (process as any).env?.LIVEKIT_URL ?? "";
     isConnectingRef.current = true;
     await room.connect(ws, token).catch(() => {});
     isConnectingRef.current = false;
@@ -954,6 +951,97 @@ if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) {
     window.addEventListener("rtc:peer-meta", onPeerMetaCapture as any);
     offs.push(() => window.removeEventListener("ditona:peer-meta", onPeerMetaCapture as any));
     offs.push(() => window.removeEventListener("rtc:peer-meta", onPeerMetaCapture as any));
+
+    // like: زر واحد في شريط الأدوات
+    offs.push(
+      on("ui:like", async () => {
+        const room = roomRef.current;
+        if (!room || room.state !== "connected") {
+          toast("No active connection for like");
+          return;
+        }
+
+        const targetDid = String(remoteDidRef.current || "");
+        if (!targetDid) {
+          toast("peer id missing");
+          return;
+        }
+
+        const newLike = !like;
+        setLike(newLike);
+
+        // تفاؤل محلي
+        try {
+          const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+          window.dispatchEvent(
+            new CustomEvent("like:sync", {
+              detail: { pairId: curPair, likedByMe: newLike, liked: newLike },
+            }),
+          );
+        } catch {}
+
+        // إرسال DC فوري خفيف
+        try {
+          const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: newLike }));
+          await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+        } catch {}
+
+        // API
+        try {
+          const res = await fetch("/api/like", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-did": String(stableDid()),
+            },
+            body: JSON.stringify({ targetDid, liked: newLike }),
+            credentials: "include",
+            cache: "no-store",
+          });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setLike(!newLike);
+            try {
+              const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+              window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId: curPair, likedByMe: !newLike, liked: !newLike } }));
+            } catch {}
+            try {
+              const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
+              await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+            } catch {}
+            toast("like failed");
+            return;
+          }
+
+          // مزامنة محلية بالعدّاد
+          try {
+            const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+            window.dispatchEvent(
+              new CustomEvent("like:sync", {
+                detail: { pairId: curPair, count: j?.count, likedByMe: j?.liked, liked: j?.liked },
+              }),
+            );
+          } catch {}
+
+          // إرسال count للطرف الآخر
+          try {
+            const payload2 = new TextEncoder().encode(JSON.stringify({ t: "like:sync", liked: !!j?.liked, count: j?.count }));
+            await (room.localParticipant as any).publishData(payload2, { reliable: true, topic: "like" });
+          } catch {}
+        } catch {
+          setLike(!newLike);
+          try {
+            const curPair = (globalThis as any).__pairId || (globalThis as any).__ditonaPairId || null;
+            window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId: curPair, likedByMe: !newLike, liked: !newLike } }));
+          } catch {}
+          try {
+            const payload = new TextEncoder().encode(JSON.stringify({ t: "like", liked: !newLike }));
+            await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "like" });
+          } catch {}
+          toast("like failed");
+        }
+      }),
+    );
 
     // report
     offs.push(on("ui:report", () => toast("Report sent. Moving on")));
