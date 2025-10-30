@@ -151,11 +151,11 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
   attach((window as any).__lkRoom);
 
   // ربط تلقائي عند تبدّل الغرفة أو طلب المزامنة
-  window.addEventListener("lk:attached", () => attach((window as any).__lkRoom) as any, { passive: true } as any);
-  window.addEventListener("ditona:meta:init", () => { sendMyMeta(); } as any, { passive: true } as any);
-  window.addEventListener("ditona:meta:push", () => { sendMyMeta(); } as any, { passive: true } as any);
+  window.addEventListener("lk:attached", () => attach((window as any).__lkRoom), { passive: true });
+window.addEventListener("ditona:meta:init", () => { void sendMyMeta(); }, { passive: true });
+window.addEventListener("ditona:meta:push", () => { void sendMyMeta(); }, { passive: true });
 
-  // تنظيف عند مغادرة الصفحة
-  window.addEventListener("pagehide", () => { detach(); } as any, { once: true } as any);
+// تنظيف عند مغادرة الصفحة
+window.addEventListener("pagehide", () => { detach(); }, { once: true });
 }
 export {};
