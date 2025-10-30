@@ -1,4 +1,3 @@
-// src/app/chat/ChatClient.tsx
 "use client";
 
 import "@/app/chat/dcShim.client";
@@ -79,6 +78,21 @@ function readLSBool(key: string, defVal: boolean): boolean {
   } catch {
     return defVal;
   }
+}
+
+// --- اشتراك فوري في فيديو الطرف لإزالة الشاشة السوداء ---
+async function ensureSubscribedToRemoteVideo(room: Room) {
+  const p = [...room.remoteParticipants.values()][0];
+  if (!p) return;
+  try {
+    for (const pub of p.trackPublications.values()) {
+      if (pub.kind === Track.Kind.Video && !pub.isSubscribed) {
+        try {
+          await pub.setSubscribed(true);
+        } catch {}
+      }
+    }
+  } catch {}
 }
 
 export default function ChatClient() {
@@ -483,6 +497,8 @@ export default function ChatClient() {
     const onTrackPublished = (_pub: RemoteTrackPublication, p: RemoteParticipant) => {
       if (!isActiveSid(sid)) return;
       subscribeAll(p);
+      // تأكيد فوري للاشتراك في فيديو الطرف (حل الشاشة السوداء)
+      void ensureSubscribedToRemoteVideo(room);
     };
     room.on(RoomEvent.TrackPublished, onTrackPublished as any);
     roomUnsubsRef.current.push(() => { try { room.off(RoomEvent.TrackPublished, onTrackPublished as any); } catch {} });
@@ -534,9 +550,9 @@ export default function ChatClient() {
 
         if (j?.t === "like" || j?.type === "like:toggled" || topic === "like") {
           const base = { pairId: roomName, liked: !!j?.liked };
-          window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: base }));
-          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base }));
-          window.dispatchEvent(new CustomEvent("like:sync", { detail: { ...base, likedByOther: !!j?.liked } }));
+          window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: base })); // keep
+          window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base })); // keep
+          window.dispatchEvent(new CustomEvent("like:sync", { detail: { ...base, likedByOther: !!j?.liked } })); // keep
         }
 
         if (j?.t === "peer-meta" && j.payload) {
@@ -583,6 +599,8 @@ export default function ChatClient() {
       if (!isActiveSid(sid)) return;
       try { remoteDidRef.current = String(p?.identity || ""); } catch {}
       subscribeAll(p);
+      // تأكيد فوري للاشتراك في فيديو الطرف عند الاتصال
+      void ensureSubscribedToRemoteVideo(room);
       requestPeerMetaTwice(room);
       try { window.dispatchEvent(new CustomEvent("livekit:participant-connected")); } catch {}
     };
@@ -763,9 +781,12 @@ export default function ChatClient() {
         (window as any).__pairId = roomName;
       } catch {}
 
-      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+      // الاتصال بـ LiveKit — استخدام المتغير البيئي فقط
+      const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL as string;
       isConnectingRef.current = true;
       await room.connect(ws, token);
+      // اشتراك فوري في فيديو الطرف بعد الاتصال (حل الشاشة السوداء)
+      await ensureSubscribedToRemoteVideo(room);
       if (!isActiveSid(sid)) {
         try { await room.disconnect(false); } catch {}
         isConnectingRef.current = false;
@@ -830,12 +851,15 @@ export default function ChatClient() {
       (window as any).__pairId = roomName;
     } catch {}
 
-    const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL || "";
+    const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL as string;
     isConnectingRef.current = true;
     await room.connect(ws, token).catch(() => {});
     isConnectingRef.current = false;
 
     if (room.state !== "connected") return false;
+
+    // اشتراك فوري لضمان ظهور الفيديو
+    await ensureSubscribedToRemoteVideo(room);
 
     (globalThis as any).__lkRoom = room;
     dcAttach(room);
