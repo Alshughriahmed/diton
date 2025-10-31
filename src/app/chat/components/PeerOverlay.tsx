@@ -18,12 +18,7 @@ type PeerMeta = {
 };
 
 function curPair(): string | null {
-  try {
-    const w: any = window as any;
-    return w.__ditonaPairId || w.__pairId || null;
-  } catch {
-    return null;
-  }
+  try { const w: any = window as any; return w.__ditonaPairId || w.__pairId || null; } catch { return null; }
 }
 
 const norm = (g: unknown) => {
@@ -42,22 +37,22 @@ export default function PeerOverlay() {
   const [meta, setMeta] = useState<PeerMeta>({});
 
   useEffect(() => {
-    // ملء فوري من الكاش عند الإقلاع
+    // ملء فوري من الكاش عند mount
     try {
       const raw = sessionStorage.getItem("ditona:last_peer_meta");
       if (raw) setMeta(JSON.parse(raw));
     } catch {}
 
-    // تحديث حي من القناة مع Pair guard
+    // تحديث حي + Pair guard
     const onMeta = (e: any) => {
       const d = (e?.detail || {}) as PeerMeta;
       const pid = d?.pairId || curPair();
-      if (pid && curPair() && pid !== curPair()) return; // Pair guard
+      if (pid && curPair() && pid !== curPair()) return;
       setMeta(d);
     };
     window.addEventListener("ditona:peer-meta", onMeta as any);
 
-    // مسح البطاقة عند مراحل البحث/التوقف
+    // مسح عند البحث/الإقلاع/التوقف
     const onPhase = (e: any) => {
       const ph = e?.detail?.phase;
       if (ph === "boot" || ph === "idle" || ph === "searching" || ph === "stopped") setMeta({});
@@ -88,23 +83,22 @@ export default function PeerOverlay() {
   const avatarUrl = meta?.avatarUrl || meta?.avatar || "";
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-20">
-      {/* أعلى يسار: أفاتار (bg-cover) + اسم + VIP + الإعجابات */}
+    <div className="pointer-events-none absolute inset-0 z-40">
+      {/* أعلى يسار: صورة + اسم + VIP + الإعجابات */}
       <div className="absolute left-3 top-3 flex items-center gap-2">
-        <div
+        <img
           data-ui="peer-avatar"
-          aria-hidden
-          className="h-6 w-6 rounded-full ring-1 ring-white/20 bg-center bg-cover"
-          style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}
+          alt=""
+          className="h-6 w-6 rounded-full object-cover ring-1 ring-white/20 select-none"
+          src={avatarUrl || undefined}
+          draggable={false}
         />
         <span data-ui="peer-name" className="text-white/90 text-sm font-semibold">{meta?.displayName || ""}</span>
-        <span data-ui="peer-vip" className="text-yellow-400 text-xs font-semibold">
-          {typeof meta?.vip === "boolean" ? (meta.vip ? "👑" : "🚫👑") : ""}
-        </span>
+        <span data-ui="peer-vip" className="text-yellow-400 text-xs font-semibold">{typeof meta?.vip === "boolean" ? (meta.vip ? "👑" : "🚫👑") : ""}</span>
         <span data-ui="peer-likes" className="text-pink-400 text-sm font-semibold">{likesText}</span>
       </div>
 
-      {/* أسفل يسار: البلد + المدينة + الجنس (رمز فقط بألوان وحجم محدد) */}
+      {/* أسفل يسار: البلد + المدينة + الجنس (رمز فقط) */}
       <div className="absolute left-3 bottom-3 flex items-center gap-2">
         <span data-ui="peer-country" className="text-white/80 text-sm">{meta?.hideCountry ? "" : meta?.country || ""}</span>
         <span data-ui="peer-city" className="text-white/60 text-sm">{meta?.hideCity ? "" : meta?.city || ""}</span>
