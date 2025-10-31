@@ -1,134 +1,128 @@
+// src/components/chat/LikeSystem.tsx
 "use client";
+import { useEffect, useRef } from "react";
 
-import { useEffect, useRef, useState } from "react";
-import { vibrate } from "@/lib/vibrate";
+type LikeState = { you: boolean; count: number };
 
-type LikeState = {
-  isLiked: boolean;
-  canLike: boolean;
-  targetDid: string | null;
-  pairId: string | null;
-};
-
-function stableDid(): string {
-  try {
-    const k = "ditona_did";
-    let v = localStorage.getItem(k);
-    if (!v) {
-      v = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
-      localStorage.setItem(k, v);
-    }
-    return v;
-  } catch { return "did-" + Math.random().toString(36).slice(2, 9); }
+function curPair(): string | null {
+  try { const w:any = globalThis as any; return w.__ditonaPairId || w.__pairId || null; }
+  catch { return null; }
 }
-const curPair = () => (globalThis as any).__ditonaPairId || (globalThis as any).__pairId || null;
-const curPeer = () => (globalThis as any).__ditonaPeerDid || (globalThis as any).__peerDid || null;
+function meDid(): string {
+  try {
+    let d = localStorage.getItem("ditona_did");
+    if (!d) { d = crypto.randomUUID(); localStorage.setItem("ditona_did", d); }
+    return d;
+  } catch { return "anon"; }
+}
+// بدائل للحصول على DID للطرف
+function guessPeerDid(): string | null {
+  try {
+    const w:any = globalThis as any;
+    // المصدر الأساسي
+    if (w.__ditonaPeerDid || w.__peerDid) return w.__ditonaPeerDid || w.__peerDid;
+    // من LiveKit identity
+    const r = w.__lkRoom;
+    if (r && r.remoteParticipants && typeof r.remoteParticipants.values === "function") {
+      const it = r.remoteParticipants.values();
+      const first = it.next().value;
+      if (first?.identity && typeof first.identity === "string") return first.identity;
+    }
+  } catch {}
+  return null;
+}
 
-async function postLike(targetDid: string, liked?: boolean) {
-  const me = stableDid();
+async function postLike(targetDid: string, liked: boolean) {
+  // liked هنا بوليني صريح
+  const body = JSON.stringify({ targetDid, liked: liked === true });
   const r = await fetch("/api/like", {
     method: "POST",
     credentials: "include",
-    headers: { "content-type": "application/json", "x-did": me },
-    body: JSON.stringify(liked === undefined ? { targetDid } : { targetDid, liked }),
+    headers: { "content-type": "application/json", "x-did": meDid() },
+    body
   });
-  const j = await r.json().catch(() => null);
-  return { ok: r.ok, j };
+  if (!r.ok) throw new Error(`like ${r.status}`);
+  return r.json() as Promise<{ count: number; you: boolean }>;
+}
+
+function publishDC(detail: any) {
+  try {
+    const w:any = globalThis as any;
+    const room = w.__lkRoom;
+    if (!room) return;
+    const payload = new TextEncoder().encode(JSON.stringify(detail));
+    room.localParticipant?.publishData(payload, { reliable: true, topic: "like" });
+  } catch {}
 }
 
 export default function LikeSystem() {
-  const [st, setSt] = useState<LikeState>({
-    isLiked: false, canLike: true, targetDid: curPeer(), pairId: curPair(),
-  });
-  const mounted = useRef(false);
-
-  function emitSync(count?: number, you?: boolean) {
-    const pid = curPair();
-    try {
-      const room: any = (globalThis as any).__lkRoom;
-      const payload = { t: "like:sync", count, you, pairId: pid };
-      room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), { reliable: true, topic: "like" });
-    } catch {}
-    window.dispatchEvent(new CustomEvent("like:sync", { detail: { count, you, pairId: pid } }));
-  }
-
-  function sendPeerToggleDC(liked: boolean) {
-    try {
-      const room: any = (globalThis as any).__lkRoom;
-      const payload = { t: "like", liked, pairId: curPair() };
-      room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), { reliable: true, topic: "like" });
-    } catch {}
-  }
-
   useEffect(() => {
-    if (mounted.current) return;
-    mounted.current = true;
-
-    const syncTarget = () => setSt((s) => ({ ...s, targetDid: curPeer(), pairId: curPair() }));
-
-    const onPair = () => {
-      syncTarget();
-      const did = curPeer();
-      if (!did) return;
-      // قراءة الحالة الأولية (you + count) وتوزيعها على HUDs
-      postLike(did, undefined).then(({ ok, j }) => {
-        if (!ok || !j) return;
-        setSt((s) => ({ ...s, isLiked: !!j.you, canLike: true }));
-        emitSync(j.count, j.you);
-      });
-    };
-
-    const onPeerMeta = () => syncTarget();
-
-    window.addEventListener("rtc:pair", onPair as any);
-    window.addEventListener("ditona:peer-meta", onPeerMeta as any);
+    let st: LikeState = { you: false, count: 0 };
+    const inflight = { v: false };
+    const pairRef = { v: curPair() };
 
     const onSync = (e: any) => {
       const d = e?.detail || {};
-      const pid = curPair();
-      if (d?.pairId && pid && d.pairId !== pid) return;
-      if (typeof d.you === "boolean") setSt((s) => ({ ...s, isLiked: d.you }));
+      const pidNow = curPair();
+      const pidEvt = d?.pairId || pidNow;
+      if (pidEvt && pidNow && pidEvt !== pidNow) return;
+      if (typeof d.count === "number") st.count = d.count;
+      if (typeof d.liked === "boolean") st.you = d.liked;
+      pairRef.v = pidNow;
     };
-    window.addEventListener("like:sync", onSync as any);
 
-    // أوامر الواجهة (وحيد المسؤول عن التبديل لتجنب ازدواج)
-    const onUiLike = (e: any) => { void toggle(e?.detail?.liked); };
-    window.addEventListener("ui:like", onUiLike as any);
-    window.addEventListener("ui:like:toggle", onUiLike as any);
+    const onPair = () => { st = { you: false, count: 0 }; pairRef.v = curPair(); inflight.v = false; };
 
-    // بدء
-    onPair();
+    const onToggle = async () => {
+      if (inflight.v) { navigator.vibrate?.(8); return; }
+
+      const pid = curPair();
+      const tDid = guessPeerDid();
+      if (!pid || !tDid) { navigator.vibrate?.(8); return; }
+
+      // احسب الحالة التالية كبوليني صريح
+      const nextLiked: boolean = st.you === true ? false : true;
+
+      // وميض للطرف الآخر فورًا
+      publishDC({ t: "like", liked: nextLiked, pairId: pid });
+
+      // تفاؤل محلي مضبوط
+      const optimisticCount = Math.max(0, (st.count || 0) + (nextLiked ? 1 : -1));
+      window.dispatchEvent(new CustomEvent("like:sync", {
+        detail: { pairId: pid, count: optimisticCount, liked: nextLiked }
+      }));
+
+      inflight.v = true;
+      try {
+        const r = await postLike(tDid, nextLiked); // {count, you}
+        // بث موحّد بعد نجاح POST
+        const finalLiked = !!r.you;
+        const finalCount = Number(r.count) || 0;
+        const detail = { pairId: pid, count: finalCount, liked: finalLiked };
+        window.dispatchEvent(new CustomEvent("like:sync", { detail }));
+        publishDC({ t: "like:sync", pairId: pid, count: finalCount, liked: finalLiked });
+        st.you = finalLiked; st.count = finalCount;
+        navigator.vibrate?.(16);
+      } catch (_e) {
+        // تراجع التفاؤل
+        window.dispatchEvent(new CustomEvent("like:sync", {
+          detail: { pairId: pid, count: st.count, liked: st.you }
+        }));
+      } finally {
+        inflight.v = false;
+      }
+    };
+
+    window.addEventListener("like:sync", onSync as any, { passive: true } as any);
+    window.addEventListener("rtc:pair", onPair as any, { passive: true } as any);
+    window.addEventListener("ui:like:toggle", onToggle as any);
 
     return () => {
-      window.removeEventListener("rtc:pair", onPair as any);
-      window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
       window.removeEventListener("like:sync", onSync as any);
-      window.removeEventListener("ui:like", onUiLike as any);
-      window.removeEventListener("ui:like:toggle", onUiLike as any);
+      window.removeEventListener("rtc:pair", onPair as any);
+      window.removeEventListener("ui:like:toggle", onToggle as any);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function toggle(force?: boolean) {
-    if (!st.canLike || !st.targetDid) return;
-    const next = typeof force === "boolean" ? !!force : !st.isLiked;
-
-    vibrate(16);
-
-    // تفاؤلي + DC خفيف للطرف الآخر فورًا
-    setSt((s) => ({ ...s, isLiked: next, canLike: false }));
-    sendPeerToggleDC(next);
-
-    const { ok, j } = await postLike(st.targetDid, next);
-    if (!ok || !j) {
-      // revert
-      setSt((s) => ({ ...s, isLiked: !next, canLike: true }));
-      sendPeerToggleDC(!next);
-      return;
-    }
-    emitSync(j.count, j.you);
-    setSt((s) => ({ ...s, canLike: true }));
-  }
-
-  return null; // headless
+  return null;
 }
