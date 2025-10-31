@@ -16,21 +16,27 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
       if (typeof b === "string") return JSON.parse(b);
       const u8 = b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
       return JSON.parse(new TextDecoder().decode(u8));
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
 
   const fire = (name: string, detail?: any) => {
-    try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent(name, { detail }));
+    } catch {}
   };
 
   const pairId = (): string | null => {
     try {
       const w: any = window;
       return w.__ditonaPairId || w.__pairId || null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
 
-  /* ---------- compose my meta (متوافق مع peerMetaUi) ---------- */
+  /* ---------- compose my meta (متوافق مع peerMetaUi/PeerOverlay) ---------- */
   function stableDid(): string {
     try {
       const k = "ditona_did";
@@ -39,34 +45,44 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
       const gen = crypto?.randomUUID?.() || "did-" + Math.random().toString(36).slice(2, 9);
       localStorage.setItem(k, gen);
       return gen;
-    } catch { return "did-" + Math.random().toString(36).slice(2, 9); }
+    } catch {
+      return "did-" + Math.random().toString(36).slice(2, 9);
+    }
   }
 
   function readGeo() {
     try {
       const g = JSON.parse(localStorage.getItem("ditona_geo") || "null");
       return { country: g?.country ?? null, city: g?.city ?? null };
-    } catch { return { country: null, city: null }; }
+    } catch {
+      return { country: null, city: null };
+    }
   }
 
   function readProfile() {
-    let displayName = "", gender = "", avatarUrl = "";
-    let vip = false, hideCountry = false, hideCity = false, hideLikes = false;
+    let displayName = "",
+      gender = "",
+      avatarUrl = "";
+    let vip = false,
+      hideCountry = false,
+      hideCity = false,
+      hideLikes = false;
     try {
       const raw =
         localStorage.getItem("ditona.profile.v1") ||
-        localStorage.getItem("ditona_profile")   ||
+        localStorage.getItem("ditona_profile") ||
         localStorage.getItem("profile");
       if (raw) {
-        const p = JSON.parse(raw); const s = p?.state ?? p;
+        const p = JSON.parse(raw);
+        const s = p?.state ?? p;
         displayName = s?.displayName ?? s?.profile?.displayName ?? "";
-        gender      = s?.gender ?? s?.profile?.gender ?? "";
-        avatarUrl   = s?.avatarDataUrl ?? s?.profile?.avatarDataUrl ?? "";
-        vip         = !!(s?.vip ?? s?.profile?.vip);
-        hideCountry = !!(s?.privacy?.hideCountry);
-        hideCity    = !!(s?.privacy?.hideCity);
+        gender = s?.gender ?? s?.profile?.gender ?? "";
+        avatarUrl = s?.avatarDataUrl ?? s?.profile?.avatarDataUrl ?? "";
+        vip = !!(s?.vip ?? s?.profile?.vip);
+        hideCountry = !!s?.privacy?.hideCountry;
+        hideCity = !!s?.privacy?.hideCity;
         const showCount = s?.likes?.showCount;
-        hideLikes  = typeof showCount === "boolean" ? !showCount : false;
+        hideLikes = typeof showCount === "boolean" ? !showCount : false;
       }
     } catch {}
     return { displayName, gender, avatarUrl, vip, hideCountry, hideCity, hideLikes };
@@ -77,8 +93,9 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
     const p = readProfile();
     return {
       did: stableDid(),
-      country, city,
-      gender: p.gender,             // الرمز فقط سيُعرض في PeerOverlay
+      country,
+      city,
+      gender: p.gender,
       avatarUrl: p.avatarUrl,
       displayName: p.displayName,
       vip: p.vip,
@@ -107,7 +124,13 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
   let curRoom: any = null;
   let off: (() => void) | null = null;
 
-  function detach() { try { off?.(); } catch {} ; off = null; curRoom = null; }
+  function detach() {
+    try {
+      off?.();
+    } catch {}
+    off = null;
+    curRoom = null;
+  }
 
   function attach(room: any) {
     if (!room?.on || curRoom === room) return;
@@ -119,11 +142,10 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
       const j = toJSON(payload);
       if (!j || typeof j !== "object") return;
 
-      const looksLikeMetaBody =
-        !!(j.gender || j.country || j.city || j.displayName || j.avatar || j.avatarUrl);
+      const looksLikeMetaBody = !!(j.gender || j.country || j.city || j.displayName || j.avatar || j.avatarUrl);
 
       const isMetaTopic = topic === "meta";
-      const isMetaMsg   = j.t === "peer-meta" || j.t === "meta:init" || looksLikeMetaBody;
+      const isMetaMsg = j.t === "peer-meta" || j.t === "meta:init" || looksLikeMetaBody;
 
       if (!(isMetaTopic || isMetaMsg)) return;
 
@@ -145,17 +167,31 @@ if (typeof window !== "undefined" && !(window as any).__dcMetaResponderMounted) 
 
     // بدون استيراد RoomEvent
     room.on("dataReceived", onData);
-    off = () => { try { room.off("dataReceived", onData); } catch {} };
+    off = () => {
+      try {
+        room.off("dataReceived", onData);
+      } catch {}
+    };
   }
 
   attach((window as any).__lkRoom);
 
   // ربط تلقائي عند تبدّل الغرفة أو طلب المزامنة
-  window.addEventListener("lk:attached", () => attach((window as any).__lkRoom), { passive: true });
-window.addEventListener("ditona:meta:init", () => { void sendMyMeta(); }, { passive: true });
-window.addEventListener("ditona:meta:push", () => { void sendMyMeta(); }, { passive: true });
+  window.addEventListener("lk:attached", () => attach((window as any).__lkRoom), { passive: true } as any);
+  window.addEventListener("ditona:meta:init", () => {
+    void sendMyMeta();
+  }, { passive: true } as any);
+  window.addEventListener("ditona:meta:push", () => {
+    void sendMyMeta();
+  }, { passive: true } as any);
 
-// تنظيف عند مغادرة الصفحة
-window.addEventListener("pagehide", () => { detach(); }, { once: true });
+  // تنظيف عند مغادرة الصفحة
+  window.addEventListener(
+    "pagehide",
+    () => {
+      detach();
+    },
+    { once: true },
+  );
 }
 export {};
