@@ -1,22 +1,18 @@
-// src/app/chat/peerMetaUi.client.ts
+// src/app/chat/dcMetaResponder.client.ts
 "use client";
 
 /**
- * Peer HUD DOM updater
- * مصادر الأحداث:
- *  - "ditona:peer-meta"  detail قد يكون {meta:{...}} أو مفلطحًا
- *  - "like:sync"         detail = {pairId, count, liked}
- *  - "rtc:pair"          detail = {pairId}
- *  - "rtc:phase"         detail = {phase:'searching'|'connecting'|'connected'|'stopped'}
- *  - "lk:attached"       يطلق طلب meta:init (يستكمله dcMetaResponder)
- *
- * لا يزيل عقد DOM. يحدّث النصوص فقط. ألوان ورموز الجنس مضبوطة.
- * حارس pairId مرن: إذا كان حدث بدون pairId لا يُسقط.
+ * DC → Window bridge for META.
+ * يقبل: {t:"meta", meta:{...}}, {meta:{...}}, {t:"peer-meta",payload:{...}}, {t:"meta:init"}
+ * يبث دائمًا:  window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:{pairId,...}}))
+ * ويرد على "meta:init" بإرسال الميتا المحلية عبر الـDC.
+ * لا ENV ولا تبعيات.
  */
 
-type AnyObj = Record<string, any>;
+/* === أسماء فريدة لتفادي التعارض === */
+type DitonaAny_dm = Record<string, any>;
 
-function pidNow(): string | null {
+function pid_dm(): string | null {
   try {
     const w: any = globalThis as any;
     return w.__ditonaPairId || w.__pairId || null;
@@ -25,153 +21,156 @@ function pidNow(): string | null {
   }
 }
 
-function normalizeDetail(d: AnyObj | undefined): AnyObj {
-  if (!d || typeof d !== "object") return {};
-  if (d.meta && typeof d.meta === "object") {
-    const { meta, pairId } = d;
-    return { pairId: pairId ?? meta.pairId ?? pidNow(), ...meta };
-  }
-  return d;
-}
-
-/* ======= gender formatting ======= */
-function normGender(g: unknown): "m"|"f"|"c"|"l"|"u" {
-  const s = String(g || "").toLowerCase();
-  if (s === "m" || s === "male") return "m";
-  if (s === "f" || s === "female") return "f";
-  if (s === "c" || s === "couple") return "c";
-  if (s === "l" || s === "lgbt" || s === "lgbtq") return "l";
-  return "u";
-}
-function genderSymbol(g: "m"|"f"|"c"|"l"|"u"): string {
-  if (g === "m") return "♂";
-  if (g === "f") return "♀";
-  if (g === "c") return "⚤";
-  if (g === "l") return "🏳️‍🌈";
-  return "";
-}
-function genderClass(g: "m"|"f"|"c"|"l"|"u"): string {
-  if (g === "m") return "text-blue-500";
-  if (g === "f") return "text-red-500";
-  if (g === "c") return "text-rose-700";
-  if (g === "l") return "bg-gradient-to-r from-red-500 via-yellow-400 to-blue-500 bg-clip-text text-transparent";
-  return "";
-}
-
-/* ======= DOM helpers ======= */
-function setText(sel: string, text: string) {
-  const el = document.querySelector<HTMLElement>(`[data-ui="${sel}"]`);
-  if (el) el.textContent = text;
-}
-function setAttr(sel: string, attr: string, value?: string) {
-  const el = document.querySelector<HTMLElement>(`[data-ui="${sel}"]`);
-  if (el && value) el.setAttribute(attr, value);
-}
-function setVip(vip?: boolean) {
-  const el = document.querySelector<HTMLElement>(`[data-ui="peer-vip"]`);
-  if (!el) return;
-  el.textContent = vip ? "👑" : "🚫👑";
-}
-function setAvatar(url?: string) {
-  const el = document.querySelector<HTMLImageElement>(`[data-ui="peer-avatar"]`);
-  if (!el) return;
-  if (url) { el.src = url; el.style.opacity = "1"; }
-  else { el.removeAttribute("src"); el.style.opacity = "0.4"; }
-}
-function setGender(g?: unknown) {
-  const n = normGender(g);
-  const el = document.querySelector<HTMLElement>(`[data-ui="peer-gender"]`);
-  if (!el) return;
-  const sym = genderSymbol(n);
-  el.className = `${el.className} ${genderClass(n)}`; // يضيف اللون دون مسح بقية الأصناف
-  el.textContent = sym;
-}
-
-/* ======= state ======= */
-let currentPid: string | null = null;
-let lastMeta: AnyObj | null = null;
-
-function acceptForCurrentPair(incomingPid?: string | null): boolean {
-  const now = pidNow();
-  currentPid = now || currentPid;
-  if (!incomingPid || !now) return true;            // مرن: لا نسقط إذا غاب أيهما
-  return incomingPid === now;
-}
-
-/* ======= apply meta to DOM ======= */
-function applyPeerMeta(detail: AnyObj) {
-  lastMeta = detail;
-  // أعلى يسار: avatar + vip + likes + name
-  setVip(detail.vip);
-  setAvatar(detail.avatarUrl);
-  if (typeof detail.likes === "number") setText("peer-likes", String(detail.likes));
-  if (detail.displayName) setText("peer-name", String(detail.displayName));
-
-  // أسفل يسار: Country – City + gender
-  const country = (detail.country || "").toString().toUpperCase();
-  const city = (detail.city || "").toString();
-  const line = country && city ? `${country}  –  ${city}` : country || city || "–";
-  setText("peer-country", line);
-  // city عنصر مستقل إن كان لديك عنصر منفصل:
-  setText("peer-city", city || "");
-  setGender(detail.gender);
-}
-
-function clearPeerMeta() {
-  setText("peer-name", "");
-  setText("peer-likes", "");
-  setText("peer-country", "–");
-  setText("peer-city", "");
-  setGender("u");
-  setVip(false);
-  setAvatar("");
-}
-
-/* ======= listeners ======= */
-function onPeerMeta(ev: Event) {
-  const raw = (ev as CustomEvent).detail as AnyObj;
-  const d = normalizeDetail(raw);
-  if (!acceptForCurrentPair(d.pairId ?? null)) return;
-  applyPeerMeta(d);
-}
-
-function onLikeSync(ev: Event) {
-  const d = (ev as CustomEvent).detail as AnyObj;
-  if (!acceptForCurrentPair(d?.pairId ?? null)) return;
-  if (typeof d.count === "number") setText("peer-likes", String(d.count));
-}
-
-function onRtcPair(ev: Event) {
-  currentPid = (ev as CustomEvent).detail?.pairId ?? null;
-  clearPeerMeta();
-  // نعطي تلميحًا بصريًا سريعًا أن البطاقة نشِطة
-  setText("peer-country", "–");
-}
-
-function onRtcPhase(ev: Event) {
-  const ph = (ev as CustomEvent).detail?.phase;
-  if (ph === "searching" || ph === "stopped") clearPeerMeta();
-}
-
-/* طلب meta من الطرف الآخر عند الارتباط */
-function onLkAttached() {
+function parse_dm(bytes: Uint8Array | string): DitonaAny_dm | null {
   try {
-    window.dispatchEvent(new CustomEvent("ditona:meta:init"));
+    const s = typeof bytes === "string" ? bytes : new TextDecoder().decode(bytes);
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+/* === تسطيح صيغ الميتا إلى detail موحّد === */
+function flatMeta_dm(src: DitonaAny_dm): DitonaAny_dm | null {
+  if (!src || typeof src !== "object") return null;
+
+  // توافق قديم: { t:'peer-meta', payload:{...} }
+  if (src.t === "peer-meta" && src.payload && typeof src.payload === "object") {
+    const d = src.payload || {};
+    const pid = d.pairId ?? src.pairId ?? pid_dm();
+    const meta = d.meta && typeof d.meta === "object" ? d.meta : d;
+    return { pairId: pid, ...meta };
+  }
+
+  // الصيغ الأساسية: { t:'meta', pairId?, meta:{...} } أو { pairId?, meta:{...} }
+  const hasMeta = src.meta && typeof src.meta === "object";
+  if (hasMeta || src.t === "meta") {
+    const pid = src.pairId ?? src.meta?.pairId ?? pid_dm();
+    const meta = hasMeta ? src.meta : {};
+    return { pairId: pid, ...meta };
+  }
+
+  return null;
+}
+
+/* === بثّ الحدث الموحّد مع حارس الزوج === */
+function emitPeer_dm(detail: DitonaAny_dm) {
+  const ePid = detail?.pairId;
+  const now = pid_dm();
+  if (ePid && now && ePid !== now) return; // إسقاط أحداث زوج قديم
+  window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail }));
+}
+
+/* === بناء ميتا محلية لإرسالها للطرف الآخر عند الطلب === */
+function localMeta_dm(): DitonaAny_dm {
+  let gender: string | undefined;
+  let displayName: string | undefined;
+  let avatarUrl: string | undefined;
+  let vip: boolean | undefined;
+
+  try {
+    const raw = localStorage.getItem("ditona.profile.v1");
+    if (raw) {
+      const j = JSON.parse(raw);
+      gender = j?.state?.profile?.gender ?? j?.profile?.gender;
+      displayName = j?.state?.profile?.displayName ?? j?.profile?.displayName;
+      avatarUrl = j?.state?.profile?.avatarUrl ?? j?.profile?.avatarUrl;
+      vip = !!(j?.state?.profile?.vip ?? j?.profile?.vip);
+    }
+  } catch {}
+
+  let country: string | undefined;
+  let city: string | undefined;
+  try {
+    const geo = JSON.parse(localStorage.getItem("ditona_geo") || "null");
+    const cc = (geo?.countryCode || geo?.country || "").toString().toUpperCase();
+    country = cc || undefined;
+    city = (geo?.city || undefined) as string | undefined;
+  } catch {}
+
+  return { gender, displayName, avatarUrl, vip, country, city };
+}
+
+function sendDCMeta_dm(room: any) {
+  try {
+    if (!room) return;
+    const payload = { t: "meta", pairId: pid_dm(), meta: localMeta_dm() };
+    const bytes = new TextEncoder().encode(JSON.stringify(payload));
+    room.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
   } catch {}
 }
 
-/* boot */
-(function boot() {
-  window.addEventListener("ditona:peer-meta", onPeerMeta as any, { passive: true } as any);
-  window.addEventListener("like:sync", onLikeSync as any, { passive: true } as any);
-  window.addEventListener("rtc:pair", onRtcPair as any, { passive: true } as any);
-  window.addEventListener("rtc:phase", onRtcPhase as any, { passive: true } as any);
-  window.addEventListener("lk:attached", onLkAttached as any, { passive: true } as any);
+/* === إرفاق مستمع DC مع منع التكرار وإرسال meta:init فورًا === */
+function attachMeta_dm(room: any) {
+  if (!room || typeof room?.on !== "function") return;
 
-  // طبّق آخر ميتا محفوظة إن وُجدت لعرض أولي
+  const RoomEvent = (globalThis as any).livekit?.RoomEvent;
+  const ev = RoomEvent?.DataReceived || "data-received";
+
+  const onData = (payload: Uint8Array, _p: any, _k: any, topic?: string) => {
+    const j = parse_dm(payload);
+    if (!j) return;
+
+    // لا نعتمد على topic فقط. نعرّف meta من المحتوى أيضًا.
+    const topicIsMeta = (topic || "").toLowerCase() === "meta";
+    const looksLikeMeta =
+      j?.t === "meta" || j?.t === "peer-meta" || j?.t === "meta:init" || (j && typeof j.meta === "object");
+    if (!(topicIsMeta || looksLikeMeta)) return;
+
+    if (j.t === "meta:init") {
+      sendDCMeta_dm(room); // ردّ بالميتا المحلية
+      return;
+    }
+
+    const flat = flatMeta_dm(j);
+    if (flat) emitPeer_dm(flat);
+  };
+
+  // منع تكرار المستمع
+  const key = "__ditona_meta_onData_dm";
+  try {
+    const prev = (room as any)[key];
+    if (prev) room.off?.(ev, prev);
+  } catch {}
+  room.on(ev, onData as any);
+  (room as any)[key] = onData;
+
+  // اطلب ميتا الطرف فور الارتباط + إعادة طلب سريعة
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify({ t: "meta:init", pairId: pid_dm() }));
+    room?.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
+    setTimeout(() => {
+      try { room?.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" }); } catch {}
+    }, 250);
+  } catch {}
+}
+
+/* === إقلاع وربط عند جاهزية الغرفة أو حدث lk:attached === */
+(function boot_dm() {
   try {
     const w: any = globalThis as any;
-    const cached = w.__ditonaLastPeerMeta || JSON.parse(sessionStorage.getItem("ditona:last_peer_meta") || "null");
-    if (cached && typeof cached === "object") applyPeerMeta(normalizeDetail(cached));
+    if (w.__lkRoom) attachMeta_dm(w.__lkRoom);
   } catch {}
+
+  const onAttached = () => {
+    try {
+      const w: any = globalThis as any;
+      if (w.__lkRoom) attachMeta_dm(w.__lkRoom);
+    } catch {}
+  };
+  window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
+
+  // منظّف اختياري
+  (globalThis as any).__ditonaMetaBridgeCleanup = () => {
+    window.removeEventListener("lk:attached", onAttached as any);
+    try {
+      const w: any = globalThis as any;
+      const r = w.__lkRoom;
+      const RoomEvent = (globalThis as any).livekit?.RoomEvent;
+      const ev = RoomEvent?.DataReceived || "data-received";
+      const key = "__ditona_meta_onData_dm";
+      const prev = r?.[key];
+      if (r && prev) r.off?.(ev, prev);
+    } catch {}
+  };
 })();
