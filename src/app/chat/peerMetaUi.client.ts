@@ -1,12 +1,11 @@
 /**
  * محدِّث DOM لبادجات الطرف B على HUD.
  * المصدر: رسائل DataChannel topic="meta" → حدث window: ditona:peer-meta.
- * - Pair guard: تجاهل أي ميتاداتا لا تطابق pairId الحالي.
- * - استقرار HUD: عند الانتقال لـ boot/idle/searching/stopped نمسح النصوص فقط ولا نخفي العناصر.
- * - على الإقلاع نزيل مرة واحدة أصناف hidden, md:hidden, lg:hidden, opacity-0 من كل [data-ui^="peer-"].
- * - تخزين/قراءة آخر ميتا في sessionStorage["ditona:last_peer_meta"].
- * - خريطة الرموز: m→♂ ، f→♀ ، c→⚤ ، l→🏳️‍🌈.
- * - الألوان يحددها CSS الحالية؛ نضيف فقط text-blue-500/ text-red-500/ text-red-700 عند الحاجة (L كما هو).
+ * Pair guard: تجاهل أي ميتاداتا لا تطابق pairId الحالي.
+ * استقرار HUD: عند الانتقال لـ boot/idle/searching/stopped نمسح النصوص فقط ولا نخفي العناصر.
+ * عند الإقلاع: إزالة一次 أصناف hidden, md:hidden, lg:hidden, opacity-0 من كل [data-ui^="peer-"].
+ * تخزين/قراءة آخر ميتا في sessionStorage["ditona:last_peer_meta"].
+ * خريطة الرموز: m→♂ ، f→♀ ، c→⚤ ، l→🏳️‍🌈.
  */
 if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
   (window as any).__peerMetaUiMounted = 1;
@@ -19,12 +18,10 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     country: () => qs('[data-ui="peer-country"]'),
     city: () => qs('[data-ui="peer-city"]'),
     gender: () => qs('[data-ui="peer-gender"]'),
-    avatar: () => qs('[data-ui="peer-avatar"]'),
+    avatar: () => qs('[data-ui="peer-avatar"]') as HTMLImageElement | HTMLElement | null,
   };
 
-  const curPair = (): string | null => {
-    try { const w: any = window as any; return w.__ditonaPairId || w.__pairId || null; } catch { return null; }
-  };
+  const curPair = (): string | null => { try { const w: any = window as any; return w.__ditonaPairId || w.__pairId || null; } catch { return null; } };
 
   const unhideAll = () => {
     document.querySelectorAll<HTMLElement>('[data-ui^="peer-"]').forEach((el) =>
@@ -54,12 +51,15 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     $.city()?.replaceChildren();
     const g = $.gender();
     if (g) {
+      // امسح الرمز وألوانه فقط
       g.textContent = "";
-      // إزالة ألوان سابقة فقط، لا نلمس أحجام النص
-      g.className = g.className.replace(/\btext-(?:blue|red|rose|emerald|white)(?:-\d+)?(?:\/\d+)?\b/g, "");
+      g.className = g.className.replace(/\btext-(?:blue|red)(?:-\d+)?(?:\/\d+)?\b/g, "");
     }
     const av = $.avatar();
-    if (av) (av as HTMLElement).style.backgroundImage = "";
+    if (av) {
+      if ((av as HTMLImageElement).tagName === "IMG") (av as HTMLImageElement).src = "";
+      else (av as HTMLElement).setAttribute("style", "");
+    }
   };
 
   const apply = (meta: any) => {
@@ -74,28 +74,28 @@ if (typeof window !== "undefined" && !(window as any).__peerMetaUiMounted) {
     // حفظ آخر نسخة
     try { (window as any).__ditonaLastPeerMeta = meta; sessionStorage.setItem("ditona:last_peer_meta", JSON.stringify(meta)); } catch {}
 
-    // الصورة كـ bg-cover
-    const avUrl: string = String(meta.avatarUrl || meta.avatar || "") || "";
+    // avatar كـ IMG أو bg-cover
     const av = $.avatar();
+    const url: string = String(meta.avatarUrl || meta.avatar || "") || "";
     if (av) {
-      av.classList.add("bg-center", "bg-cover", "rounded-full", "ring-1", "ring-white/20");
-      (av as HTMLElement).style.backgroundImage = avUrl ? `url(${avUrl})` : "";
+      if ((av as HTMLImageElement).tagName === "IMG") (av as HTMLImageElement).src = url || "";
+      else (av as HTMLElement).setAttribute("style", url ? `background-image:url(${url})` : "");
     }
 
     // name + vip
     const name = $.name(); if (name) name.textContent = String(meta.displayName || "").trim();
     const vip = $.vip(); if (vip) vip.textContent = typeof meta.vip === "boolean" ? (meta.vip ? "👑" : "🚫👑") : "";
 
-    // country/city (تحترم الإخفاء)
+    // country/city
     const ctry = $.country(); if (ctry) ctry.textContent = meta.hideCountry ? "" : String(meta.country || "").trim();
     const city = $.city(); if (city) city.textContent = meta.hideCity ? "" : String(meta.city || "").trim();
 
-    // gender رمز + لون ثابت
+    // gender رمز + لون
     const g = $.gender();
     if (g) {
       const n = norm(meta.gender);
       g.textContent = sym(n);
-      g.className = g.className.replace(/\btext-(?:blue|red|rose|emerald|white)(?:-\d+)?(?:\/\d+)?\b/g, "");
+      g.className = g.className.replace(/\btext-(?:blue|red)(?:-\d+)?(?:\/\d+)?\b/g, "");
       const c = color(n); if (c) g.classList.add(c);
     }
 
