@@ -1,4 +1,4 @@
-// #### src/components/chat/LikeSystem.tsx        "use client";
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -25,13 +25,13 @@ function stableDid(): string {
 const curPair = () => (globalThis as any).__ditonaPairId || (globalThis as any).__pairId || null;
 const curPeer = () => (globalThis as any).__ditonaPeerDid || (globalThis as any).__peerDid || null;
 
-async function postLike(targetDid: string, liked?: boolean) {
+async function postLike(targetDid: string) {
   const me = stableDid();
   const r = await fetch("/api/like", {
     method: "POST",
     credentials: "include",
     headers: { "content-type": "application/json", "x-did": me },
-    body: JSON.stringify(liked === undefined ? { targetDid } : { targetDid, liked }),
+    body: JSON.stringify({ targetDid }), // قراءة الحالة الأولية فقط
   });
   const j = await r.json().catch(() => null);
   return { ok: r.ok, j };
@@ -46,16 +46,13 @@ export default function LikeSystem() {
   });
   const mounted = useRef(false);
 
-  // بثّ sync محليًا + عبر LiveKit
+  // بثّ sync محليًا + عبر LiveKit (يُستخدم فقط عند القراءة الأولية)
   function emitSync(count?: number, you?: boolean) {
     const pid = curPair();
     try {
       const room: any = (globalThis as any).__lkRoom;
       const payload = { t: "like:sync", count, you, pairId: pid };
-      room?.localParticipant?.publishData(
-        new TextEncoder().encode(JSON.stringify(payload)),
-        { reliable: true, topic: "like" }
-      );
+      room?.localParticipant?.publishData(new TextEncoder().encode(JSON.stringify(payload)), { reliable: true, topic: "like" });
     } catch {}
     window.dispatchEvent(new CustomEvent("like:sync", { detail: { count, you, pairId: pid } }));
   }
@@ -64,16 +61,16 @@ export default function LikeSystem() {
     if (mounted.current) return;
     mounted.current = true;
 
-    const syncTarget = () => setSt(s => ({ ...s, targetDid: curPeer(), pairId: curPair() }));
+    const syncTarget = () => setSt((s) => ({ ...s, targetDid: curPeer(), pairId: curPair() }));
 
     const onPair = () => {
       syncTarget();
       const did = curPeer();
       if (!did) return;
-      // قراءة الحالة الأولية عبر POST فقط
-      postLike(did, undefined).then(({ ok, j }) => {
+      // قراءة الحالة الأولية (you + count) وتوزيعها على HUDs
+      postLike(did).then(({ ok, j }) => {
         if (!ok || !j) return;
-        setSt(s => ({ ...s, isLiked: !!j.you, canLike: true }));
+        setSt((s) => ({ ...s, isLiked: !!j.you, canLike: true }));
         emitSync(j.count, j.you);
       });
     };
@@ -88,14 +85,9 @@ export default function LikeSystem() {
       const d = e?.detail || {};
       const pid = curPair();
       if (d?.pairId && pid && d.pairId !== pid) return;
-      if (typeof d.you === "boolean") setSt(s => ({ ...s, isLiked: d.you }));
+      if (typeof d.you === "boolean") setSt((s) => ({ ...s, isLiked: d.you }));
     };
     window.addEventListener("like:sync", onSync as any);
-
-    // أوامر الواجهة
-    const onUiLike = (e: any) => toggle(e?.detail?.liked);
-    window.addEventListener("ui:like", onUiLike as any);
-    window.addEventListener("ui:like:toggle", onUiLike as any);
 
     // بدء
     onPair();
@@ -104,26 +96,9 @@ export default function LikeSystem() {
       window.removeEventListener("rtc:pair", onPair as any);
       window.removeEventListener("ditona:peer-meta", onPeerMeta as any);
       window.removeEventListener("like:sync", onSync as any);
-      window.removeEventListener("ui:like", onUiLike as any);
-      window.removeEventListener("ui:like:toggle", onUiLike as any);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function toggle(force?: boolean) {
-    if (!st.canLike || !st.targetDid) return;
-    const next = typeof force === "boolean" ? !!force : !st.isLiked;
-
-    // تفاؤلي
-    setSt(s => ({ ...s, isLiked: next, canLike: false }));
-    const { ok, j } = await postLike(st.targetDid, next);
-    if (!ok || !j) {
-      setSt(s => ({ ...s, isLiked: !next, canLike: true }));
-      return;
-    }
-    emitSync(j.count, j.you);
-    setSt(s => ({ ...s, canLike: true }));
-  }
-
-  return null; // headless
+  return null; // headless (العرض الفعلي للزر في أدوات أخرى ترسل ui:like:toggle)
 }
