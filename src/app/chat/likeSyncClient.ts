@@ -3,21 +3,12 @@
 
 /**
  * جسر like من LiveKit DC → نافذة المتصفح.
- *
- * أهداف:
- *  - استقبال رسائل topic="like"
- *  - دعم الصيغ القديمة والجديدة:
- *      { t:"like:sync", pairId?, count, liked }
- *      { t:"like:sync", pairId?, count, you }  // نحول you→liked
- *      { t:"like", liked }                      // وميض بصري فقط للطرف الآخر
- *  - حقن pairId إن غاب باستخدام window.__ditonaPairId || __pairId
- *  - بث نافذة موحّد:
- *      window.dispatchEvent(new CustomEvent("like:sync",{detail:{pairId,count,liked}}))
- *  - بث وميض HUD اختياري عند {t:"like"}:
- *      window.dispatchEvent(new CustomEvent("rtc:peer-like",{detail:{pairId, liked}}))
- *
- * لا إرسال عبر DC من هنا. الإرسال يتم في LikeSystem.tsx فقط.
- * لا تغيير ENV. لا اعتماد خارجي.
+ * - يدعم الصيغ:
+ *   { t:"like:sync", pairId?, count, liked } | { t:"like:sync", pairId?, count, you }
+ *   { t:"like", liked }  ← وميض HUD فقط
+ * - يحقن pairId إن غاب.
+ * - يبث نافذة موحّد: "like:sync" {pairId,count,liked}
+ * - لا إرسال DC من هنا.
  */
 
 type LikeSyncEvt = {
@@ -28,7 +19,7 @@ type LikeSyncEvt = {
   t?: string;
 };
 
-function curPair(): string | null {
+function curPair_like(): string | null {
   try {
     const w: any = globalThis as any;
     return w.__ditonaPairId || w.__pairId || null;
@@ -37,7 +28,7 @@ function curPair(): string | null {
   }
 }
 
-function toJson(bytes: Uint8Array | string): any {
+function toJson_like(bytes: Uint8Array | string): any {
   try {
     const s = typeof bytes === "string" ? bytes : new TextDecoder().decode(bytes);
     return JSON.parse(s);
@@ -46,28 +37,27 @@ function toJson(bytes: Uint8Array | string): any {
   }
 }
 
-function isLikeTopic(topic?: string | null) {
+function isLikeTopic_like(topic?: string | null) {
   return (topic || "").toLowerCase() === "like";
 }
 
-function handlePayload(p: any) {
+function handlePayload_like(p: any) {
   if (!p || typeof p !== "object") return;
 
-  // 1) وميض بصري للطرف الآخر عند t:"like"
+  // وميض بصري للطرف الآخر
   if (p.t === "like" && typeof p.liked === "boolean") {
-    const pid = p.pairId || curPair();
+    const pid = p.pairId || curPair_like();
     window.dispatchEvent(
       new CustomEvent("rtc:peer-like", { detail: { pairId: pid, liked: p.liked } })
     );
     return;
   }
 
-  // 2) مزامنة العدّاد t:"like:sync"
+  // مزامنة العدّاد
   if (p.t === "like:sync" || (typeof p.count === "number" && ("you" in p || "liked" in p))) {
-    const pid = p.pairId || curPair();
+    const pid = p.pairId || curPair_like();
     const liked = typeof p.liked === "boolean" ? p.liked : !!p.you;
     const count = typeof p.count === "number" ? p.count : undefined;
-
     if (typeof count === "number") {
       window.dispatchEvent(
         new CustomEvent("like:sync", { detail: { pairId: pid, count, liked } })
@@ -76,48 +66,41 @@ function handlePayload(p: any) {
   }
 }
 
-function attachRoom(room: any) {
+function attachRoom_like(room: any) {
   if (!room || typeof room?.on !== "function") return;
 
-  // LiveKit: RoomEvent.DataReceived
   const RoomEvent = (globalThis as any).livekit?.RoomEvent;
   const eventName = RoomEvent?.DataReceived || "data-received";
-  const onData = (payload: Uint8Array, participant: any, kind: any, topic?: string) => {
-    if (!isLikeTopic(topic)) return;
-    const j = toJson(payload);
-    handlePayload(j);
+
+  const onData = (payload: Uint8Array, _participant: any, _kind: any, topic?: string) => {
+    if (!isLikeTopic_like(topic)) return;
+    const j = toJson_like(payload);
+    handlePayload_like(j);
   };
 
-  // حافظة لإزالة المستمع عند تبديل الغرفة
   const key = "__ditona_like_onData";
-  // إزالة قديم
   try {
     const prev = (room as any)[key];
     if (prev) room.off?.(eventName, prev);
   } catch {}
-  // ربط جديد
   room.on(eventName, onData as any);
   (room as any)[key] = onData;
 }
 
-// إرفاق تلقائي عند توفر __lkRoom أو عند lk:attached
-(function boot() {
+(function boot_like() {
   function tryAttachFromGlobal() {
     try {
       const w: any = globalThis as any;
       const r = w.__lkRoom;
-      if (r) attachRoom(r);
+      if (r) attachRoom_like(r);
     } catch {}
   }
 
-  // أول تشغيل
   tryAttachFromGlobal();
 
-  // عند attach لاحق
   const onAttached = () => tryAttachFromGlobal();
   window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
 
-  // تنظيف
   (globalThis as any).__ditonaLikeSyncCleanup = () => {
     window.removeEventListener("lk:attached", onAttached as any);
     try {
