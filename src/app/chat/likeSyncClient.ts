@@ -1,5 +1,5 @@
 /**
- * LiveKit "like" topic bridge.
+ * جسر موضوع "like" عبر LiveKit → أحداث نافذة.
  * Forwards:
  *   {t:"like:sync", count, you, pairId?} -> window "like:sync"
  *   {t:"like", liked}                     -> window "rtc:peer-like"
@@ -12,9 +12,7 @@ if (typeof window !== "undefined" && !(window as any).__likeSyncMounted) {
     try {
       const w: any = window as any;
       return w.__ditonaPairId || w.__pairId || null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   };
 
   const parse = (b: ArrayBuffer | Uint8Array | string) => {
@@ -22,15 +20,11 @@ if (typeof window !== "undefined" && !(window as any).__likeSyncMounted) {
       if (typeof b === "string") return JSON.parse(b);
       const u8 = b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
       return JSON.parse(new TextDecoder().decode(u8));
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   };
 
   const dispatch = (name: string, detail: any) => {
-    try {
-      window.dispatchEvent(new CustomEvent(name, { detail }));
-    } catch {}
+    try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
   };
 
   function attach(room: any) {
@@ -56,20 +50,12 @@ if (typeof window !== "undefined" && !(window as any).__likeSyncMounted) {
     };
 
     room.on("dataReceived", onData);
-    window.addEventListener(
-      "pagehide",
-      () => {
-        try {
-          room.off("dataReceived", onData);
-        } catch {}
-      },
-      { once: true } as any,
-    );
+    window.addEventListener("pagehide", () => {
+      try { room.off("dataReceived", onData); } catch {}
+    }, { once: true } as any);
   }
 
-  // attach now and when LK attaches
   attach((window as any).__lkRoom);
   window.addEventListener("lk:attached", () => attach((window as any).__lkRoom), { passive: true } as any);
 }
-
 export {};
