@@ -1,61 +1,133 @@
+// src/app/chat/likeSyncClient.ts
+"use client";
+
 /**
- * جسر موضوع "like" عبر LiveKit → أحداث نافذة.
- * Forwards:
- *   {t:"like:sync", count, you, pairId?} -> window "like:sync"
- *   {t:"like", liked}                     -> window "rtc:peer-like"
- * Injects current pairId when missing.
+ * جسر like من LiveKit DC → نافذة المتصفح.
+ *
+ * أهداف:
+ *  - استقبال رسائل topic="like"
+ *  - دعم الصيغ القديمة والجديدة:
+ *      { t:"like:sync", pairId?, count, liked }
+ *      { t:"like:sync", pairId?, count, you }  // نحول you→liked
+ *      { t:"like", liked }                      // وميض بصري فقط للطرف الآخر
+ *  - حقن pairId إن غاب باستخدام window.__ditonaPairId || __pairId
+ *  - بث نافذة موحّد:
+ *      window.dispatchEvent(new CustomEvent("like:sync",{detail:{pairId,count,liked}}))
+ *  - بث وميض HUD اختياري عند {t:"like"}:
+ *      window.dispatchEvent(new CustomEvent("rtc:peer-like",{detail:{pairId, liked}}))
+ *
+ * لا إرسال عبر DC من هنا. الإرسال يتم في LikeSystem.tsx فقط.
+ * لا تغيير ENV. لا اعتماد خارجي.
  */
-if (typeof window !== "undefined" && !(window as any).__likeSyncMounted) {
-  (window as any).__likeSyncMounted = 1;
 
-  const curPair = (): string | null => {
-    try {
-      const w: any = window as any;
-      return w.__ditonaPairId || w.__pairId || null;
-    } catch { return null; }
-  };
+type LikeSyncEvt = {
+  pairId?: string;
+  count?: number;
+  liked?: boolean;
+  you?: boolean; // توافق
+  t?: string;
+};
 
-  const parse = (b: ArrayBuffer | Uint8Array | string) => {
-    try {
-      if (typeof b === "string") return JSON.parse(b);
-      const u8 = b instanceof Uint8Array ? b : new Uint8Array(b as ArrayBuffer);
-      return JSON.parse(new TextDecoder().decode(u8));
-    } catch { return null; }
-  };
+function curPair(): string | null {
+  try {
+    const w: any = globalThis as any;
+    return w.__ditonaPairId || w.__pairId || null;
+  } catch {
+    return null;
+  }
+}
 
-  const dispatch = (name: string, detail: any) => {
-    try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
-  };
+function toJson(bytes: Uint8Array | string): any {
+  try {
+    const s = typeof bytes === "string" ? bytes : new TextDecoder().decode(bytes);
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
 
-  function attach(room: any) {
-    if (!room || !room.on) return;
+function isLikeTopic(topic?: string | null) {
+  return (topic || "").toLowerCase() === "like";
+}
 
-    const onData = (payload: Uint8Array, _p?: any, _k?: any, topic?: string) => {
-      if (topic !== "like") return;
-      const j = parse(payload);
-      if (!j || typeof j !== "object") return;
+function handlePayload(p: any) {
+  if (!p || typeof p !== "object") return;
 
-      if (j.t === "like:sync") {
-        dispatch("like:sync", {
-          count: typeof j.count === "number" ? j.count : undefined,
-          you: typeof j.you === "boolean" ? j.you : undefined,
-          pairId: j.pairId || curPair(),
-        });
-        return;
-      }
-
-      if (j.t === "like" && typeof j.liked === "boolean") {
-        dispatch("rtc:peer-like", { liked: !!j.liked, pairId: j.pairId || curPair() });
-      }
-    };
-
-    room.on("dataReceived", onData);
-    window.addEventListener("pagehide", () => {
-      try { room.off("dataReceived", onData); } catch {}
-    }, { once: true } as any);
+  // 1) وميض بصري للطرف الآخر عند t:"like"
+  if (p.t === "like" && typeof p.liked === "boolean") {
+    const pid = p.pairId || curPair();
+    window.dispatchEvent(
+      new CustomEvent("rtc:peer-like", { detail: { pairId: pid, liked: p.liked } })
+    );
+    return;
   }
 
-  attach((window as any).__lkRoom);
-  window.addEventListener("lk:attached", () => attach((window as any).__lkRoom), { passive: true } as any);
+  // 2) مزامنة العدّاد t:"like:sync"
+  if (p.t === "like:sync" || (typeof p.count === "number" && ("you" in p || "liked" in p))) {
+    const pid = p.pairId || curPair();
+    const liked = typeof p.liked === "boolean" ? p.liked : !!p.you;
+    const count = typeof p.count === "number" ? p.count : undefined;
+
+    if (typeof count === "number") {
+      window.dispatchEvent(
+        new CustomEvent("like:sync", { detail: { pairId: pid, count, liked } })
+      );
+    }
+  }
 }
-export {};
+
+function attachRoom(room: any) {
+  if (!room || typeof room?.on !== "function") return;
+
+  // LiveKit: RoomEvent.DataReceived
+  const RoomEvent = (globalThis as any).livekit?.RoomEvent;
+  const eventName = RoomEvent?.DataReceived || "data-received";
+  const onData = (payload: Uint8Array, participant: any, kind: any, topic?: string) => {
+    if (!isLikeTopic(topic)) return;
+    const j = toJson(payload);
+    handlePayload(j);
+  };
+
+  // حافظة لإزالة المستمع عند تبديل الغرفة
+  const key = "__ditona_like_onData";
+  // إزالة قديم
+  try {
+    const prev = (room as any)[key];
+    if (prev) room.off?.(eventName, prev);
+  } catch {}
+  // ربط جديد
+  room.on(eventName, onData as any);
+  (room as any)[key] = onData;
+}
+
+// إرفاق تلقائي عند توفر __lkRoom أو عند lk:attached
+(function boot() {
+  function tryAttachFromGlobal() {
+    try {
+      const w: any = globalThis as any;
+      const r = w.__lkRoom;
+      if (r) attachRoom(r);
+    } catch {}
+  }
+
+  // أول تشغيل
+  tryAttachFromGlobal();
+
+  // عند attach لاحق
+  const onAttached = () => tryAttachFromGlobal();
+  window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
+
+  // تنظيف
+  (globalThis as any).__ditonaLikeSyncCleanup = () => {
+    window.removeEventListener("lk:attached", onAttached as any);
+    try {
+      const w: any = globalThis as any;
+      const r = w.__lkRoom;
+      const RoomEvent = (globalThis as any).livekit?.RoomEvent;
+      const eventName = RoomEvent?.DataReceived || "data-received";
+      const key = "__ditona_like_onData";
+      const prev = r?.[key];
+      if (r && prev) r.off?.(eventName, prev);
+    } catch {}
+  };
+})();
