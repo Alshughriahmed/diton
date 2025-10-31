@@ -161,7 +161,7 @@ export default function PeerOverlay() {
   return (
     <div className="pointer-events-none absolute inset-0 z-[60]">
       {/* أعلى يسار: الصورة + الاسم + VIP + عدّاد إعجابات B */}
-      <div className="absolute left-3 top-3 flex items-center gap-2">
+     <div className="absolute left-3 bottom-3 z-[70] flex items-center gap-2 rounded-xl bg-black/35 backdrop-blur-sm px-2 py-1">
         <img
           data-ui="peer-avatar"
           alt=""
