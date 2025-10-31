@@ -1,6 +1,4 @@
-src/app/chat/components/ChatToolbar.tsx
-
-// ####  src/app/chat/components/ChatToolbar.tsx       "use client";
+  "use client";
 import { useEffect, useState } from "react";
 import { emit } from "@/utils/events";
 import { useFFA } from "@/lib/useFFA";
