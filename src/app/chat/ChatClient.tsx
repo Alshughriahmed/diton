@@ -61,7 +61,7 @@ const NEXT_COOLDOWN_MS = 1000;
 const DISCONNECT_TIMEOUT_MS = 900;
 const SWITCH_PAUSE_MS = 240;
 
-// اشتراك فوري في فيديو الطرف—حل الشاشة السوداء
+// اشتراك فوري في فيديو الطرف — حل الشاشة السوداء
 async function ensureSubscribedToRemoteVideo(room: Room) {
   const p = [...room.remoteParticipants.values()][0];
   if (!p) return;
@@ -365,13 +365,11 @@ export default function ChatClient() {
     try {
       const payload = new TextEncoder().encode(JSON.stringify({ t: "meta:init" }));
       await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" });
-      setTimeout(async () => {
-        try { await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" }); } catch {}
-      }, 250);
+      setTimeout(async () => { try { await (room.localParticipant as any).publishData(payload, { reliable: true, topic: "meta" }); } catch {} }, 250);
     } catch {}
   }
 
-  // ← watchdog للبحث الحقيقي: يعيد enqueue كل 60s لتفادي تلف التوكن/401
+  // إعادة الاصطفاف التلقائي بعد 60s حتى لا يصبح البحث "وهمي"
   async function waitRoomLoop(ticket: string, sid: number, maxMs = 60000): Promise<string | "__expired__" | null> {
     const started = Date.now();
     let wait = 8000;
@@ -381,9 +379,7 @@ export default function ChatClient() {
       pollAbortRef.current = ctrl;
       let rn: string | null = null;
       try { rn = await nextReq(ticket, wait, ctrl.signal); }
-      catch (e: any) {
-        // أخطاء الشبكة/401/Timeout → استمر
-      }
+      catch { /* شبكة/401: استمر */ }
       finally { if (pollAbortRef.current === ctrl) pollAbortRef.current = null; }
       if (!isActiveSid(sid)) return null;
       if (rn) return rn;
@@ -430,11 +426,7 @@ export default function ChatClient() {
   function wireRoomEvents(room: Room, roomName: string, sid: number) {
     const onTrack = (t: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) => {
       if (!isActiveSid(sid)) return;
-      try {
-        remoteDidRef.current = String(p?.identity || "");
-        (window as any).__ditonaPeerDid = remoteDidRef.current;
-        (window as any).__peerDid = remoteDidRef.current;
-      } catch {}
+      try { remoteDidRef.current = String(p?.identity || ""); (window as any).__ditonaPeerDid = remoteDidRef.current; (window as any).__peerDid = remoteDidRef.current; } catch {}
       try {
         if (pub.kind === Track.Kind.Video && remoteVideoRef.current) attachRemoteTrack("video", t);
         else if (pub.kind === Track.Kind.Audio && remoteAudioRef.current) attachRemoteTrack("audio", t);
@@ -498,12 +490,7 @@ export default function ChatClient() {
         }
 
         if (j?.t === "like:sync") {
-          const detail = {
-            pairId: roomName,
-            liked: !!j?.liked,
-            likedByOther: !!j?.liked,
-            count: typeof j?.count === "number" ? j.count : undefined,
-          };
+          const detail = { pairId: roomName, liked: !!j?.liked, likedByOther: !!j?.liked, count: typeof j?.count === "number" ? j.count : undefined };
           window.dispatchEvent(new CustomEvent("like:sync", { detail }));
           return;
         }
@@ -588,10 +575,7 @@ export default function ChatClient() {
 
     try {
       const lp: any = room.localParticipant;
-      const pubs =
-        typeof lp.getTrackPublications === "function"
-          ? lp.getTrackPublications()
-          : Array.from(lp.trackPublications?.values?.() ?? []);
+      const pubs = typeof lp.getTrackPublications === "function" ? lp.getTrackPublications() : Array.from(lp.trackPublications?.values?.() ?? []);
       const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track);
       const pubTrack: any = vidPub?.track;
 
@@ -599,9 +583,7 @@ export default function ChatClient() {
         await pubTrack.replaceTrack(vt);
       } else {
         for (const pub of pubs) {
-          if (pub.kind === Track.Kind.Video && pub.track) {
-            await lp.unpublishTrack(pub.track, { stop: false });
-          }
+          if (pub.kind === Track.Kind.Video && pub.track) { await lp.unpublishTrack(pub.track, { stop: false }); }
         }
         await room.localParticipant.publishTrack(vt);
       }
@@ -704,17 +686,16 @@ export default function ChatClient() {
 
     try {
       let payload = buildPayload();
-
       let ticket = await enqueueReq(payload);
       lastTicketRef.current = ticket;
       if (!isActiveSid(sid)) return;
 
       let roomName: string | null = null;
-      // حلّ 401 regions/تلف التوكن: إعادة enqueue كل 60 ثانية تلقائيًا
       while (isActiveSid(sid) && !roomName) {
         const res = await waitRoomLoop(ticket, sid, 60000);
         if (!isActiveSid(sid)) return;
         if (res === "__expired__") {
+          // refresh ticket لتفادي 401/انتهاء الانتظار
           payload = buildPayload();
           ticket = await enqueueReq(payload);
           lastTicketRef.current = ticket;
@@ -747,7 +728,6 @@ export default function ChatClient() {
       isConnectingRef.current = true;
       await room.connect(ws, token);
       await ensureSubscribedToRemoteVideo(room); // حل الشاشة السوداء
-
       if (!isActiveSid(sid)) {
         try { await room.disconnect(false); } catch {}
         isConnectingRef.current = false;
@@ -920,11 +900,8 @@ export default function ChatClient() {
       }
     }));
 
-    // settings (لا نقطع الاتصال)
-    offs.push(on("ui:openSettings", () => {
-      // فتح نافذة الإعدادات داخل الصفحة (لا leaveRoom)
-      try { window.dispatchEvent(new CustomEvent("ui:settings:open")); } catch {}
-    }));
+    // settings — لا نقطع الاتصال
+    offs.push(on("ui:openSettings", () => { try { window.dispatchEvent(new CustomEvent("ui:settings:open")); } catch {} }));
 
     // torch
     offs.push(on("ui:toggleTorch", async () => {
@@ -933,16 +910,12 @@ export default function ChatClient() {
       broadcastMediaState();
     }));
 
-    // التعرّف على DID من الميتا
+    // تعيين DID للطرف من الميتا
     const onPeerMetaCapture = (ev: any) => {
       try {
         const d = ev?.detail || {};
         const did = d.did || d.deviceId || d.peerDid || d.id || d.identity;
-        if (did) {
-          remoteDidRef.current = String(did);
-          (window as any).__ditonaPeerDid = remoteDidRef.current;
-          (window as any).__peerDid = remoteDidRef.current;
-        }
+        if (did) { remoteDidRef.current = String(did); (window as any).__ditonaPeerDid = remoteDidRef.current; (window as any).__peerDid = remoteDidRef.current; }
       } catch {}
     };
     window.addEventListener("ditona:peer-meta", onPeerMetaCapture as any);
@@ -953,7 +926,7 @@ export default function ChatClient() {
     // report
     offs.push(on("ui:report", () => toast("Report sent. Moving on")));
 
-    // NEXT
+    // NEXT + اهتزاز
     offs.push(on("ui:next", async () => {
       vibrate(18);
       const now = Date.now();
@@ -979,7 +952,7 @@ export default function ChatClient() {
       await joinViaRedisMatch(sid);
     }));
 
-    // PREV
+    // PREV + اهتزاز
     offs.push(on("ui:prev", async () => {
       vibrate(18);
       if (!filters.isVip && !ffa) {
@@ -1036,16 +1009,11 @@ export default function ChatClient() {
 
     // Beauty/Masks
     offs.push(on("ui:toggleBeauty", async (d: any) => { await enableBeauty(!!d?.enabled).catch(() => {}); }));
-    offs.push(on("ui:toggleMasks", async () => {
-      const next = !effectsMaskOnRef.current;
-      if (next) await enableMask("cat"); else await enableMask(null);
-    }));
+    offs.push(on("ui:toggleMasks", async () => { const next = !effectsMaskOnRef.current; if (next) await enableMask("cat"); else await enableMask(null); }));
     offs.push(on("ui:setMask", async (d: any) => { await enableMask(d?.name ?? null); }));
 
     // mirror
-    offs.push(on("ui:toggleMirror", () => {
-      setIsMirrored((prev) => { const s = !prev; toast(s ? "Mirror on" : "Mirror off"); return s; });
-    }));
+    offs.push(on("ui:toggleMirror", () => { setIsMirrored((prev) => { const s = !prev; toast(s ? "Mirror on" : "Mirror off"); return s; }); }));
 
     // upsell
     offs.push(on("ui:upsell", (d: any) => { if (ffa) return; router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`); }));
@@ -1070,7 +1038,7 @@ export default function ChatClient() {
       disableAllEffects().catch(() => {});
       leaveRoom().catch(() => {});
     };
-    // لا نقطع الاتصال عند تغيير الفلاتر/الإعدادات — الاتصال الحالي يبقى
+    // اتصال الحالي لا يُقطع بتغيير الفلاتر/الإعدادات
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); 
 
