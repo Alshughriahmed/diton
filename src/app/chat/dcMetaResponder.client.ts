@@ -3,27 +3,15 @@
 
 /**
  * DC → Window bridge for META.
- *
- * يقبل الرسائل التالية على topic="meta":
- *   1) { t:"meta", pairId?, meta:{...} }
- *   2) { pairId?, meta:{...} }
- *   3) { t:"peer-meta", payload:{...} }   // توافق قديم
- *   4) { t:"meta:init" }                  // طلب الميتا المحلية
- *
- * وينتِج دائمًا حدث نافذة موحد:
- *   window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: {
- *     pairId, displayName?, vip?, likes?, country?, city?, gender?, avatarUrl?
- *   }}));
- *
- * كما يستجيب لطلب "meta:init" ببث ميتا محلية إلى الطرف الآخر:
- *   publishDC({ t:"meta", pairId, meta:{...} }, topic="meta")
- *
- * لا تبعيات. لا ENV جديدة.
+ * يقبل رسائل topic="meta" ويبث ditona:peer-meta بصيغة مفلطحة.
+ * يدعم التوافق مع {t:'peer-meta',payload:{...}} و {t:'meta',meta:{...}}.
+ * يرد على {t:'meta:init'} بإرسال الميتا المحلية.
  */
 
 type AnyObj = Record<string, any>;
 
-function curPair(): string | null {
+// اسم فريد لتفادي التعارض
+function getPairId(): string | null {
   try {
     const w: any = globalThis as any;
     return w.__ditonaPairId || w.__pairId || null;
@@ -41,21 +29,21 @@ function parseJson(bytes: Uint8Array | string): AnyObj | null {
   }
 }
 
-function flattenMeta(src: AnyObj): AnyObj | null {
+function flattenMetaPayload(src: AnyObj): AnyObj | null {
   if (!src || typeof src !== "object") return null;
 
-  // توافق قديم: { t:'peer-meta', payload:{...} }
+  // توافق قديم
   if (src.t === "peer-meta" && src.payload && typeof src.payload === "object") {
     const d = src.payload || {};
-    const pid = d.pairId ?? src.pairId ?? curPair();
+    const pid = d.pairId ?? src.pairId ?? getPairId();
     const meta = d.meta && typeof d.meta === "object" ? d.meta : d;
     return { pairId: pid, ...meta };
   }
 
-  // الصيغ الأساسية: { t:'meta', pairId?, meta:{...} } أو { pairId?, meta:{...} }
+  // الصيغ الأساسية: {t:'meta',meta:{...}} أو {meta:{...}}
   const hasMeta = src.meta && typeof src.meta === "object";
   if (hasMeta || src.t === "meta") {
-    const pid = src.pairId ?? src.meta?.pairId ?? curPair();
+    const pid = src.pairId ?? src.meta?.pairId ?? getPairId();
     const meta = hasMeta ? src.meta : {};
     return { pairId: pid, ...meta };
   }
@@ -63,16 +51,14 @@ function flattenMeta(src: AnyObj): AnyObj | null {
   return null;
 }
 
-function publishWindowPeerMeta(detail: AnyObj) {
+function emitPeerMeta(detail: AnyObj) {
   const pidEvt = detail?.pairId;
-  const pidNow = curPair();
+  const pidNow = getPairId();
   if (pidEvt && pidNow && pidEvt !== pidNow) return; // حارس الزوج
   window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail }));
 }
 
 function buildLocalMeta(): AnyObj {
-  // نحاول جمع الميتا المحلية دون تبعيات
-  // 1) من Zustand persist إن وُجد
   let gender: string | undefined;
   let displayName: string | undefined;
   let avatarUrl: string | undefined;
@@ -88,7 +74,6 @@ function buildLocalMeta(): AnyObj {
     }
   } catch {}
 
-  // 2) من الموقع الجغرافي المخزّن
   let country: string | undefined;
   let city: string | undefined;
   try {
@@ -104,64 +89,57 @@ function buildLocalMeta(): AnyObj {
 function publishDCMeta(room: any) {
   try {
     if (!room) return;
-    const payload = {
-      t: "meta",
-      pairId: curPair(),
-      meta: buildLocalMeta(),
-    };
+    const payload = { t: "meta", pairId: getPairId(), meta: buildLocalMeta() };
     const bytes = new TextEncoder().encode(JSON.stringify(payload));
     room.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
   } catch {}
 }
 
-function attachRoom(room: any) {
+function attachRoomForMeta(room: any) {
   if (!room || typeof room?.on !== "function") return;
 
   const RoomEvent = (globalThis as any).livekit?.RoomEvent;
   const eventName = RoomEvent?.DataReceived || "data-received";
 
-  const onData = (payload: Uint8Array, _participant: any, _kind: any, topic?: string) => {
+  const onData = (payload: Uint8Array, _p: any, _k: any, topic?: string) => {
     if ((topic || "").toLowerCase() !== "meta") return;
     const j = parseJson(payload);
     if (!j) return;
 
-    // إن كان طلب meta:init من الطرف الآخر نرد بميتا محلية
     if (j.t === "meta:init") {
       publishDCMeta(room);
       return;
     }
 
-    const flat = flattenMeta(j);
-    if (flat) publishWindowPeerMeta(flat);
+    const flat = flattenMetaPayload(j);
+    if (flat) emitPeerMeta(flat);
   };
 
   // منع التكرار
-  const key = "__ditona_meta_onData";
+  const handlerKey = "__ditona_meta_onData";
   try {
-    const prev = (room as any)[key];
+    const prev = (room as any)[handlerKey];
     if (prev) room.off?.(eventName, prev);
   } catch {}
   room.on(eventName, onData as any);
-  (room as any)[key] = onData;
+  (room as any)[handlerKey] = onData;
 }
 
 (function boot() {
-  // attach فورًا إن كان __lkRoom جاهزًا
+  // إرفاق فوري إن كانت الغرفة جاهزة
   try {
     const w: any = globalThis as any;
-    if (w.__lkRoom) attachRoom(w.__lkRoom);
+    if (w.__lkRoom) attachRoomForMeta(w.__lkRoom);
   } catch {}
 
-  // عند ارتباط LiveKit لاحقًا
   const onAttached = () => {
     try {
       const w: any = globalThis as any;
-      if (w.__lkRoom) attachRoom(w.__lkRoom);
+      if (w.__lkRoom) attachRoomForMeta(w.__lkRoom);
     } catch {}
   };
   window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
 
-  // استقبال طلب داخلي لإرسال الميتا المحلية إلى الطرف الآخر
   const onMetaInit = () => {
     try {
       const w: any = globalThis as any;
@@ -170,7 +148,6 @@ function attachRoom(room: any) {
   };
   window.addEventListener("ditona:meta:init", onMetaInit as any, { passive: true } as any);
 
-  // تنظيف اختياري
   (globalThis as any).__ditonaMetaBridgeCleanup = () => {
     window.removeEventListener("lk:attached", onAttached as any);
     window.removeEventListener("ditona:meta:init", onMetaInit as any);
@@ -179,8 +156,8 @@ function attachRoom(room: any) {
       const r = w.__lkRoom;
       const RoomEvent = (globalThis as any).livekit?.RoomEvent;
       const eventName = RoomEvent?.DataReceived || "data-received";
-      const key = "__ditona_meta_onData";
-      const prev = r?.[key];
+      const handlerKey = "__ditona_meta_onData";
+      const prev = r?.[handlerKey];
       if (r && prev) r.off?.(eventName, prev);
     } catch {}
   };
