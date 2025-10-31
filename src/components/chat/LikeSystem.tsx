@@ -27,7 +27,8 @@ const curPeer = () => (globalThis as any).__ditonaPeerDid || (globalThis as any)
 async function postLike(targetDid: string, liked?: boolean) {
   const me = stableDid();
   const r = await fetch("/api/like", {
-    method: "POST", credentials: "include",
+    method: "POST",
+    credentials: "include",
     headers: { "content-type": "application/json", "x-did": me },
     body: JSON.stringify(liked === undefined ? { targetDid } : { targetDid, liked }),
   });
@@ -114,7 +115,7 @@ export default function LikeSystem() {
 
     vibrate(16);
 
-    // تفاؤلي + إرسال DC خفيف فورًا
+    // تفاؤلي + DC خفيف للطرف الآخر فورًا
     setSt((s) => ({ ...s, isLiked: next, canLike: false }));
     sendPeerToggleDC(next);
 
