@@ -62,7 +62,6 @@ const NEXT_COOLDOWN_MS = 1000;
 const DISCONNECT_TIMEOUT_MS = 900;
 const SWITCH_PAUSE_MS = 240;
 
-// اشتراك فوري في فيديو الطرف — حل الشاشة السوداء
 async function ensureSubscribedToRemoteVideo(room: Room) {
   const p = [...room.remoteParticipants.values()][0];
   if (!p) return;
@@ -98,7 +97,6 @@ export default function ChatClient() {
   const filters = useFilters();
   const { profile } = useProfile();
 
-  // refs
   const localRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -134,7 +132,6 @@ export default function ChatClient() {
 
   const remoteDidRef = useRef<string>("");
 
-  // matching
   const sidRef = useRef(0);
   const lastNextTsRef = useRef(0);
   const pollAbortRef = useRef<AbortController | null>(null);
@@ -143,7 +140,6 @@ export default function ChatClient() {
   const [searchMsg, setSearchMsg] = useState("Searching for a match…");
   const lastTicketRef = useRef<string>("");
 
-  // helpers
   function newSid(): number {
     try { pollAbortRef.current?.abort(); } catch {}
     try { tokenAbortRef.current?.abort(); } catch {}
@@ -370,7 +366,6 @@ export default function ChatClient() {
     } catch {}
   }
 
-  // إعادة الاصطفاف التلقائي بعد 60s حتى لا يصبح البحث "وهمي"
   async function waitRoomLoop(ticket: string, sid: number, maxMs = 60000): Promise<string | "__expired__" | null> {
     const started = Date.now();
     let wait = 8000;
@@ -380,7 +375,7 @@ export default function ChatClient() {
       pollAbortRef.current = ctrl;
       let rn: string | null = null;
       try { rn = await nextReq(ticket, wait, ctrl.signal); }
-      catch { /* شبكة/401: استمر */ }
+      catch {}
       finally { if (pollAbortRef.current === ctrl) pollAbortRef.current = null; }
       if (!isActiveSid(sid)) return null;
       if (rn) return rn;
@@ -576,7 +571,7 @@ export default function ChatClient() {
 
     try {
       const lp: any = room.localParticipant;
-      const pubs = typeof lp.getTrackPublications === "function" ? lp.getTrackPublications() : Array.from(lp.trackPublications?.values?.() ?? []);
+      const pubs = typeof lp.getTrackPublications === "function" ? lp.getTrackPublications() : Array.from(lp.trackPublications?.values?.() ?? []); // eslint-disable-line
       const vidPub = pubs.find((p: any) => p.kind === Track.Kind.Video && p.track);
       const pubTrack: any = vidPub?.track;
 
@@ -696,7 +691,6 @@ export default function ChatClient() {
         const res = await waitRoomLoop(ticket, sid, 60000);
         if (!isActiveSid(sid)) return;
         if (res === "__expired__") {
-          // refresh ticket لتفادي 401/انتهاء الانتظار
           payload = buildPayload();
           ticket = await enqueueReq(payload);
           lastTicketRef.current = ticket;
@@ -728,7 +722,7 @@ export default function ChatClient() {
       const ws = process.env.NEXT_PUBLIC_LIVEKIT_WS_URL as string;
       isConnectingRef.current = true;
       await room.connect(ws, token);
-      await ensureSubscribedToRemoteVideo(room); // حل الشاشة السوداء
+      await ensureSubscribedToRemoteVideo(room);
       if (!isActiveSid(sid)) {
         try { await room.disconnect(false); } catch {}
         isConnectingRef.current = false;
@@ -820,7 +814,6 @@ export default function ChatClient() {
     return true;
   }
 
-  // timers
   useEffect(() => {
     if (rtcPhase !== "searching") return;
     const iv = setInterval(() => {
@@ -831,7 +824,6 @@ export default function ChatClient() {
     return () => clearInterval(iv);
   }, [rtcPhase]);
 
-  // boot + wiring
   useEffect(() => {
     (async () => {
       setPhase("boot");
@@ -881,7 +873,6 @@ export default function ChatClient() {
 
     const offs: Array<() => void> = [];
 
-    // mic/cam
     offs.push(on("ui:toggleMic", () => {
       toggleMic();
       const v = !!getMicState();
@@ -891,7 +882,6 @@ export default function ChatClient() {
     }));
     offs.push(on("ui:toggleCam", () => toggleCam()));
 
-    // camera switch
     offs.push(on("ui:switchCamera", async () => {
       const ok = await switchCameraCycle(roomRef.current, localRef.current || undefined);
       if (!ok) toast("Camera switch failed");
@@ -901,17 +891,14 @@ export default function ChatClient() {
       }
     }));
 
-    // settings — لا نقطع الاتصال
     offs.push(on("ui:openSettings", () => { try { window.dispatchEvent(new CustomEvent("ui:settings:open")); } catch {} }));
 
-    // torch
     offs.push(on("ui:toggleTorch", async () => {
       const ok = await toggleTorch();
       toast(ok ? "Flash toggled" : "Flash not supported");
       broadcastMediaState();
     }));
 
-    // تعيين DID للطرف من الميتا
     const onPeerMetaCapture = (ev: any) => {
       try {
         const d = ev?.detail || {};
@@ -924,10 +911,8 @@ export default function ChatClient() {
     offs.push(() => window.removeEventListener("ditona:peer-meta", onPeerMetaCapture as any));
     offs.push(() => window.removeEventListener("rtc:peer-meta", onPeerMetaCapture as any));
 
-    // report
     offs.push(on("ui:report", () => toast("Report sent. Moving on")));
 
-    // NEXT + اهتزاز
     offs.push(on("ui:next", async () => {
       vibrate(18);
       const now = Date.now();
@@ -953,7 +938,6 @@ export default function ChatClient() {
       await joinViaRedisMatch(sid);
     }));
 
-    // PREV + اهتزاز
     offs.push(on("ui:prev", async () => {
       vibrate(18);
       if (!filters.isVip && !ffa) {
@@ -990,11 +974,9 @@ export default function ChatClient() {
       }
     }));
 
-    // messaging
     offs.push(on("ui:openMessaging" as any, () => setShowMessaging(true)));
     offs.push(on("ui:closeMessaging" as any, () => setShowMessaging(false)));
 
-    // remote audio toggle
     offs.push(on("ui:toggleRemoteAudio" as any, () => {
       const a = remoteAudioRef.current;
       const v = remoteVideoRef.current;
@@ -1008,23 +990,18 @@ export default function ChatClient() {
       }
     }));
 
-    // Beauty/Masks
     offs.push(on("ui:toggleBeauty", async (d: any) => { await enableBeauty(!!d?.enabled).catch(() => {}); }));
     offs.push(on("ui:toggleMasks", async () => { const next = !effectsMaskOnRef.current; if (next) await enableMask("cat"); else await enableMask(null); }));
     offs.push(on("ui:setMask", async (d: any) => { await enableMask(d?.name ?? null); }));
 
-    // mirror
     offs.push(on("ui:toggleMirror", () => { setIsMirrored((prev) => { const s = !prev; toast(s ? "Mirror on" : "Mirror off"); return s; }); }));
 
-    // upsell
     offs.push(on("ui:upsell", (d: any) => { if (ffa) return; router.push(`/plans?ref=${d?.ref || d?.feature || "generic"}`); }));
 
-    // mask tray
     offs.push(on("ui:openMaskTray", () => setMaskOpen(true)));
     offs.push(on("ui:closeMaskTray", () => setMaskOpen(false)));
     offs.push(on("ui:toggleMaskTray", () => setMaskOpen((v) => !v)));
 
-    // Cancel (لا نغلق الكاميرا)
     offs.push(on("ui:cancel", () => { abortPolling(); setPhase("searching"); }));
 
     const mobileOptimizer = getMobileOptimizer();
@@ -1039,9 +1016,8 @@ export default function ChatClient() {
       disableAllEffects().catch(() => {});
       leaveRoom().catch(() => {});
     };
-    // اتصال الحالي لا يُقطع بتغيير الفلاتر/الإعدادات
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); 
+  }, []);
 
   useEffect(() => { emit(maskOpen ? "ui:maskTrayOpen" : "ui:maskTrayClose"); }, [maskOpen]);
 
@@ -1049,19 +1025,34 @@ export default function ChatClient() {
     <>
       <div className="min-h-[100dvh] h-[100dvh] w-full bg-gradient-to-b from-slate-900 to-slate-950 text-slate-100" data-chat-container>
         <div className="h-full grid grid-rows-2 gap-2 p-2">
-          <section className="relative rounded-2xl bg-black/30 overflow-hidden">
-            <FilterBar />
-            <MessageHud />
-            <PeerOverlay />
-            <div className="absolute bottom-4 right-4 z-30">
-              <LikeSystem />
-            </div>
-
-            <video ref={remoteVideoRef} id="remoteVideo" data-role="remote" className="w-full h-full object-cover" playsInline autoPlay />
+          {/* ===== Remote pane (B) ===== */}
+          <section
+            className="relative isolation-isolate rounded-2xl bg-black/30 overflow-hidden"
+            data-pane="remote"
+          >
+            {/* Video at the bottom layer */}
+            <video
+              ref={remoteVideoRef}
+              id="remoteVideo"
+              data-role="remote"
+              className="absolute inset-0 z-0 w-full h-full object-cover"
+              playsInline
+              autoPlay
+            />
             <audio ref={remoteAudioRef} id="remoteAudio" autoPlay playsInline hidden />
 
+            {/* HUD layers above video */}
+            <div className="pointer-events-none absolute inset-0 z-40">
+              <FilterBar />
+              <MessageHud />
+              <PeerOverlay />
+              <div className="absolute bottom-4 right-4">
+                <LikeSystem />
+              </div>
+            </div>
+
             {rtcPhase === "searching" && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
+              <div className="absolute inset-0 z-50 flex flex-col items-center justify-center text-slate-300/80 text-sm select-none">
                 <div className="mb-4">{searchMsg}</div>
                 <button
                   onClick={() => emit("ui:cancel")}
@@ -1073,6 +1064,7 @@ export default function ChatClient() {
             )}
           </section>
 
+          {/* ===== Local pane (A) ===== */}
           <section className="relative rounded-2xl bg-black/20 overflow-hidden">
             <video
               ref={localRef}
@@ -1082,6 +1074,7 @@ export default function ChatClient() {
               muted
               autoPlay
             />
+
             {!ready && (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 text-sm text-center px-4">
                 {cameraPermissionHint ? (
