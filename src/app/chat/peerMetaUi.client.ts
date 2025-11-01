@@ -1,19 +1,17 @@
 "use client";
 
 /**
- * HUD لعرض بيانات الطرف B.
- * يعتمد فقط على أحداث:
- *  - "ditona:peer-meta"  detail={ pairId, meta:{...} }
- *  - "rtc:phase"         detail={ phase }
- *
- * لا يغيّر DOM selectors مطلقًا:
+ * يحدّث HUD لمعلومات الطرف B من أحداث:
+ *  - "ditona:peer-meta" detail={ pairId, meta:{...} }
+ *  - "rtc:phase"        detail={ phase }
+ * لا يغيّر محددات DOM:
  *   [data-ui="peer-{avatar|vip|likes|name|country|city|gender}"]
  * يمسح عند searching|stopped فقط.
  */
 
 type Meta = {
   displayName?: string;
-  gender?: "m"|"f"|"c"|"l"|"u"|string;
+  gender?: "m" | "f" | "c" | "l" | "u" | string;
   country?: string;
   city?: string;
   likes?: number;
@@ -21,25 +19,24 @@ type Meta = {
   avatarUrl?: string;
 };
 
-const $ = (k: string): HTMLElement | null =>
-  document.querySelector(`[data-ui="peer-${k}"]`);
+function qs<T extends Element = HTMLElement>(k: string): T | null {
+  return document.querySelector(`[data-ui="peer-${k}"]`) as T | null;
+}
 
 function setText(el: Element | null, v: string | number | null | undefined) {
   if (!el) return;
   (el as HTMLElement).textContent = v == null ? "" : String(v);
 }
 
-/** تصحيح: استخدام محدد مباشر لـ data-ui="peer-avatar" بدل تركيب محدد داخل $ */
 function setAvatar(url?: string) {
-  const el = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | null;
-  if (!el) return;
-
-  if (url && url.length > 0) {
-    el.src = url;
-    el.removeAttribute("hidden");
+  const img = qs<HTMLImageElement>("avatar");
+  if (!img) return;
+  if (url) {
+    img.src = url;
+    img.classList.remove("hidden");
   } else {
-    el.setAttribute("hidden", "true");
-    el.removeAttribute("src");
+    img.removeAttribute("src");
+    img.classList.add("hidden");
   }
 }
 
@@ -50,12 +47,6 @@ function genderIcon(g?: string): string {
   if (s === "c") return "⚤";
   if (s === "l") return "🏳️‍🌈";
   return "⚧";
-}
-
-function updateVip(v?: boolean) {
-  const el = $("vip");
-  if (!el) return;
-  setText(el, v ? "👑" : "🚫👑");
 }
 
 function paintGenderColor(el: HTMLElement | null, g?: string) {
@@ -88,29 +79,27 @@ function paintGenderColor(el: HTMLElement | null, g?: string) {
 
 function updateHUD(meta: Meta) {
   setAvatar(meta.avatarUrl);
-  updateVip(meta.vip);
-  setText($("likes"), meta.likes ?? 0);
-  setText($("name"), meta.displayName ?? "");
-  setText($("country"), meta.country ?? "");
-  setText($("city"), meta.city ?? "");
-
-  const gEl = $("gender");
+  setText(qs("name"), meta.displayName ?? "");
+  setText(qs("vip"), meta.vip ? "👑" : "🚫👑");
+  setText(qs("likes"), meta.likes ?? 0);
+  setText(qs("country"), meta.country ?? "");
+  setText(qs("city"), meta.city ?? "");
+  const gEl = qs<HTMLElement>("gender");
   setText(gEl, genderIcon(meta.gender));
   paintGenderColor(gEl, meta.gender);
 }
 
 function clearHUD() {
   setAvatar(undefined);
-  updateVip(false);
-  setText($("likes"), 0);
-  setText($("name"), "");
-  setText($("country"), "");
-  setText($("city"), "");
-  setText($("gender"), "");
+  setText(qs("name"), "");
+  setText(qs("vip"), "🚫👑");
+  setText(qs("likes"), 0);
+  setText(qs("country"), "");
+  setText(qs("city"), "");
+  setText(qs("gender"), "");
 }
 
 (function boot() {
-  // ظهور فوري لو كانت هناك قيمة مخزنة آخر جلسة
   try {
     const raw = sessionStorage.getItem("ditona:last_peer_meta");
     if (raw) updateHUD(JSON.parse(raw));
