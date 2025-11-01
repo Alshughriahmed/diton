@@ -4,15 +4,14 @@ import type { Room } from 'livekit-client';
 import { RoomEvent } from 'livekit-client';
 
 /**
- * هدف الملف:
- * - ربط RoomEvent.DataReceived بشكل موثوق (على كل المنصات).
- * - دعم كل صيغ meta والـ like المذكورة.
- * - بثّ أحداث موحدة إلى الـHUD:
- *    - 'ditona:peer-meta'  { detail: { pairId, meta } }
- *    - 'like:sync'         { detail: { pairId, count, liked } }
- * - حارس الزوج: إسقاط أي حدث لا يخص window.__ditonaPairId || __pairId.
- * - إرسال 'meta:init' وإعادة إرسال الميتا المحلية عند lk:attached و rtc:pair.
- * - منع التكرار عند إعادة الارتباط/التبديل بين الغرف.
+ * الهدف:
+ * - استقبال كل صيغ meta/like عبر DataChannel وتوحيدها.
+ * - بث أحداث موحّدة:
+ *    • 'ditona:peer-meta' { detail: { pairId, meta } }
+ *    • 'like:sync'        { detail: { pairId, count, liked } }
+ * - حارس الزوج pairId، مع توافق عند غيابه.
+ * - إرسال 'meta:init' و(إعادة) إرسال الميتا المحلية عند lk:attached و rtc:pair.
+ * - منع التكرار عبر الغرف (detach من الغرفة السابقة قبل attach الجديدة).
  */
 
 declare global {
@@ -21,15 +20,19 @@ declare global {
     __ditonaPairId?: string | null;
     __pairId?: string | null;
 
-    // مراجع لمنع التكرار
+    // مراجع لمنع التكرار وعبر الغرف
     __dc_meta_attached?: boolean;
     __dc_meta_handler__?: ((p: Uint8Array, topic?: string) => void) | null;
+    __dc_meta_room__?: Room | null;
 
-    // آخر meta محلية معروفة (يُفترض أن metaInit.client يحدّثها)
+    // آخر meta محلية معروفة (تُحدَّث من metaInit.client)
     __ditonaLocalMeta?: any;
 
-    // لوج مخصص إن موجود
+    // لوج تفصيلي اختياري
     __dbg_on?: boolean;
+
+    // منع فيض إعادة الإرسال
+    __dc_meta_last_resend_at__?: number;
   }
 }
 
@@ -39,12 +42,11 @@ const td = new TextDecoder();
 const te = new TextEncoder();
 
 const log = (...args: any[]) => {
-  // فعّل لوج تفصيلي إن رغبت
   if (window?.__dbg_on) console.log('[DC]', ...args);
 };
 
 const ev = (name: string, detail?: any) => {
-  window.dispatchEvent(new CustomEvent(name, { detail }));
+  try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
 };
 
 const nowPairId = (): string | null =>
@@ -52,8 +54,8 @@ const nowPairId = (): string | null =>
 
 const samePair = (pid?: string | null): boolean => {
   const cur = nowPairId();
-  if (!cur) return true; // إذا لا نعرف الحالي، لا نسقط الحدث
-  if (!pid) return true; // إذا المرسل لم يرسل pairId، نقبل (للتوافق)
+  if (!cur) return true; // لا نعرف الحالي → نقبل للتوافق
+  if (!pid) return true; // المرسل لم يُضمّن pairId → نقبل للتوافق
   return pid === cur;
 };
 
@@ -73,16 +75,19 @@ const requestPeerMeta = (room: Room | undefined | null) => {
   sendJSON(room, 'meta', { t: 'meta:init', pairId });
 };
 
-const resendLocalMeta = (room: Room | undefined | null) => {
-  // نعتمد على أي مصدر متاح للميتا المحلية
+const safeResendLocalMeta = (room: Room | undefined | null, throttleMs = 300) => {
   const meta =
     window.__ditonaLocalMeta ??
     (globalThis as any).__localMeta ??
     (globalThis as any).__meta ??
     null;
 
-  // إذا ما عندنا Meta محلية لا نُرسل شيئًا
   if (!meta) return;
+
+  const now = Date.now();
+  const last = window.__dc_meta_last_resend_at__ || 0;
+  if (now - last < throttleMs) return;
+  window.__dc_meta_last_resend_at__ = now;
 
   const pairId = nowPairId();
   sendJSON(room, 'meta', { t: 'meta', pairId, meta });
@@ -95,26 +100,24 @@ type Normalized =
   | { kind: 'like'; pairId: string | null; count: number; liked: boolean }
   | { kind: 'noop' };
 
-function normalizeMessage(obj: any): Normalized {
+function normalizeMessage(obj: any, topic?: string): Normalized {
   if (!obj || typeof obj !== 'object') return { kind: 'noop' };
 
   const pid = obj.pairId ?? null;
 
-  // like:sync
-  if (obj.t === 'like:sync') {
-    const liked = typeof obj.liked === 'boolean'
-      ? obj.liked
-      : !!obj.you; // توافق you→liked
+  // like (سواء topic==='like' أو t==='like:sync')
+  if (topic === 'like' || obj.t === 'like:sync') {
+    const liked = typeof obj.liked === 'boolean' ? obj.liked : !!obj.you; // you→liked توافقًا
     const count = typeof obj.count === 'number' ? obj.count : 0;
     return { kind: 'like', pairId: pid, count, liked };
   }
 
-  // meta:init → نُعاملها كـ NOOP هنا (الرد يتم خارجيًا عند الاستلام)
+  // meta:init → نتعامل معها خارجًا (إجابة الميتا)
   if (obj.t === 'meta:init') {
     return { kind: 'noop' };
   }
 
-  // صيغ meta المتعددة:
+  // صيغ meta المتعددة (مع أو بدون topic==='meta')
   // 1) { t:'meta', pairId?, meta:{...} }
   if (obj.t === 'meta' && obj.meta) {
     return { kind: 'meta', pairId: pid, meta: obj.meta };
@@ -128,7 +131,12 @@ function normalizeMessage(obj: any): Normalized {
     return { kind: 'meta', pairId: pid, meta: obj.payload };
   }
 
-  // آخر محاولة: إذا بدا أنه meta مباشرة
+  // 4) topic === 'meta' ومع حمولة تبدو meta مباشرة
+  if (topic === 'meta' && (obj.displayName || obj.gender || obj.country || obj.city || obj.vip || obj.likes)) {
+    return { kind: 'meta', pairId: pid, meta: obj };
+  }
+
+  // محاولة أخيرة: إذا بدا أنها meta مباشرة
   if (obj.displayName || obj.gender || obj.country || obj.city) {
     return { kind: 'meta', pairId: pid, meta: obj };
   }
@@ -139,25 +147,22 @@ function normalizeMessage(obj: any): Normalized {
 /* ------------------------------ مُعالج البيانات ----------------------------- */
 
 function makeDataHandler(room: Room) {
-  // نُخزن المرجع كي نزيله عند إعادة الارتباط
-  const handler = (payload: Uint8Array, topic?: string) => {
-    let text = '';
+  const handler = (payload: Uint8Array, _p?: any, _k?: any, topic?: string) => {
+    let obj: any = null;
     try {
-      text = td.decode(payload);
-    } catch {
-      // إذا لم نستطع فك الترميز، نسقط
-      return;
-    }
-
-    let obj: any;
-    try {
+      const text = td.decode(payload);
       obj = JSON.parse(text);
     } catch {
-      // ليس JSON صالحًا
+      return; // ليس JSON صالحًا
+    }
+
+    // meta:init واردة من الطرف الآخر → نردّ بالميتا المحلية
+    if (obj?.t === 'meta:init' || topic === 'meta' && obj?.t === 'meta:init') {
+      safeResendLocalMeta(room);
       return;
     }
 
-    const n = normalizeMessage(obj);
+    const n = normalizeMessage(obj, topic);
 
     // حارس الزوج
     if (!samePair((n as any).pairId)) {
@@ -180,12 +185,6 @@ function makeDataHandler(room: Room) {
       log('[EV] like:sync', { count: n.count, liked: n.liked });
       return;
     }
-
-    // meta:init واردة من الطرف الآخر → نردّ بالميتا المحلية
-    if (obj.t === 'meta:init') {
-      resendLocalMeta(room);
-      return;
-    }
   };
 
   return handler;
@@ -195,52 +194,57 @@ function makeDataHandler(room: Room) {
 
 function attachToRoom(r?: Room | null) {
   if (!r) return;
-  // أزل مستمعًا سابقًا إن وُجد
+
+  // فكّ الارتباط من الغرفة السابقة إن وُجدت
+  const prevRoom = window.__dc_meta_room__;
+  if (prevRoom && window.__dc_meta_handler__) {
+    try { prevRoom.off(RoomEvent.DataReceived, window.__dc_meta_handler__ as any); } catch {}
+  }
+
+  // إزالة أي مستمع مركّب على هذه الغرفة بنفس المرجع (للأمان)
   if (window.__dc_meta_handler__) {
-    try {
-      r.off(RoomEvent.DataReceived, window.__dc_meta_handler__! as any);
-    } catch {}
+    try { r.off(RoomEvent.DataReceived, window.__dc_meta_handler__ as any); } catch {}
   }
 
   const h = makeDataHandler(r);
   r.on(RoomEvent.DataReceived, h as any);
   window.__dc_meta_handler__ = h;
   window.__dc_meta_attached = true;
+  window.__dc_meta_room__ = r;
 
   log('RoomEvent.DataReceived attached');
 
-  // عند الارتباط نُطلق تبادل meta
+  // عند الارتباط: نطلق تبادل meta
   requestPeerMeta(r);
-  resendLocalMeta(r);
+  safeResendLocalMeta(r);
+  // نبضة احتياطية بعد 250ms (تحسُّبًا للتزامن)
+  setTimeout(() => safeResendLocalMeta(r), 250);
 }
 
 /* ------------------------------- روتين التهيئة ------------------------------ */
 
 function initOnce() {
-  if (window.__dc_meta_attached) {
-    // سبق التهيئة، لكن لربط الغرف الجديدة نراقب أحداثنا دائمًا
-  }
-
-  // 1) إن كان __lkRoom جاهزًا في اللحظة الحالية نرتبط فورًا
+  // 1) إن كان __lkRoom جاهزًا الآن
   if (window.__lkRoom) attachToRoom(window.__lkRoom);
 
-  // 2) ربط عند lk:attached (ينبّهنا dcShim.client)
+  // 2) عند lk:attached (dcShim.client)
   window.addEventListener('lk:attached', () => {
     attachToRoom(window.__lkRoom);
-    // نعيد الطلب والإرسال للاحتياط
     requestPeerMeta(window.__lkRoom);
-    resendLocalMeta(window.__lkRoom);
+    safeResendLocalMeta(window.__lkRoom);
+    setTimeout(() => safeResendLocalMeta(window.__lkRoom), 250);
   });
 
-  // 3) عند rtc:pair نعيد الطلب/الإرسال (قد يتغير الزوج)
+  // 3) عند rtc:pair (تغيّر الزوج)
   window.addEventListener('rtc:pair', () => {
     requestPeerMeta(window.__lkRoom);
-    resendLocalMeta(window.__lkRoom);
+    safeResendLocalMeta(window.__lkRoom);
+    setTimeout(() => safeResendLocalMeta(window.__lkRoom), 250);
   });
 
-  // 4) قناة مساعدة: أي جزء آخر يريد إجبار إعادة إرسال meta
+  // 4) قناة مساعدة لإجبار إعادة إرسال meta
   window.addEventListener('ditona:send-meta', () => {
-    resendLocalMeta(window.__lkRoom);
+    safeResendLocalMeta(window.__lkRoom);
   });
 }
 
