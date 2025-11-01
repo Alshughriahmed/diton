@@ -2,17 +2,23 @@
 "use client";
 
 /**
- * DC → Window bridge for META.
- * يقبل: {t:"meta", meta:{...}}, {meta:{...}}, {t:"peer-meta",payload:{...}}, {t:"meta:init"}
- * يَبثّ دائمًا:  window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:{pairId,...}}))
- * ويرد على "meta:init" ببث الميتا المحلية عبر الـDC.
+ * Bridge: LiveKit DC "meta"  →  window "ditona:peer-meta"
+ * يدعم الصيغ:
+ *  - {t:"meta", pairId?, meta:{...}}
+ *  - {pairId?, meta:{...}}
+ *  - {t:"peer-meta", payload:{...}}   // توافق قديم
+ *  - {t:"meta:init"}                  // طلب الميتا المحلية
+ *
+ * يبث دائمًا:
+ *  window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:{pairId,...}}))
+ *
  * لا تبعيات ولا ENV.
  */
 
-type AnyObj = Record<string, any>;
+/* == أسماء فريدة لتفادي التعارض مع ملفات أخرى == */
+type DitonaAny_dm2 = Record<string, any>;
 
-/* === pairId helper باسم فريد لتفادي التعارض مع ملفات أخرى === */
-function getPairId_dm(): string | null {
+function dm2_pid(): string | null {
   try {
     const w: any = globalThis as any;
     return w.__ditonaPairId || w.__pairId || null;
@@ -21,31 +27,30 @@ function getPairId_dm(): string | null {
   }
 }
 
-function parseJson_dm(bytes: Uint8Array | string): AnyObj | null {
+function dm2_parse(x: Uint8Array | string): DitonaAny_dm2 | null {
   try {
-    const s = typeof bytes === "string" ? bytes : new TextDecoder().decode(bytes);
+    const s = typeof x === "string" ? x : new TextDecoder().decode(x);
     return JSON.parse(s);
   } catch {
     return null;
   }
 }
 
-/* === تسطيح صيغ الميتا إلى detail موحّد === */
-function flattenMetaPayload_dm(src: AnyObj): AnyObj | null {
+function dm2_flatMeta(src: DitonaAny_dm2): DitonaAny_dm2 | null {
   if (!src || typeof src !== "object") return null;
 
-  // توافق قديم: { t:'peer-meta', payload:{...} }
+  // توافق قديم
   if (src.t === "peer-meta" && src.payload && typeof src.payload === "object") {
-    const d = src.payload || {};
-    const pid = d.pairId ?? src.pairId ?? getPairId_dm();
+    const d = src.payload;
+    const pid = d.pairId ?? src.pairId ?? dm2_pid();
     const meta = d.meta && typeof d.meta === "object" ? d.meta : d;
     return { pairId: pid, ...meta };
   }
 
-  // الصيغ الأساسية: { t:'meta', pairId?, meta:{...} } أو { pairId?, meta:{...} }
+  // الصيغ الأساسية
   const hasMeta = src.meta && typeof src.meta === "object";
   if (hasMeta || src.t === "meta") {
-    const pid = src.pairId ?? src.meta?.pairId ?? getPairId_dm();
+    const pid = src.pairId ?? src.meta?.pairId ?? dm2_pid();
     const meta = hasMeta ? src.meta : {};
     return { pairId: pid, ...meta };
   }
@@ -53,21 +58,18 @@ function flattenMetaPayload_dm(src: AnyObj): AnyObj | null {
   return null;
 }
 
-/* === بثّ الحدث الموحّد مع حارس الزوج === */
-function emitPeerMeta_dm(detail: AnyObj) {
-  const pidEvt = detail?.pairId;
-  const pidNow = getPairId_dm();
-  if (pidEvt && pidNow && pidEvt !== pidNow) return; // إسقاط أحداث زوج قديم
+function dm2_emit(detail: DitonaAny_dm2) {
+  const ePid = detail?.pairId;
+  const now = dm2_pid();
+  if (ePid && now && ePid !== now) return; // إسقاط زوج قديم
   window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail }));
 }
 
-/* === بناء ميتا محلية لإرسالها للطرف الآخر عند الطلب === */
-function buildLocalMeta_dm(): AnyObj {
+function dm2_localMeta(): DitonaAny_dm2 {
   let gender: string | undefined;
   let displayName: string | undefined;
   let avatarUrl: string | undefined;
   let vip: boolean | undefined;
-
   try {
     const raw = localStorage.getItem("ditona.profile.v1");
     if (raw) {
@@ -91,88 +93,101 @@ function buildLocalMeta_dm(): AnyObj {
   return { gender, displayName, avatarUrl, vip, country, city };
 }
 
-function publishDCMeta_dm(room: any) {
+function dm2_sendLocalMeta(room: any) {
   try {
     if (!room) return;
-    const payload = { t: "meta", pairId: getPairId_dm(), meta: buildLocalMeta_dm() };
+    const payload = { t: "meta", pairId: dm2_pid(), meta: dm2_localMeta() };
     const bytes = new TextEncoder().encode(JSON.stringify(payload));
     room.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
   } catch {}
 }
 
-/* === إرفاق مستمع DC مع منع التكرار وإرسال meta:init فورًا === */
-function attachRoomForMeta_dm(room: any) {
+function dm2_requestRemoteMeta(room: any, pairId?: string | null) {
+  try {
+    const pid = pairId ?? dm2_pid();
+    const bytes = new TextEncoder().encode(JSON.stringify({ t: "meta:init", pairId: pid }));
+    room?.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
+  } catch {}
+}
+
+function dm2_attach(room: any) {
   if (!room || typeof room?.on !== "function") return;
 
   const RoomEvent = (globalThis as any).livekit?.RoomEvent;
-  const eventName = RoomEvent?.DataReceived || "data-received";
+  const EV = RoomEvent?.DataReceived || "data-received";
 
   const onData = (payload: Uint8Array, _p: any, _k: any, topic?: string) => {
-    const j = parseJson_dm(payload);
+    const j = dm2_parse(payload);
     if (!j) return;
 
-    // لا نعتمد على topic فقط. نحدّد رسائل meta من المحتوى أيضًا.
     const topicIsMeta = (topic || "").toLowerCase() === "meta";
     const looksLikeMeta =
       j?.t === "meta" || j?.t === "peer-meta" || j?.t === "meta:init" || (j && typeof j.meta === "object");
     if (!(topicIsMeta || looksLikeMeta)) return;
 
     if (j.t === "meta:init") {
-      publishDCMeta_dm(room); // ردّ بالميتا المحلية
+      dm2_sendLocalMeta(room);
       return;
     }
 
-    const flat = flattenMetaPayload_dm(j);
-    if (flat) emitPeerMeta_dm(flat);
+    const flat = dm2_flatMeta(j);
+    if (flat) dm2_emit(flat);
   };
 
-  // منع تكرار المستمع
-  const handlerKey = "__ditona_meta_onData";
+  // منع التكرار
+  const KEY = "__dm2_meta_handler";
   try {
-    const prev = (room as any)[handlerKey];
-    if (prev) room.off?.(eventName, prev);
+    const prev = (room as any)[KEY];
+    if (prev) room.off?.(EV, prev);
   } catch {}
-  room.on(eventName, onData as any);
-  (room as any)[handlerKey] = onData;
+  room.on(EV, onData as any);
+  (room as any)[KEY] = onData;
 
-  // اطلب ميتا الطرف فور الارتباط
-  try {
-    const bytes = new TextEncoder().encode(JSON.stringify({ t: "meta:init", pairId: getPairId_dm() }));
-    room?.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
-    setTimeout(() => {
-      try {
-        room?.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
-      } catch {}
-    }, 250);
-  } catch {}
+  // طلب/إرسال عند الارتباط
+  dm2_requestRemoteMeta(room);
+  setTimeout(() => dm2_requestRemoteMeta(room), 250);
+  dm2_sendLocalMeta(room);
 }
 
-/* === إقلاع وربط عند جاهزية الغرفة أو حدث lk:attached === */
-(function boot_dm() {
+/* boot */
+(function dm2_boot() {
   try {
     const w: any = globalThis as any;
-    if (w.__lkRoom) attachRoomForMeta_dm(w.__lkRoom);
+    if (w.__lkRoom) dm2_attach(w.__lkRoom);
   } catch {}
 
   const onAttached = () => {
     try {
       const w: any = globalThis as any;
-      if (w.__lkRoom) attachRoomForMeta_dm(w.__lkRoom);
+      if (w.__lkRoom) dm2_attach(w.__lkRoom);
     } catch {}
   };
   window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
 
-  // منظّف اختياري
-  (globalThis as any).__ditonaMetaBridgeCleanup = () => {
+  // عند تغيّر الزوج اطلب/أرسل الميتا
+  const onPair = (ev: Event) => {
+    try {
+      const w: any = globalThis as any;
+      const r = w.__lkRoom;
+      const pid = (ev as CustomEvent)?.detail?.pairId ?? dm2_pid();
+      dm2_requestRemoteMeta(r, pid);
+      dm2_sendLocalMeta(r);
+    } catch {}
+  };
+  window.addEventListener("rtc:pair", onPair as any, { passive: true } as any);
+
+  // مُنظّف اختياري
+  (globalThis as any).__dm2_meta_cleanup = () => {
     window.removeEventListener("lk:attached", onAttached as any);
+    window.removeEventListener("rtc:pair", onPair as any);
     try {
       const w: any = globalThis as any;
       const r = w.__lkRoom;
       const RoomEvent = (globalThis as any).livekit?.RoomEvent;
-      const eventName = RoomEvent?.DataReceived || "data-received";
-      const handlerKey = "__ditona_meta_onData";
-      const prev = r?.[handlerKey];
-      if (r && prev) r.off?.(eventName, prev);
+      const EV = RoomEvent?.DataReceived || "data-received";
+      const KEY = "__dm2_meta_handler";
+      const prev = r?.[KEY];
+      if (r && prev) r.off?.(EV, prev);
     } catch {}
   };
 })();
