@@ -4,6 +4,7 @@ import "@/app/chat/dcShim.client";
 import "./dcMetaResponder.client";
 import "@/app/chat/metaInit.client";
 import "@/app/chat/peerMetaUi.client";
+
 import "./freeForAllBridge";
 import "./likeSyncClient";
 import "./msgSendClient";
