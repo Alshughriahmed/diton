@@ -29,23 +29,22 @@ function setText(el: Element | null, v: string | number | null | undefined) {
   (el as HTMLElement).textContent = v == null ? "" : String(v);
 }
 
+/** تصحيح: استخدام محدد مباشر لـ data-ui="peer-avatar" بدل تركيب محدد داخل $ */
 function setAvatar(url?: string) {
-  const el = $('[data-ui="peer-avatar"]') as unknown as HTMLImageElement | null
-    || (document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | null);
-  const img = (document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | null);
-  const target = img || (el as any);
-  if (!target) return;
+  const el = document.querySelector('[data-ui="peer-avatar"]') as HTMLImageElement | null;
+  if (!el) return;
+
   if (url && url.length > 0) {
-    target.src = url;
-    target.removeAttribute("hidden");
+    el.src = url;
+    el.removeAttribute("hidden");
   } else {
-    target.setAttribute("hidden", "true");
-    target.removeAttribute("src");
+    el.setAttribute("hidden", "true");
+    el.removeAttribute("src");
   }
 }
 
 function genderIcon(g?: string): string {
-  const s = (g||"u").toLowerCase();
+  const s = (g || "u").toLowerCase();
   if (s === "m") return "♂";
   if (s === "f") return "♀";
   if (s === "c") return "⚤";
@@ -61,12 +60,30 @@ function updateVip(v?: boolean) {
 
 function paintGenderColor(el: HTMLElement | null, g?: string) {
   if (!el) return;
-  el.classList.remove("text-blue-500","text-red-500","text-rose-700","bg-gradient-to-r","from-red-500","via-yellow-400","to-blue-500","bg-clip-text","text-transparent");
-  const s = (g||"u").toLowerCase();
+  el.classList.remove(
+    "text-blue-500",
+    "text-red-500",
+    "text-rose-700",
+    "bg-gradient-to-r",
+    "from-red-500",
+    "via-yellow-400",
+    "to-blue-500",
+    "bg-clip-text",
+    "text-transparent"
+  );
+  const s = (g || "u").toLowerCase();
   if (s === "m") el.classList.add("text-blue-500");
   else if (s === "f") el.classList.add("text-red-500");
   else if (s === "c") el.classList.add("text-rose-700");
-  else if (s === "l") el.classList.add("bg-gradient-to-r","from-red-500","via-yellow-400","to-blue-500","bg-clip-text","text-transparent");
+  else if (s === "l")
+    el.classList.add(
+      "bg-gradient-to-r",
+      "from-red-500",
+      "via-yellow-400",
+      "to-blue-500",
+      "bg-clip-text",
+      "text-transparent"
+    );
 }
 
 function updateHUD(meta: Meta) {
@@ -92,7 +109,7 @@ function clearHUD() {
   setText($("gender"), "");
 }
 
-(function boot(){
+(function boot() {
   // ظهور فوري لو كانت هناك قيمة مخزنة آخر جلسة
   try {
     const raw = sessionStorage.getItem("ditona:last_peer_meta");
@@ -101,7 +118,9 @@ function clearHUD() {
 
   window.addEventListener("ditona:peer-meta", (e: any) => {
     const meta = (e?.detail?.meta ?? {}) as Meta;
-    try { sessionStorage.setItem("ditona:last_peer_meta", JSON.stringify(meta)); } catch {}
+    try {
+      sessionStorage.setItem("ditona:last_peer_meta", JSON.stringify(meta));
+    } catch {}
     updateHUD(meta);
   });
 
