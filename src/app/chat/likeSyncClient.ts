@@ -1,116 +1,82 @@
-// src/app/chat/likeSyncClient.ts
 "use client";
 
 /**
- * جسر like من LiveKit DC → نافذة المتصفح.
- * - يدعم الصيغ:
- *   { t:"like:sync", pairId?, count, liked } | { t:"like:sync", pairId?, count, you }
- *   { t:"like", liked }  ← وميض HUD فقط
- * - يحقن pairId إن غاب.
- * - يبث نافذة موحّد: "like:sync" {pairId,count,liked}
- * - لا إرسال DC من هنا.
+ * توحيد سلوك زر الإعجاب:
+ * - يستقبل "ui:like:toggle" من شريط الأدوات.
+ * - ينفّذ POST /api/like ويقرأ count, liked.
+ * - يبث like:sync للطرفين عبر DC + يحدّث محليًا فورًا.
+ * - يسقط أي تحديث لا يخص الزوج الحالي.
+ *
+ * لا يغيّر أسماء الأحداث أو DOM.
  */
 
-type LikeSyncEvt = {
-  pairId?: string;
-  count?: number;
-  liked?: boolean;
-  you?: boolean; // توافق
-  t?: string;
-};
+import type { Room } from "livekit-client";
 
-function curPair_like(): string | null {
+declare global {
+  interface Window {
+    __lkRoom?: Room | null;
+    __ditonaPairId?: string | null;
+    __pairId?: string | null;
+  }
+}
+
+function curPair(): string | null {
   try {
     const w: any = globalThis as any;
     return w.__ditonaPairId || w.__pairId || null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-function toJson_like(bytes: Uint8Array | string): any {
+function emitLikeSync(count: number, liked: boolean) {
+  const pid = curPair();
+  // حدث محلي للـUI
+  try { window.dispatchEvent(new CustomEvent("like:sync", { detail: { pairId: pid, count, liked } })); } catch {}
+
+  // بث عبر DC
   try {
-    const s = typeof bytes === "string" ? bytes : new TextDecoder().decode(bytes);
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
-function isLikeTopic_like(topic?: string | null) {
-  return (topic || "").toLowerCase() === "like";
-}
-
-function handlePayload_like(p: any) {
-  if (!p || typeof p !== "object") return;
-
-  // وميض بصري للطرف الآخر
-  if (p.t === "like" && typeof p.liked === "boolean") {
-    const pid = p.pairId || curPair_like();
-    window.dispatchEvent(
-      new CustomEvent("rtc:peer-like", { detail: { pairId: pid, liked: p.liked } })
-    );
-    return;
-  }
-
-  // مزامنة العدّاد
-  if (p.t === "like:sync" || (typeof p.count === "number" && ("you" in p || "liked" in p))) {
-    const pid = p.pairId || curPair_like();
-    const liked = typeof p.liked === "boolean" ? p.liked : !!p.you;
-    const count = typeof p.count === "number" ? p.count : undefined;
-    if (typeof count === "number") {
-      window.dispatchEvent(
-        new CustomEvent("like:sync", { detail: { pairId: pid, count, liked } })
-      );
+    const room = (globalThis as any).__lkRoom as Room | undefined;
+    if (room?.localParticipant) {
+      const bytes = new TextEncoder().encode(JSON.stringify({ t: "like:sync", pairId: pid, count, liked }));
+      room.localParticipant.publishData(bytes, { reliable: true, topic: "like" });
     }
-  }
-}
-
-function attachRoom_like(room: any) {
-  if (!room || typeof room?.on !== "function") return;
-
-  const RoomEvent = (globalThis as any).livekit?.RoomEvent;
-  const eventName = RoomEvent?.DataReceived || "data-received";
-
-  const onData = (payload: Uint8Array, _participant: any, _kind: any, topic?: string) => {
-    if (!isLikeTopic_like(topic)) return;
-    const j = toJson_like(payload);
-    handlePayload_like(j);
-  };
-
-  const key = "__ditona_like_onData";
-  try {
-    const prev = (room as any)[key];
-    if (prev) room.off?.(eventName, prev);
   } catch {}
-  room.on(eventName, onData as any);
-  (room as any)[key] = onData;
 }
 
-(function boot_like() {
-  function tryAttachFromGlobal() {
+async function postLike(targetDid: string, liked: boolean): Promise<{count:number; liked:boolean}> {
+  const me = localStorage.getItem("ditona_did") || crypto.randomUUID();
+  localStorage.setItem("ditona_did", me);
+
+  const r = await fetch("/api/like", {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", "x-did": me },
+    body: JSON.stringify({ targetDid, liked })
+  }).then(r => r.json()).catch(() => ({} as any));
+
+  const count = typeof r?.count === "number" ? r.count : 0;
+  const okLiked = typeof r?.liked === "boolean" ? r.liked : !!liked;
+  return { count, liked: okLiked };
+}
+
+// التقاط نقرة زر القلب من الـToolbar
+(function boot(){
+  window.addEventListener("ui:like:toggle", async (e: any) => {
     try {
-      const w: any = globalThis as any;
-      const r = w.__lkRoom;
-      if (r) attachRoom_like(r);
+      const targetDid = String(e?.detail?.targetDid || "") || (globalThis as any).__ditonaPeerDid || (globalThis as any).__peerDid || "";
+      const liked = !!e?.detail?.liked;
+
+      const { count, liked: finalLiked } = await postLike(targetDid, liked);
+      emitLikeSync(count, finalLiked);
     } catch {}
-  }
+  });
 
-  tryAttachFromGlobal();
-
-  const onAttached = () => tryAttachFromGlobal();
-  window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
-
-  (globalThis as any).__ditonaLikeSyncCleanup = () => {
-    window.removeEventListener("lk:attached", onAttached as any);
-    try {
-      const w: any = globalThis as any;
-      const r = w.__lkRoom;
-      const RoomEvent = (globalThis as any).livekit?.RoomEvent;
-      const eventName = RoomEvent?.DataReceived || "data-received";
-      const key = "__ditona_like_onData";
-      const prev = r?.[key];
-      if (r && prev) r.off?.(eventName, prev);
-    } catch {}
-  };
+  // مزامنة واردة من الـDC بصيغة قديمة you:boolean
+  window.addEventListener("like:sync", (e: any) => {
+    const d = e?.detail || {};
+    if (d && typeof d.you === "boolean" && typeof d.liked !== "boolean") {
+      d.liked = !!d.you;
+      delete d.you;
+      try { window.dispatchEvent(new CustomEvent("like:sync", { detail: d })); } catch {}
+    }
+  });
 })();
