@@ -1,24 +1,20 @@
-// src/app/chat/dcMetaResponder.client.ts
 "use client";
 
 /**
- * Bridge: LiveKit DC "meta"  →  window "ditona:peer-meta"
- * يدعم الصيغ:
- *  - {t:"meta", pairId?, meta:{...}}
- *  - {pairId?, meta:{...}}
- *  - {t:"peer-meta", payload:{...}}   // توافق قديم
- *  - {t:"meta:init"}                  // طلب الميتا المحلية
- *
- * يبث دائمًا:
- *  window.dispatchEvent(new CustomEvent("ditona:peer-meta",{detail:{pairId,...}}))
- *
- * لا تبعيات ولا ENV.
+ * DataChannel → Window Events bridge
+ * يطبّع رسائل meta/like القديمة والجديدة ويبث:
+ *  - "ditona:peer-meta"  detail={ pairId, meta:{...} }
+ *  - "like:sync"         detail={ pairId, count, liked }
+ * يحرس بالـ pairId الحالي ويسقط أي حدث لا يطابقه.
+ * لا يعتمد على أي حالة React.
  */
 
-/* == أسماء فريدة لتفادي التعارض مع ملفات أخرى == */
-type DitonaAny_dm2 = Record<string, any>;
+import { Room, RoomEvent } from "livekit-client";
 
-function dm2_pid(): string | null {
+type NormObj = Record<string, unknown>;
+
+// helpers بأسماء فريدة لتفادي التعارض
+function getPairId_dm(): string | null {
   try {
     const w: any = globalThis as any;
     return w.__ditonaPairId || w.__pairId || null;
@@ -26,168 +22,122 @@ function dm2_pid(): string | null {
     return null;
   }
 }
-
-function dm2_parse(x: Uint8Array | string): DitonaAny_dm2 | null {
+function setPairId_dm(pid: string | null) {
   try {
-    const s = typeof x === "string" ? x : new TextDecoder().decode(x);
-    return JSON.parse(s);
-  } catch {
-    return null;
+    const w: any = globalThis as any;
+    if (pid) { w.__ditonaPairId = pid; w.__pairId = pid; }
+  } catch {}
+}
+function dispatch(name: string, detail: any) {
+  try { window.dispatchEvent(new CustomEvent(name, { detail })); } catch {}
+}
+
+// تطبيع رسائل meta إلى { pairId, meta:{...} }
+function normalizeMeta(payload: any, fallbackPid: string | null) {
+  const src: any = payload ?? {};
+  // صيغ مقبولة:
+  // 1) { t:'meta', pairId, meta:{...} }
+  // 2) { pairId, meta:{...} }
+  // 3) { t:'peer-meta', payload:{...} }  // قديمة
+  // 4) { ...مفلطح فيه حقول meta مباشرة }
+  if (src?.t === "peer-meta" && src?.payload) {
+    const p = src.payload || {};
+    return { pairId: p.pairId || fallbackPid, meta: { ...(p.meta || p) } };
   }
-}
-
-function dm2_flatMeta(src: DitonaAny_dm2): DitonaAny_dm2 | null {
-  if (!src || typeof src !== "object") return null;
-
-  // توافق قديم
-  if (src.t === "peer-meta" && src.payload && typeof src.payload === "object") {
-    const d = src.payload;
-    const pid = d.pairId ?? src.pairId ?? dm2_pid();
-    const meta = d.meta && typeof d.meta === "object" ? d.meta : d;
-    return { pairId: pid, ...meta };
+  if (typeof src?.meta === "object") {
+    return { pairId: src.pairId || src.meta?.pairId || fallbackPid, meta: { ...(src.meta || {}) } };
   }
-
-  // الصيغ الأساسية
-  const hasMeta = src.meta && typeof src.meta === "object";
-  if (hasMeta || src.t === "meta") {
-    const pid = src.pairId ?? src.meta?.pairId ?? dm2_pid();
-    const meta = hasMeta ? src.meta : {};
-    return { pairId: pid, ...meta };
-  }
-
-  return null;
+  // مفلطح
+  const { pairId, ...rest } = src;
+  return { pairId: pairId || fallbackPid, meta: { ...rest } };
 }
 
-function dm2_emit(detail: DitonaAny_dm2) {
-  const ePid = detail?.pairId;
-  const now = dm2_pid();
-  if (ePid && now && ePid !== now) return; // إسقاط زوج قديم
-  window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail }));
+// تطبيع like:sync → { pairId, count, liked }
+function normalizeLike(payload: any, fallbackPid: string | null) {
+  const src: any = payload ?? {};
+  const pid = src.pairId || fallbackPid;
+  const count = typeof src.count === "number" ? src.count : undefined;
+  const liked = typeof src.liked === "boolean" ? src.liked :
+                typeof src.you === "boolean"   ? src.you   : undefined;
+  return { pairId: pid, count, liked };
 }
 
-function dm2_localMeta(): DitonaAny_dm2 {
-  let gender: string | undefined;
-  let displayName: string | undefined;
-  let avatarUrl: string | undefined;
-  let vip: boolean | undefined;
-  try {
-    const raw = localStorage.getItem("ditona.profile.v1");
-    if (raw) {
-      const j = JSON.parse(raw);
-      gender = j?.state?.profile?.gender ?? j?.profile?.gender;
-      displayName = j?.state?.profile?.displayName ?? j?.profile?.displayName;
-      avatarUrl = j?.state?.profile?.avatarUrl ?? j?.profile?.avatarUrl;
-      vip = !!(j?.state?.profile?.vip ?? j?.profile?.vip);
-    }
-  } catch {}
-
-  let country: string | undefined;
-  let city: string | undefined;
-  try {
-    const geo = JSON.parse(localStorage.getItem("ditona_geo") || "null");
-    const cc = (geo?.countryCode || geo?.country || "").toString().toUpperCase();
-    country = cc || undefined;
-    city = (geo?.city || undefined) as string | undefined;
-  } catch {}
-
-  return { gender, displayName, avatarUrl, vip, country, city };
+// حارس زوج
+function isForCurrentPair(pid: string | null) {
+  const now = getPairId_dm();
+  if (!pid || !now) return true; // اسمح إن لم نعرف
+  return pid === now;
 }
 
-function dm2_sendLocalMeta(room: any) {
-  try {
-    if (!room) return;
-    const payload = { t: "meta", pairId: dm2_pid(), meta: dm2_localMeta() };
-    const bytes = new TextEncoder().encode(JSON.stringify(payload));
-    room.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
-  } catch {}
-}
+// مستمع DataReceived واحد فقط
+let wired = false;
 
-function dm2_requestRemoteMeta(room: any, pairId?: string | null) {
-  try {
-    const pid = pairId ?? dm2_pid();
-    const bytes = new TextEncoder().encode(JSON.stringify({ t: "meta:init", pairId: pid }));
-    room?.localParticipant?.publishData(bytes, { reliable: true, topic: "meta" });
-  } catch {}
-}
+function wireRoom(room: Room) {
+  if (wired || !room) return;
+  wired = true;
 
-function dm2_attach(room: any) {
-  if (!room || typeof room?.on !== "function") return;
+  room.on(RoomEvent.DataReceived, (bytes: Uint8Array, _p, _cid, topic?: string) => {
+    let obj: NormObj | null = null;
+    try {
+      const txt = new TextDecoder().decode(bytes || new Uint8Array());
+      if (txt && /^\s*\{/.test(txt)) obj = JSON.parse(txt) as NormObj;
+    } catch { /* ignore */ }
 
-  const RoomEvent = (globalThis as any).livekit?.RoomEvent;
-  const EV = RoomEvent?.DataReceived || "data-received";
+    const fallbackPid = getPairId_dm();
 
-  const onData = (payload: Uint8Array, _p: any, _k: any, topic?: string) => {
-    const j = dm2_parse(payload);
-    if (!j) return;
-
-    const topicIsMeta = (topic || "").toLowerCase() === "meta";
-    const looksLikeMeta =
-      j?.t === "meta" || j?.t === "peer-meta" || j?.t === "meta:init" || (j && typeof j.meta === "object");
-    if (!(topicIsMeta || looksLikeMeta)) return;
-
-    if (j.t === "meta:init") {
-      dm2_sendLocalMeta(room);
+    // meta
+    if (topic === "meta" || (obj && (obj as any).t === "meta") || (obj && (obj as any).meta)) {
+      const norm = normalizeMeta(obj, fallbackPid);
+      if (isForCurrentPair(norm.pairId || null)) {
+        dispatch("ditona:peer-meta", { pairId: norm.pairId ?? fallbackPid, meta: norm.meta });
+      }
       return;
     }
 
-    const flat = dm2_flatMeta(j);
-    if (flat) dm2_emit(flat);
-  };
+    // توافق قديم: { t:'peer-meta', payload:{...} }
+    if (obj && (obj as any).t === "peer-meta" && (obj as any).payload) {
+      const norm = normalizeMeta(obj, fallbackPid);
+      if (isForCurrentPair(norm.pairId || null)) {
+        dispatch("ditona:peer-meta", { pairId: norm.pairId ?? fallbackPid, meta: norm.meta });
+      }
+      return;
+    }
 
-  // منع التكرار
-  const KEY = "__dm2_meta_handler";
-  try {
-    const prev = (room as any)[KEY];
-    if (prev) room.off?.(EV, prev);
-  } catch {}
-  room.on(EV, onData as any);
-  (room as any)[KEY] = onData;
+    // like
+    if (topic === "like" || (obj && (obj as any).t === "like:sync") || (obj && (obj as any).type === "like:toggled")) {
+      const norm = normalizeLike(obj, fallbackPid);
+      if (isForCurrentPair(norm.pairId || null)) {
+        dispatch("like:sync", { pairId: norm.pairId ?? fallbackPid, count: norm.count, liked: !!norm.liked });
+      }
+      return;
+    }
+  });
 
-  // طلب/إرسال عند الارتباط
-  dm2_requestRemoteMeta(room);
-  setTimeout(() => dm2_requestRemoteMeta(room), 250);
-  dm2_sendLocalMeta(room);
+  // عند الطلب، أعد بث الميتا المحلية عبر Events؛ إرسال الميتا نفسها تقوم به metaInit.client
+  window.addEventListener("ditona:meta:init", () => {
+    // لا شيء هنا. مجرد الحفاظ على التوافق إن تم إرسال الحدث.
+  });
+
+  // التزامن مع pairId
+  window.addEventListener("rtc:pair", (e: any) => {
+    const pid = String(e?.detail?.pairId || "") || null;
+    if (pid) setPairId_dm(pid);
+  });
 }
 
-/* boot */
-(function dm2_boot() {
+// نقطة دخول: اسلك عند توفر __lkRoom أو عند lk:attached
+(function boot() {
   try {
     const w: any = globalThis as any;
-    if (w.__lkRoom) dm2_attach(w.__lkRoom);
+    const room: Room | null = w.__lkRoom || null;
+    if (room && room.state) wireRoom(room);
   } catch {}
 
-  const onAttached = () => {
+  window.addEventListener("lk:attached", () => {
     try {
       const w: any = globalThis as any;
-      if (w.__lkRoom) dm2_attach(w.__lkRoom);
+      const room: Room | null = w.__lkRoom || null;
+      if (room) wireRoom(room);
     } catch {}
-  };
-  window.addEventListener("lk:attached", onAttached as any, { passive: true } as any);
-
-  // عند تغيّر الزوج اطلب/أرسل الميتا
-  const onPair = (ev: Event) => {
-    try {
-      const w: any = globalThis as any;
-      const r = w.__lkRoom;
-      const pid = (ev as CustomEvent)?.detail?.pairId ?? dm2_pid();
-      dm2_requestRemoteMeta(r, pid);
-      dm2_sendLocalMeta(r);
-    } catch {}
-  };
-  window.addEventListener("rtc:pair", onPair as any, { passive: true } as any);
-
-  // مُنظّف اختياري
-  (globalThis as any).__dm2_meta_cleanup = () => {
-    window.removeEventListener("lk:attached", onAttached as any);
-    window.removeEventListener("rtc:pair", onPair as any);
-    try {
-      const w: any = globalThis as any;
-      const r = w.__lkRoom;
-      const RoomEvent = (globalThis as any).livekit?.RoomEvent;
-      const EV = RoomEvent?.DataReceived || "data-received";
-      const KEY = "__dm2_meta_handler";
-      const prev = r?.[KEY];
-      if (r && prev) r.off?.(EV, prev);
-    } catch {}
-  };
+  }, { once: true });
 })();
