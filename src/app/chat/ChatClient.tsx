@@ -2,9 +2,9 @@
 
 import "@/app/chat/dcShim.client";
 import "@/app/chat/metaInit.client";
-import "@/app/chat/peerMetaUi.client";
 import "./freeForAllBridge";
 import "./dcMetaResponder.client";
+import "@/app/chat/peerMetaUi.client";
 import "./likeSyncClient";
 import "./msgSendClient";
 import "@/app/i18nReset.client";
