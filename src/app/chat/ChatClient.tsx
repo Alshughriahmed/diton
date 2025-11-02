@@ -63,31 +63,6 @@ const DISCONNECT_TIMEOUT_MS = 900;
 const SWITCH_PAUSE_MS = 240;
 
 /* ---------- helpers specific to this file ---------- */
-
-function toISO2(val?: unknown): string | undefined {
-  const v = (val ?? "").toString().trim();
-  if (v.length === 2) return v.toUpperCase();
-  return v ? v : undefined;
-}
-
-function injectPairAndNormalizeMeta(roomName: string, raw: any) {
-  const meta = raw ?? {};
-  const norm = {
-    displayName: meta.displayName ?? "",
-    gender: normalizeGender(meta.gender as any),
-    country: toISO2(meta.country),
-    city: meta.city ?? "",
-    likes: typeof meta.likes === "number" ? meta.likes : undefined,
-    vip: !!meta.vip,
-    avatarUrl: typeof meta.avatarUrl === "string" ? meta.avatarUrl : undefined,
-    hideCountry: !!meta.hideCountry,
-    hideCity: !!meta.hideCity,
-    hideLikes: !!meta.hideLikes,
-    did: meta.did || meta.deviceId || meta.peerDid || meta.id || meta.identity,
-  };
-  return { pairId: roomName, meta: norm };
-}
-
 async function ensureSubscribedToRemoteVideo(room: Room) {
   const p = [...room.remoteParticipants.values()][0];
   if (!p) return;
@@ -99,12 +74,10 @@ async function ensureSubscribedToRemoteVideo(room: Room) {
     }
   } catch {}
 }
-
 const isEveryoneLike = (g: unknown) => {
   const v = String(g ?? "").toLowerCase();
   return v === "everyone" || v === "all" || v === "u";
 };
-
 function readLSBool(key: string, defVal: boolean): boolean {
   try {
     const v = localStorage.getItem(key);
@@ -197,7 +170,7 @@ export default function ChatClient() {
 
   function emitPair(pairId: string, role: "caller" | "callee") {
     try {
-      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } }));
+      window.dispatchEvent(new CustomEvent("rtc:pair", { detail: { pairId, role } })); 
       window.dispatchEvent(new CustomEvent("ui:msg:reset", { detail: { pairId } }));
     } catch {}
   }
@@ -696,7 +669,7 @@ export default function ChatClient() {
         vip: !!filters.isVip,
         selfGender: payloadSelfGender,
         selfCountry,
-        filterGenders: filterGendersNorm,
+        filterGenders: filterGendersNorm,                  // [] for Everyone
         filterCountries: Array.isArray(filters.countries) ? filters.countries : [],
       };
     };
@@ -928,11 +901,12 @@ export default function ChatClient() {
       broadcastMediaState();
     }));
 
-    // set remote DID from meta
+    // receive peer DID from meta
     const onPeerMetaCapture = (ev: any) => {
       try {
-        const d = ev?.detail?.meta || ev?.detail || {};
-        const did = d.did || d.deviceId || d.peerDid || d.id || d.identity;
+        const d0 = ev?.detail || {};
+        const meta = typeof d0?.meta === "object" ? d0.meta : d0;
+        const did = meta?.did || meta?.deviceId || meta?.peerDid || meta?.id || meta?.identity;
         if (did) {
           remoteDidRef.current = String(did);
           (window as any).__ditonaPeerDid = remoteDidRef.current;
@@ -1047,6 +1021,26 @@ export default function ChatClient() {
 
     // cancel search
     offs.push(on("ui:cancel", () => { abortPolling(); setPhase("searching"); }));
+
+    // APPLY FILTERS → restart search immediately (no freeze)
+    const onApplyFilters = async () => {
+      // same safe path as "next" but without upsell/guard
+      setPhase("searching");
+      abortPolling();
+      const sid = newSid();
+      await leaveRoom({ bySwitch: true });
+      await new Promise((r) => setTimeout(r, SWITCH_PAUSE_MS));
+      const s = await ensureLocalAliveLocal();
+      if (localRef.current && s && (localRef.current as any).srcObject !== s) {
+        (localRef.current as any).srcObject = s;
+        localRef.current.muted = true;
+        await safePlay(localRef.current);
+      }
+      if (effectsOnRef.current) await ensureEffectsRunning().catch(() => {});
+      await joinViaRedisMatch(sid);
+    };
+    window.addEventListener("ui:filters:apply", onApplyFilters as any);
+    offs.push(() => window.removeEventListener("ui:filters:apply", onApplyFilters as any));
 
     const mobileOptimizer = getMobileOptimizer();
     const unsubMob = mobileOptimizer.subscribe(() => {});
