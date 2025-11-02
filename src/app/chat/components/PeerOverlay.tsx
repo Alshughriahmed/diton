@@ -1,3 +1,4 @@
+// src/app/chat/components/PeerOverlay.tsx
 "use client";
 
 export default function PeerOverlay() {
@@ -35,6 +36,13 @@ export default function PeerOverlay() {
         <span data-ui="peer-city" />
         <span data-ui="peer-gender" className="ml-2" />
       </div>
+
+      {/* مؤثر القلوب (يملؤه peerMetaUi عند like:sync) */}
+      <div
+        data-ui="like-hearts"
+        className="pointer-events-none absolute inset-0 z-40"
+        aria-hidden="true"
+      />
     </>
   );
 }
