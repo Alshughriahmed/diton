@@ -1,17 +1,20 @@
+// src/app/chat/dcMetaResponder.client.ts
 "use client";
 
 import type { Room } from "livekit-client";
 import { RoomEvent } from "livekit-client";
 
 /**
- * DataChannel bridge:
- * - يربط RoomEvent.DataReceived مرة واحدة لكل غرفة.
- * - يطبّع الرسائل إلى:
- *     • 'ditona:peer-meta' { pairId, meta }
- *     • 'like:sync'        { pairId, count, liked }
- * - حارس الزوج: يسقط أحداث pairId غير المطابقة لـ window.__ditonaPairId || __pairId.
- * - يطلب meta من الطرف الآخر ويرسل الميتا المحلية عند: lk:attached, rtc:pair, ditona:send-meta.
- * - «ربط كسول» إذا فاتنا lk:attached.
+ * DataChannel meta/like bridge.
+ * - Listens to RoomEvent.DataReceived once per LiveKit room.
+ * - Normalizes incoming payloads: meta, like:sync.
+ * - Pair guard: drops events that don't match current pair.
+ * - Emits:
+ *   - "ditona:peer-meta"     detail = <flat meta object>        // legacy, flat
+ *   - "rtc:peer-meta"        detail = { pairId, meta }           // structured
+ *   - "like:sync"            detail = { pairId, count, liked }
+ * - Triggers meta handshake on "lk:attached" and "rtc:pair".
+ * - Can be forced to re-send local meta via "ditona:send-meta".
  */
 
 declare global {
@@ -19,18 +22,24 @@ declare global {
     __lkRoom?: Room | null;
     __ditonaPairId?: string | null;
     __pairId?: string | null;
+
     __dc_meta_attached?: boolean;
     __dc_meta_handler__?: ((p: Uint8Array, topic?: string) => void) | null;
+    __dc_meta_room__?: Room | null;
+
     __ditonaLocalMeta?: any;
+
     __dbg_on?: boolean;
   }
 }
+
+/* -------------------- utils -------------------- */
 
 const td = new TextDecoder();
 const te = new TextEncoder();
 
 const log = (...a: any[]) => {
-  if (window?.__dbg_on) console.log("[DC]", ...a);
+  if (window.__dbg_on) console.log("[DC]", ...a);
 };
 
 const nowPairId = (): string | null =>
@@ -43,32 +52,34 @@ const samePair = (pid?: string | null): boolean => {
   return pid === cur;
 };
 
-function sendJSON(room: Room | undefined | null, topic: string, obj: any) {
+function sendJSON(room: Room | null | undefined, topic: string, obj: any) {
   try {
     if (!room?.localParticipant) return;
-    const bytes = te.encode(JSON.stringify(obj));
-    room.localParticipant.publishData(bytes, { reliable: true, topic });
+    room.localParticipant.publishData(te.encode(JSON.stringify(obj)), {
+      reliable: true,
+      topic,
+    });
     log("sent", topic, obj);
   } catch (e) {
     console.warn("[DC] publishData failed:", e);
   }
 }
 
-function requestPeerMeta(room: Room | undefined | null) {
-  const pairId = nowPairId();
-  sendJSON(room, "meta", { t: "meta:init", pairId });
-}
+const requestPeerMeta = (room: Room | null | undefined) => {
+  sendJSON(room, "meta", { t: "meta:init", pairId: nowPairId() });
+};
 
-function resendLocalMeta(room: Room | undefined | null) {
+const resendLocalMeta = (room: Room | null | undefined) => {
   const meta =
     window.__ditonaLocalMeta ??
     (globalThis as any).__localMeta ??
     (globalThis as any).__meta ??
     null;
   if (!meta) return;
-  const pairId = nowPairId();
-  sendJSON(room, "meta", { t: "meta", pairId, meta });
-}
+  sendJSON(room, "meta", { t: "meta", pairId: nowPairId(), meta });
+};
+
+/* ------------------ normalization ------------------ */
 
 type Normalized =
   | { kind: "meta"; pairId: string | null; meta: any }
@@ -79,22 +90,24 @@ function normalizeMessage(obj: any): Normalized {
   if (!obj || typeof obj !== "object") return { kind: "noop" };
   const pid = obj.pairId ?? null;
 
-  // like:sync {pairId?, count, liked} أو {you}
   if (obj.t === "like:sync") {
-    const liked =
-      typeof obj.liked === "boolean" ? obj.liked : !!obj.you; // توافق قديم
+    const liked = typeof obj.liked === "boolean" ? obj.liked : !!obj.you;
     const count = typeof obj.count === "number" ? obj.count : 0;
     return { kind: "like", pairId: pid, count, liked };
   }
 
   if (obj.t === "meta:init") return { kind: "noop" };
 
-  // meta بصيغ متعددة
-  if (obj.t === "meta" && obj.meta) return { kind: "meta", pairId: pid, meta: obj.meta };
-  if (obj.meta && !obj.t) return { kind: "meta", pairId: pid, meta: obj.meta };
-  if (obj.t === "peer-meta" && obj.payload) return { kind: "meta", pairId: pid, meta: obj.payload };
+  if (obj.t === "meta" && obj.meta) {
+    return { kind: "meta", pairId: pid, meta: obj.meta };
+  }
+  if (obj.meta && !obj.t) {
+    return { kind: "meta", pairId: pid, meta: obj.meta };
+  }
+  if (obj.t === "peer-meta" && obj.payload) {
+    return { kind: "meta", pairId: pid, meta: obj.payload };
+  }
 
-  // محاولة أخيرة
   if (obj.displayName || obj.gender || obj.country || obj.city) {
     return { kind: "meta", pairId: pid, meta: obj };
   }
@@ -102,106 +115,125 @@ function normalizeMessage(obj: any): Normalized {
   return { kind: "noop" };
 }
 
-function makeDataHandler(room: Room) {
-  const handler = (payload: Uint8Array, _participantTopic?: any, _key?: any, topic?: string) => {
-    let text = "";
-    try { text = td.decode(payload); } catch { return; }
-    let obj: any;
-    try { obj = JSON.parse(text); } catch { return; }
+/* ------------------ data handler ------------------ */
 
-    // الرد على meta:init دائمًا
+function makeDataHandler(room: Room) {
+  const handler = (payload: Uint8Array, _topicOrP?: any, _k?: any, topic?: string) => {
+    let text = "";
+    try {
+      text = td.decode(payload);
+    } catch {
+      return;
+    }
+
+    let obj: any;
+    try {
+      obj = JSON.parse(text);
+    } catch {
+      return;
+    }
+
+    // respond to meta:init regardless of pair guard
     if (obj?.t === "meta:init") {
       resendLocalMeta(room);
       return;
     }
 
     const n = normalizeMessage(obj);
+
     if (!samePair((n as any).pairId)) {
-      log("drop (pairId mismatch)", n);
+      log("drop pair mismatch", n);
       return;
     }
 
     if (n.kind === "meta") {
-      window.dispatchEvent(new CustomEvent("ditona:peer-meta", {
-        detail: { pairId: n.pairId ?? nowPairId(), meta: n.meta },
-      }));
-      log("[EV] ditona:peer-meta", n.meta);
+      const flat = n.meta;
+      // legacy flat event used by peerMetaUi
+      window.dispatchEvent(new CustomEvent("ditona:peer-meta", { detail: flat }));
+      // structured event for components that want pairId
+      window.dispatchEvent(
+        new CustomEvent("rtc:peer-meta", {
+          detail: { pairId: n.pairId ?? nowPairId(), meta: flat },
+        }),
+      );
+      log("[EV] ditona:peer-meta", flat);
       return;
     }
 
     if (n.kind === "like") {
-      window.dispatchEvent(new CustomEvent("like:sync", {
-        detail: { pairId: n.pairId ?? nowPairId(), count: n.count, liked: n.liked },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("like:sync", {
+          detail: { pairId: n.pairId ?? nowPairId(), count: n.count, liked: n.liked },
+        }),
+      );
       log("[EV] like:sync", { count: n.count, liked: n.liked });
       return;
     }
+
+    // topics fallback: if producer sent via topic only
+    if (topic === "meta") requestPeerMeta(room);
   };
 
   return handler;
 }
 
+/* ------------------ attach lifecycle ------------------ */
+
 function attachToRoom(r?: Room | null) {
   if (!r) return;
-  // فك مستمع سابق إن وُجد
-  if (window.__dc_meta_handler__) {
-    try { r.off(RoomEvent.DataReceived, window.__dc_meta_handler__ as any); } catch {}
+
+  // prevent duplicate attachment to the same Room
+  if (window.__dc_meta_room__ === r && typeof window.__dc_meta_handler__ === "function") {
+    return;
   }
+
+  // detach previous
+  if (window.__dc_meta_room__ && window.__dc_meta_handler__) {
+    try {
+      window.__dc_meta_room__.off(
+        RoomEvent.DataReceived,
+        window.__dc_meta_handler__ as any,
+      );
+    } catch {}
+  }
+
   const h = makeDataHandler(r);
   r.on(RoomEvent.DataReceived, h as any);
-  window.__dc_meta_handler__ = h;
-  window.__dc_meta_attached = true;
-  log("RoomEvent.DataReceived attached");
 
-  // طلب/إرسال meta فور الارتباط
+  window.__dc_meta_handler__ = h;
+  window.__dc_meta_room__ = r;
+  window.__dc_meta_attached = true;
+
+  log("DataReceived attached");
+
+  // kick off handshake
   requestPeerMeta(r);
   resendLocalMeta(r);
 }
 
-/* init + lazy attach */
-let __lazy_timer: number | null = null;
-let __lazy_tries = 0;
+/* ------------------ init ------------------ */
 
-function lazyAttach() {
-  if (typeof window === "undefined") return;
-  // إذا صار لدينا مستمع فعّال نتوقف
-  if (window.__dc_meta_handler__ && typeof window.__dc_meta_handler__ === "function") {
-    if (__lazy_timer) { clearInterval(__lazy_timer); __lazy_timer = null; }
-    return;
-  }
-  // جرّب الربط عندما تُصبح __lkRoom جاهزة
-  if (window.__lkRoom) {
-    attachToRoom(window.__lkRoom);
-    if (__lazy_timer) { clearInterval(__lazy_timer); __lazy_timer = null; }
-    return;
-  }
-  if (++__lazy_tries > 20) { // ~10 ثوانٍ عند 500ms
-    if (__lazy_timer) { clearInterval(__lazy_timer); __lazy_timer = null; }
-  }
-}
-
-(function initOnce() {
-  // ربط فوري إذا كانت الغرفة جاهزة
+function initOnce() {
+  // immediate attach if room is present
   if (window.__lkRoom) attachToRoom(window.__lkRoom);
 
-  // على lk:attached
+  // on LiveKit attach
   window.addEventListener("lk:attached", () => {
     attachToRoom(window.__lkRoom);
     requestPeerMeta(window.__lkRoom);
     resendLocalMeta(window.__lkRoom);
   });
 
-  // عند زوج جديد
+  // new pair → refresh meta exchange
   window.addEventListener("rtc:pair", () => {
     requestPeerMeta(window.__lkRoom);
     resendLocalMeta(window.__lkRoom);
   });
 
-  // قناة إجبار إعادة الإرسال
+  // manual re-send
   window.addEventListener("ditona:send-meta", () => {
     resendLocalMeta(window.__lkRoom);
   });
+}
 
-  // مؤقّت «ربط كسول»
-  if (!__lazy_timer) __lazy_timer = window.setInterval(lazyAttach, 500);
-})();
+initOnce();
