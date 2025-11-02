@@ -1,9 +1,10 @@
+// src/app/chat/likeSyncClient.ts
 "use client";
 
 /**
  * توحيد سلوك زر الإعجاب:
  * - يستقبل "ui:like:toggle" من شريط الأدوات.
- * - ينفّذ POST /api/like ويقرأ count, liked.
+ * - ينفّذ POST /api/like ويقرأ count, liked|you.
  * - يبث like:sync للطرفين عبر DC + يحدّث محليًا فورًا.
  * - يسقط أي تحديث لا يخص الزوج الحالي.
  *
@@ -17,6 +18,8 @@ declare global {
     __lkRoom?: Room | null;
     __ditonaPairId?: string | null;
     __pairId?: string | null;
+    __ditonaPeerDid?: string | null;
+    __peerDid?: string | null;
   }
 }
 
@@ -42,7 +45,7 @@ function emitLikeSync(count: number, liked: boolean) {
   } catch {}
 }
 
-async function postLike(targetDid: string, liked: boolean): Promise<{count:number; liked:boolean}> {
+async function postLike(targetDid: string, liked: boolean): Promise<{count:number; liked:boolean; you?:boolean}> {
   const me = localStorage.getItem("ditona_did") || crypto.randomUUID();
   localStorage.setItem("ditona_did", me);
 
@@ -54,29 +57,43 @@ async function postLike(targetDid: string, liked: boolean): Promise<{count:numbe
   }).then(r => r.json()).catch(() => ({} as any));
 
   const count = typeof r?.count === "number" ? r.count : 0;
-  const okLiked = typeof r?.liked === "boolean" ? r.liked : !!liked;
-  return { count, liked: okLiked };
+  const you = typeof r?.you === "boolean" ? r.you : undefined;
+  const okLiked = typeof r?.liked === "boolean" ? r.liked : (typeof you === "boolean" ? you : !!liked);
+  return { count, liked: okLiked, you };
 }
+
+// آخر حالة معروفة لكل زوج لتفعيل التبديل عند غياب liked
+const lastLikedByPair = new Map<string, boolean>();
 
 // التقاط نقرة زر القلب من الـToolbar
 (function boot(){
   window.addEventListener("ui:like:toggle", async (e: any) => {
     try {
+      const pid = curPair();
       const targetDid = String(e?.detail?.targetDid || "") || (globalThis as any).__ditonaPeerDid || (globalThis as any).__peerDid || "";
-      const liked = !!e?.detail?.liked;
+      if (!targetDid) return;
 
-      const { count, liked: finalLiked } = await postLike(targetDid, liked);
-      emitLikeSync(count, finalLiked);
+      const explicitLiked = (typeof e?.detail?.liked === "boolean") ? !!e.detail.liked : undefined;
+      const baseLiked = (pid && lastLikedByPair.has(pid)) ? !!lastLikedByPair.get(pid)! : false;
+      const desired = typeof explicitLiked === "boolean" ? explicitLiked : !baseLiked;
+
+      const { count, liked: finalLiked, you } = await postLike(targetDid, desired);
+      if (pid) lastLikedByPair.set(pid, !!finalLiked);
+      emitLikeSync(count, typeof you === "boolean" ? !!you : !!finalLiked);
     } catch {}
   });
 
-  // مزامنة واردة من الـDC بصيغة قديمة you:boolean
+  // مزامنة واردة من الـDC بصيغة قديمة you:boolean + تتبّع آخر حالة لكل زوج
   window.addEventListener("like:sync", (e: any) => {
     const d = e?.detail || {};
-    if (d && typeof d.you === "boolean" && typeof d.liked !== "boolean") {
-      d.liked = !!d.you;
-      delete d.you;
-      try { window.dispatchEvent(new CustomEvent("like:sync", { detail: d })); } catch {}
+    const pid = typeof d?.pairId === "string" ? d.pairId : curPair();
+    let liked = d?.liked;
+    if (typeof d?.you === "boolean" && typeof liked !== "boolean") {
+      liked = !!d.you;
+      try { window.dispatchEvent(new CustomEvent("like:sync", { detail: { ...d, liked } })); } catch {}
+    }
+    if (pid && typeof liked === "boolean") {
+      lastLikedByPair.set(pid, !!liked);
     }
   });
 })();
