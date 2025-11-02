@@ -1,12 +1,14 @@
 "use client";
 
 /**
- * يحدّث HUD لمعلومات الطرف B من أحداث:
- *  - "ditona:peer-meta" detail={ pairId, meta:{...} }
- *  - "rtc:phase"        detail={ phase }
- * لا يغيّر محددات DOM:
+ * محدِّث DOM لبادجات ميتاداتا الطرف B.
+ * يستمع إلى:
+ *  - "ditona:peer-meta"  → تطبيق الميتا فورًا
+ *  - "rtc:phase"         → مسح عند searching | stopped
+ *  - "rtc:pair"          → مسح عند زوج جديد
+ *
+ * لا يغيّر محددات DOM مطلقًا:
  *   [data-ui="peer-{avatar|vip|likes|name|country|city|gender}"]
- * يمسح عند searching|stopped فقط.
  */
 
 type Meta = {
@@ -19,9 +21,8 @@ type Meta = {
   avatarUrl?: string;
 };
 
-function qs<T extends Element = HTMLElement>(k: string): T | null {
-  return document.querySelector(`[data-ui="peer-${k}"]`) as T | null;
-}
+const qs = (k: string): HTMLElement | null =>
+  document.querySelector(`[data-ui="peer-${k}"]`);
 
 function setText(el: Element | null, v: string | number | null | undefined) {
   if (!el) return;
@@ -29,14 +30,16 @@ function setText(el: Element | null, v: string | number | null | undefined) {
 }
 
 function setAvatar(url?: string) {
-  const img = qs<HTMLImageElement>("avatar");
+  const img = document.querySelector(
+    '[data-ui="peer-avatar"]'
+  ) as HTMLImageElement | null;
   if (!img) return;
-  if (url) {
+  if (url && url.length > 0) {
     img.src = url;
-    img.classList.remove("hidden");
+    img.removeAttribute("hidden");
   } else {
+    img.setAttribute("hidden", "true");
     img.removeAttribute("src");
-    img.classList.add("hidden");
   }
 }
 
@@ -80,26 +83,28 @@ function paintGenderColor(el: HTMLElement | null, g?: string) {
 function updateHUD(meta: Meta) {
   setAvatar(meta.avatarUrl);
   setText(qs("name"), meta.displayName ?? "");
-  setText(qs("vip"), meta.vip ? "👑" : "🚫👑");
   setText(qs("likes"), meta.likes ?? 0);
   setText(qs("country"), meta.country ?? "");
   setText(qs("city"), meta.city ?? "");
-  const gEl = qs<HTMLElement>("gender");
+  const gEl = qs("gender");
   setText(gEl, genderIcon(meta.gender));
   paintGenderColor(gEl, meta.gender);
+  const vipEl = qs("vip");
+  setText(vipEl, meta.vip ? "👑" : "🚫👑");
 }
 
 function clearHUD() {
   setAvatar(undefined);
   setText(qs("name"), "");
-  setText(qs("vip"), "🚫👑");
   setText(qs("likes"), 0);
   setText(qs("country"), "");
   setText(qs("city"), "");
   setText(qs("gender"), "");
+  setText(qs("vip"), "🚫👑");
 }
 
 (function boot() {
+  // ظهور فوري من آخر جلسة إن وُجد
   try {
     const raw = sessionStorage.getItem("ditona:last_peer_meta");
     if (raw) updateHUD(JSON.parse(raw));
@@ -117,4 +122,6 @@ function clearHUD() {
     const ph = e?.detail?.phase;
     if (ph === "searching" || ph === "stopped") clearHUD();
   });
+
+  window.addEventListener("rtc:pair", clearHUD);
 })();
