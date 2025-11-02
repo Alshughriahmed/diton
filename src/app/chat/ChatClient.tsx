@@ -605,40 +605,30 @@ export default function ChatClient() {
       } catch {}
     });
 
-    const onData = (payload: Uint8Array, _p?: RemoteParticipant, _k?: any, topic?: string) => {
-      if (!isActiveSid(sid)) return;
-      try {
-        const txt = new TextDecoder().decode(payload);
-        if (!txt || !/^\s*\{/.test(txt)) return;
-        const j = JSON.parse(txt);
+   const onData = (payload: Uint8Array, _p?: RemoteParticipant, _k?: any, topic?: string) => {
+  if (!isActiveSid(sid)) return;
+  try {
+    const txt = new TextDecoder().decode(payload);
+    if (!txt || !/^\s*\{/.test(txt)) return;
+    const j = JSON.parse(txt);
 
-        // Compatibility "meta:init" ping
-        if (j?.t === "meta:init" || topic === "meta") {
-          try {
-            window.dispatchEvent(new CustomEvent("ditona:meta:init"));
-          } catch {}
-        }
+    // إشعار تبادل الميتا فقط
+    if (j?.t === "meta:init" || topic === "meta") {
+      try { window.dispatchEvent(new CustomEvent("ditona:meta:init")); } catch {}
+      return;
+    }
 
-        // Chat passthrough
-        if ((j?.t === "chat" || topic === "chat") && typeof j.text === "string") {
-          const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
-          window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
-        }
+    // تمرير رسائل الدردشة
+    if ((j?.t === "chat" || topic === "chat") && typeof j.text === "string") {
+      const pid = typeof j.pairId === "string" && j.pairId ? j.pairId : roomName;
+      window.dispatchEvent(new CustomEvent("ditona:chat:recv", { detail: { text: j.text, pairId: pid } }));
+      return;
+    }
 
-        // --- Unified like:sync ---
-        if (j?.t === "like:sync" || topic === "like") {
-          const liked = typeof j?.liked === "boolean" ? j.liked : !!j?.you;
-          const count = typeof j?.count === "number" ? j.count : undefined;
-          const detail = { pairId: roomName, liked, count };
-          window.dispatchEvent(new CustomEvent("like:sync", { detail }));
-          // optional signal hooks kept for legacy listeners
-          if (j?.t !== "like:sync") {
-            const base = { pairId: roomName, liked };
-            window.dispatchEvent(new CustomEvent("ditona:like:recv", { detail: base }));
-            window.dispatchEvent(new CustomEvent("rtc:peer-like", { detail: base }));
-          }
-          return;
-        }
+    // باقي الأنواع تُدار حصراً في dcMetaResponder.client.ts
+    return;
+  } catch {}
+};
 
         // --- Unified peer-meta ---
         // Accept shapes:
