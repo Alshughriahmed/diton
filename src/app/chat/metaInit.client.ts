@@ -1,12 +1,15 @@
-// src/app/chat/metaInit.client.ts
 "use client";
 
 /**
- * Initializes geo info for the session and broadcasts it.
- * Source of truth: GET /api/regions  (no cache, credentials included).
- * Persists under localStorage key "ditona_geo".
- * Emits "ditona:geo" on every update. Listens to "ditona:geo:refresh" to refetch.
+ * يبني الميتا المحلية ويُبقيها محدثة ويرسلها عند:
+ *  - lk:attached
+ *  - rtc:pair
+ *  - ditona:meta:init  (وصول طلب من الطرف الآخر)
+ * كما يحافظ على geo في localStorage وحدث "ditona:geo".
+ * لا يستخدم أي تبعيات خارجية.
  */
+
+/* --------------------------- Geo bootstrap (كما لديك) --------------------------- */
 
 type RawGeo = Partial<{
   countryCode: string; country: string; city: string;
@@ -15,16 +18,13 @@ type RawGeo = Partial<{
 
 type Geo = { countryCode: string; country: string; city: string };
 
-const LS_KEY = "ditona_geo";
+const LS_GEO = "ditona_geo";
 const isBrowser = typeof window !== "undefined";
 
-function normalize(r: RawGeo): Geo {
-  const countryCode =
-    (r.countryCode || r.cc || "").toString().toUpperCase();
-  const country =
-    (r.country || r.cn || r.ctry || r.country_name || "").toString();
-  const city =
-    (r.city || r.locality || r.town || "").toString();
+function normalizeGeo(r: RawGeo): Geo {
+  const countryCode = (r.countryCode || r.cc || "").toString().toUpperCase();
+  const country = (r.country || r.cn || r.ctry || r.country_name || "").toString();
+  const city = (r.city || r.locality || r.town || "").toString();
   return {
     countryCode: countryCode || "",
     country: country || (countryCode ? countryCode : ""),
@@ -32,58 +32,116 @@ function normalize(r: RawGeo): Geo {
   };
 }
 
-function save(g: Geo) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(g)); } catch {}
+function geoSave(g: Geo) {
+  try { localStorage.setItem(LS_GEO, JSON.stringify(g)); } catch {}
 }
 
-function load(): Geo | null {
+function geoLoad(): Geo | null {
   try {
-    const raw = localStorage.getItem(LS_KEY);
+    const raw = localStorage.getItem(LS_GEO);
     if (!raw) return null;
-    const j = JSON.parse(raw);
-    return normalize(j);
+    return normalizeGeo(JSON.parse(raw));
   } catch { return null; }
 }
 
-function emit(g: Geo) {
-  try {
-    window.dispatchEvent(new CustomEvent("ditona:geo", { detail: g }));
-  } catch {}
+function geoEmit(g: Geo) {
+  try { window.dispatchEvent(new CustomEvent("ditona:geo", { detail: g })); } catch {}
 }
 
-async function fetchGeo(): Promise<Geo | null> {
+async function geoFetch(): Promise<Geo | null> {
   try {
     const r = await fetch("/api/regions", {
       method: "GET",
       credentials: "include",
       cache: "no-store",
-      headers: { "accept": "application/json" },
+      headers: { accept: "application/json" },
     });
     if (!r.ok) return null;
     const j = (await r.json()) as RawGeo;
-    const g = normalize(j);
+    const g = normalizeGeo(j);
     if (!g.countryCode && !g.country && !g.city) return null;
     return g;
   } catch { return null; }
 }
 
-async function init() {
-  if (!isBrowser) return;
+/* ------------------------------ Local meta builder ----------------------------- */
 
-  // 1) use cached immediately if present
-  const cached = load();
-  if (cached) emit(cached);
-
-  // 2) fetch fresh from API
-  const fresh = await fetchGeo();
-  if (fresh) { save(fresh); emit(fresh); }
-
-  // 3) allow on-demand refresh
-  window.addEventListener("ditona:geo:refresh", async () => {
-    const g = await fetchGeo();
-    if (g) { save(g); emit(g); }
-  });
+function normalizeGender(x: unknown): "m" | "f" | "c" | "l" | "u" {
+  const s = String(x ?? "").toLowerCase();
+  if (s === "m" || s === "male") return "m";
+  if (s === "f" || s === "female") return "f";
+  if (s === "c" || s === "couple" || s === "paar") return "c";
+  if (s === "l" || s.includes("lgbt")) return "l";
+  return "u";
 }
 
-// side-effect boot
-init().catch(() => {});
+function readGeo(): Geo {
+  return geoLoad() ?? { countryCode: "", country: "", city: "" };
+}
+
+function buildLocalMeta() {
+  const geo = readGeo();
+  const displayName =
+    (localStorage.getItem("ditona_profile_name") || "").trim() || "A";
+  const gender = normalizeGender(localStorage.getItem("ditona_profile_gender"));
+  const vip = localStorage.getItem("ditona_vip") === "1";
+  const avatarUrl = localStorage.getItem("ditona_avatar") || "";
+  const likes = Number(localStorage.getItem("ditona_likes") || "0") || 0;
+
+  const meta = {
+    displayName,
+    gender,
+    country: (geo.countryCode || geo.country || "").toString().toUpperCase() || "",
+    city: geo.city || "",
+    likes,
+    vip,
+    avatarUrl,
+  };
+  try { (window as any).__ditonaLocalMeta = meta; } catch {}
+  return meta;
+}
+
+function sendLocalMeta() {
+  buildLocalMeta();
+  try { window.dispatchEvent(new CustomEvent("ditona:send-meta")); } catch {}
+}
+
+/* ----------------------------------- Boot ----------------------------------- */
+
+(async function init() {
+  if (!isBrowser) return;
+
+  // Geo: استخدم الكاش فورًا ثم حدّث من API
+  const cached = geoLoad();
+  if (cached) geoEmit(cached);
+  const fresh = await geoFetch();
+  if (fresh) { geoSave(fresh); geoEmit(fresh); }
+
+  // refresh عند الطلب
+  window.addEventListener("ditona:geo:refresh", async () => {
+    const g = await geoFetch();
+    if (g) { geoSave(g); geoEmit(g); }
+  });
+
+  // أبقِ الميتا محدثة عند أي تغيير تخزين
+  window.addEventListener("storage", (e) => {
+    if (!e.key) return;
+    if (
+      e.key.startsWith("ditona_profile_") ||
+      e.key === "ditona_vip" ||
+      e.key === "ditona_avatar" ||
+      e.key === "ditona_likes" ||
+      e.key === LS_GEO
+    ) {
+      buildLocalMeta();
+    }
+  });
+
+  // إرسال الميتا عند الالتحاق/الطلب/زوج جديد
+  window.addEventListener("lk:attached", sendLocalMeta);
+  window.addEventListener("rtc:pair", sendLocalMeta);
+  window.addEventListener("ditona:meta:init", sendLocalMeta);
+
+  // تهيئة أولية
+  buildLocalMeta();
+})();
