@@ -927,6 +927,7 @@ export default function ChatClient() {
       }
 
       (globalThis as any).__lkRoom = room;
+      try { window.dispatchEvent(new CustomEvent("lk:attached")); } catch {}
       dcAttach(room);
 
       subscribeAllExisting(room);
@@ -994,6 +995,7 @@ export default function ChatClient() {
     await ensureSubscribedToRemoteVideo(room);
 
     (globalThis as any).__lkRoom = room;
+    try { window.dispatchEvent(new CustomEvent("lk:attached")); } catch {}
     dcAttach(room);
 
     subscribeAllExisting(room);
