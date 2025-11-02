@@ -3,10 +3,10 @@
 
 /**
  * يبني meta محلية ويرسلها عبر dcMetaResponder عند الطلب.
- * - مصدر معلومات البلد/المدينة: /api/regions
+ * - مصدر معلومات البلد/المدينة: /api/geo
  * - التخزين: localStorage("ditona_geo")
  * - البث: "ditona:geo"
- * - إعادة الإرسال: استمع لـ "ditona:send-meta"
+ * - إعادة الإرسال: "ditona:send-meta"
  */
 
 import { normalizeGender } from "@/lib/gender"; // لا نعرّفها محليًا
@@ -40,7 +40,7 @@ function emitGeo(g: Geo) { try { window.dispatchEvent(new CustomEvent("ditona:ge
 
 async function fetchGeo(): Promise<Geo | null> {
   try {
-    const r = await fetch("/api/regions", { method: "GET", credentials: "include", cache: "no-store" });
+    const r = await fetch("/api/geo", { method: "GET", credentials: "include", cache: "no-store" });
     if (!r.ok) return null;
     const j = (await r.json()) as RawGeo;
     const g = normalizeGeo(j);
@@ -96,14 +96,24 @@ async function init() {
   window.addEventListener("ditona:geo:refresh", async () => {
     const g = await fetchGeo(); if (g) { save(g); emitGeo(g); }
     buildLocalMeta();
-    // أعد إرسال الميتا المحلية
     try { window.dispatchEvent(new CustomEvent("ditona:send-meta")); } catch {}
   });
 
-  // 4) أي تحديث للبروفايل المحلي يعيد بناء meta ثم يطلب إرسالها
+  // 4) تحديثات البروفايل
   window.addEventListener("ditona:profile:updated", () => {
     buildLocalMeta();
     try { window.dispatchEvent(new CustomEvent("ditona:send-meta")); } catch {}
+  });
+
+  // 5) إذا استُلم "ditona:geo" من مصدر آخر، حدّث meta محليًا
+  window.addEventListener("ditona:geo", (e: any) => {
+    try {
+      const d = e?.detail || {};
+      const g = normalizeGeo(d);
+      save(g);
+      buildLocalMeta();
+      window.dispatchEvent(new CustomEvent("ditona:send-meta"));
+    } catch {}
   });
 }
 
