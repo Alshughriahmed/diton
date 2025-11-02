@@ -1,3 +1,4 @@
+// src/app/chat/components/FilterBar.tsx
 "use client";
 
 import dynamic from "next/dynamic";
@@ -108,6 +109,16 @@ export default function FilterBar() {
       >
         <span aria-hidden>🌍</span>
         <span className="truncate">{countryLabel}</span>
+      </button>
+
+      {/* Done → apply immediately */}
+      <button
+        type="button"
+        onClick={() => { try { window.dispatchEvent(new CustomEvent("ui:filters:apply")); } catch {} }}
+        title="Apply filters"
+        className="h-9 px-3 rounded-xl bg-green-600/40 hover:bg-green-600/60 text-white text-xs font-semibold backdrop-blur focus:outline-none focus:ring-2 focus:ring-white/30"
+      >
+        Done
       </button>
 
       {openGender && (
