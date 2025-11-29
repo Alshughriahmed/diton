@@ -32,7 +32,6 @@ import { getMobileOptimizer } from "@/lib/mobile";
 import { toast } from "@/lib/ui/toast";
 import { useProfile } from "@/state/profile";
 import { normalizeGender } from "@/lib/gender";
-
 import {
   Room,
   RoomEvent,
@@ -113,6 +112,7 @@ export default function ChatClient() {
 
   const [ready, setReady] = useState(false);
   const [rtcPhase, setRtcPhase] = useState<Phase>("idle");
+  const rtcPhaseRef = useRef<Phase>("idle"); // مرجع حي
   const [showMessaging, setShowMessaging] = useState(false);
   const [showUpsell, setShowUpsell] = useState(false);
   const [isMirrored, setIsMirrored] = useState(true);
@@ -174,6 +174,7 @@ export default function ChatClient() {
 
   function setPhase(p: Phase) {
     setRtcPhase(p);
+    rtcPhaseRef.current = p; // تحديث المرجع الحي
     try {
       window.dispatchEvent(new CustomEvent("rtc:phase", { detail: { phase: p } }));
     } catch {}
@@ -423,7 +424,7 @@ export default function ChatClient() {
     } catch {}
   }
 
-  async function waitRoomLoop(ticket: string, sid: number, maxMs = 60000): Promise<string | "expired" | null> {
+  async function waitRoomLoop(ticket: string, sid: number, maxMs = 60000): Promise<string | "__expired__" | null> {
     const started = Date.now();
     let wait = 8000;
     while (isActiveSid(sid)) {
@@ -434,7 +435,7 @@ export default function ChatClient() {
       try {
         rn = await nextReq(ticket, wait, ctrl.signal);
       } catch {
-        /* network / 401 etc. */
+        /* ignore */
       } finally {
         if (pollAbortRef.current === ctrl) pollAbortRef.current = null;
       }
@@ -595,8 +596,8 @@ export default function ChatClient() {
         return;
       }
 
-      // meta handshakes only (dcMetaResponder يتكفل بالباقي)
-      if (j?.t === "meta:init" || topic === "meta") {
+      // meta:init only (dcMetaResponder يتكفل بالباقي)
+      if (j?.t === "meta:init") {
         try {
           window.dispatchEvent(new CustomEvent("ditona:meta:init"));
         } catch {}
@@ -636,7 +637,7 @@ export default function ChatClient() {
       } catch {}
     });
 
-    // Stronger auto-resume on disconnect (reduced delay, no manualSwitch gate)
+    // استئناف تلقائي قوي
     const onDisc = () => {
       if (!isActiveSid(sid)) return;
       dcDetach();
@@ -814,7 +815,7 @@ export default function ChatClient() {
         identity: identity(),
         deviceId: stableDid(),
         vip: !!filters.isVip,
-        selfGender: payloadSelfGender,
+        selfGender: payloadSelfGender, // undefined for Everyone
         selfCountry,
         filterGenders: filterGendersNorm, // [] for Everyone
         filterCountries: Array.isArray(filters.countries) ? filters.countries : [],
@@ -1082,7 +1083,7 @@ export default function ChatClient() {
       })
     );
 
-    // receive peer DID from meta
+    // receive peer DID from meta (من dcMetaResponder بحسب أحداث الميتا) :contentReference[oaicite:2]{index=2}
     const onPeerMetaCapture = (ev: any) => {
       try {
         const d0 = ev?.detail || {};
@@ -1227,7 +1228,7 @@ export default function ChatClient() {
       })
     );
 
-    // APPLY FILTERS (legacy): restart immediately (kept for backward compat)
+    // APPLY FILTERS (legacy) — ما زال موجودًا للتوافق مع أزرار قديمة
     const onApplyFilters = async () => {
       setPhase("searching");
       abortPolling();
@@ -1246,9 +1247,10 @@ export default function ChatClient() {
     window.addEventListener("ui:filters:apply", onApplyFilters as any);
     offs.push(() => window.removeEventListener("ui:filters:apply", onApplyFilters as any));
 
-    // NEW: filters:updated — only re-enqueue if we're already searching/idle; never cut an active call
+    // NEW: filters:updated — أعد الاصطفاف فقط إذا كنا Searching/Idle (مرجع حي)
     const onFiltersUpdated = async () => {
-      if (rtcPhase !== "searching" && rtcPhase !== "idle") return;
+      const ph = rtcPhaseRef.current;
+      if (ph !== "searching" && ph !== "idle") return;
       setPhase("searching");
       abortPolling();
       const sid = newSid();
