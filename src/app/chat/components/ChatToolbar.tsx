@@ -10,6 +10,16 @@ function isMobileUA() {
   return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || "ontouchstart" in window;
 }
 
+function hapticBump(el?: HTMLElement | null, ms = 120) {
+  try {
+    // بديل للـ vibration على سطح المكتب
+    el?.animate?.(
+      [{ transform: "scale(1)" }, { transform: "scale(0.92)" }, { transform: "scale(1)" }],
+      { duration: ms, easing: "ease-out" }
+    );
+  } catch {}
+}
+
 export default function ChatToolbar() {
   const ffa = useFFA();
   const [msgOpen, setMsgOpen] = useState(false);
@@ -62,14 +72,14 @@ export default function ChatToolbar() {
   return (
     <>
       <button
-        onClick={() => { if (canPrev) { vibrate(25); emit("ui:prev"); } }}
+        onClick={(e) => { if (canPrev) { vibrate(25); hapticBump(e.currentTarget as HTMLElement); emit("ui:prev"); } }}
         disabled={!canPrev}
         title={!canPrev ? "Available during active connection or FFA" : "Previous match"}
         className={`fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] left-2 sm:left-3 z-[50] text-3xl sm:text-4xl select-none ${!canPrev ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
       >⏮️</button>
 
       <button
-        onClick={() => { vibrate(25); emit("ui:next"); }}
+        onClick={(e) => { vibrate(25); hapticBump(e.currentTarget as HTMLElement); emit("ui:next"); }}
         data-ui="btn-next"
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+88px)] right-2 sm:right-3 z-[50] text-3xl sm:text-4xl select-none"
       >⏭️</button>
@@ -85,13 +95,11 @@ export default function ChatToolbar() {
 
           {/* Like */}
           <button
-            onClick={() => { vibrate(18); emit("ui:like:toggle", { liked: undefined }); }}
+            onClick={(e) => { vibrate(14); hapticBump(e.currentTarget as HTMLElement); emit("ui:like:toggle", { liked: undefined }); }}
             aria-label="Like"
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-pink-600/30 text-white border border-pink-400/40 hover:bg-pink-500/40"
             title="Like"
-          >
-            ❤️
-          </button>
+          >❤️</button>
 
           <button
             data-ui="btn-remote-audio"
